@@ -1,0 +1,92 @@
+1.2.8 - Open Source Release
+
+1.2.7 - Bug fixes
+
+1.2.6 - Bug fixes with indexer using too much memory.
+	Indexer supports FASTA file format.
+
+1.2.5 - Fixes bug with %s in patterns in vizualisation tool
+	Minor changes to parallel indexer
+
+1.2.4 - Can construct and use single-file indexes to ease integration.
+
+1.2.3 - Bug fixes
+	Visualization bug fixes, includes missing files from 1.2.2.
+	Cancelled browsing no longer crashes FEMTO Apache module
+
+1.2.2 - Bug fixes, Multi-index, Matches, Approximate, Web-page improvements
+	
+	Bug fixes:
+	 Server checks not to exhaust max # open files or mappings
+	 indexer should not run out of memory on large problems.
+	
+	Multi-index:
+	 ./search_tool can now be passed multiple index paths on the
+	 command line.
+
+	Showing Matches:
+	 In ./search_tool, pass --matches to see the text that matches a
+	 regular expression or approximate search query.
+
+	Approximate Search:
+	 Approximate search is now supported. See main/QUERY_FORMAT.txt.
+
+	Web-page improvements
+	 Web-page vizualization now uses jQuery and SlickGrid,
+	 and shows how a pattern can match, incrementally loads documents,
+	 and can zoom in. Also, the web-page supports ?pattern and ?query
+	 GET arguments, in addition to ?index (which can be a JSON array
+	 to handle multiple indexes).
+	 
+	 Future improvements include:
+	   -- sorting in the grids
+
+1.2.1 - Minor bug fixes.
+	Document clustering is off by default; more work needs to be done
+	to get the benefits of document clustering.
+
+	New visualization tool uses SVG and XmlHttpRequest to draw
+	the most likely bytes before or after a pattern. See
+	src/mod_femto/README
+
+1.2.0 - Hopefully improved scalability of parallel suffix sort.
+	changed splitter computation to be more parallel.
+	Fixed a bug in mpi_copy_file.
+
+	Made the FEMTO query side parallel with pthreads.
+	Removed name: from index files; migration script exists.
+
+	Added document clustering pass to index construction.
+
+
+1.1.1 - Clean up of query format to be more consistent and reasonable
+	about what to escape when. Fixed bug with [^\x00-\xff] matching
+	all documents.
+	New interface for ingesting data.
+
+1.1.0 - optimizations to wavelet tree/binary sequence format
+	to reduce seeks and to improve compression. A binary
+	sequence for random data is currently 104% size down
+	from 152% in previous versions. Likewise, an index
+	for 128MB of random data is 130% with default settings,
+	down from 180% in previous versions. These improvements
+	also apply to nonrandom data - 72 MB of human-readable
+	documents from gutenberg/etext97 used to have a
+	56% index size and that size is now 47% with default
+	settings. These improvements come at a modest 
+	performance cost to in-memory indexes.
+
+1.0.0 - index format change to fix a bug; also attempt
+	to reduce the number of seeks. Changed wavelet tree
+	group size. This is the first release that has built
+	a 100GB index without crashing (there were memory leaks).
+
+0.9.2 - fixed failure when running MPI jobs with more than 2
+	jobs per node but using seperate (local) temp dirs by
+	adding barrier to the copy routine. Made indexer output
+	quieter.
+	Fixed index construction to aim for 400 MB/s in order
+	to limit memory requirements.
+	Increased sample size.
+
+0.9.1 - fixed core dump during index construction

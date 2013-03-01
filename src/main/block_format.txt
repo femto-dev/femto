@@ -1,0 +1,189 @@
+The prepared text has the following format:
+
+  indexed data (document content)
+  optional headers:
+    SOH (0x04) 0x00
+      header section 0
+    EOT (0x05) 0x00
+    SOH (0x04) 0x01
+      header section 1
+    EOT (0x05) 0x01
+    ... any sections 0..0xfe are optional.
+  SEOF (0x2) {DOC_ID7 DOC_ID6 DOC_ID5 DOC_ID4 DOC_ID3 DOC_ID2 DOC_ID1 DOC_ID0 EOF (0x1)}
+  (note that the section in the curly braces is removed from the suffix sort
+   after the sort has been completed - there are 9 characters that are 
+   removed per document. Thus, in the end, EOF does not appear - but SEOF does.)
+
+There are two kinds of files comprising an index.
+1) One index header block 
+  0: 4 bytes HEADER_BLOCK_START
+  4: 4 bytes BLOCK_VERSION (6)
+     index_header_offset:
+  8:  8 bytes -1 (indicating header block)
+ 16:  8 bytes number of blocks total in index
+ 24:  8 bytes text_size = total size of indexed text
+ 32:  8 bytes # of documents in the index.
+ 40:  4 bytes 0 for header block (to match data block - # buckets)
+ 44:  4 bytes 0 for header block (to match data block - block size)
+ 48:  4 bytes 0 for constant block size (1 UNSUPPORTED for variable block size)
+ 52:  4 bytes block_size
+ 56:  4 bytes bucket_size
+ 60:  4 bytes mark period
+ 64:  4 bytes indicating the marking type
+         (0==none, 1==logical offset, 2==UNUSED ?docid+offset)
+ 68:  4 bytes 0 for constant chunk size (1 UNSUPPORTED variable block size)
+ 72:  4 bytes indicating the chunk size (0 for no chunks)
+ 76:  4 bytes indicating the wavelet tree settings (compiled-in value must match)
+ 80:  4 bytes ALPHA_SIZE (complied-in value must match)
+ 84:  4 bytes END_OF_HEADER
+
+      c_array_offset:
+ 88:     ALPHA_SIZE 8-byte integers representing the C array
+         (C[i] is the number of characters in the entire original
+         text with value less than i)
+
+      block_occs_offset:
+ 88+8*ALPHA_SIZE:
+   ALPHA_SIZE * number_of_blocks 8-byte integers.
+   block_occs[c,b] is the number of times c appears in the L column
+     before block b. These are stored by character and then by row.
+
+      doc_ends_offset:
+ 88+8*ALPHA_SIZE+8*ALPHA_SIZE*number_of_blocks
+  #documents 8-byte numbers; each is a logical offset for the end of the
+   document. The last entry should be text_size.
+
+      doc_eof_rows_offset:
+ 88+8*ALPHA_SIZE+8*ALPHA_SIZE*number_of_blocks+8*num_documents:
+  #documents 8-byte row numbers for position of row beginning with EOF
+   for that document in the index.
+
+      doc_info_offset:
+ 88+8*ALPHA_SIZE+8*ALPHA_SIZE*number_of_blocks+8*num_documents+8*num_documents:
+     #documents+1 8-byte offsets into the rest of the header file.
+     -- the document info for each is the range offsets[doc] to offsets[doc+1].
+     -- at each of those offsets, there is normally a URL string
+     -- (although this could be any data, NULL-terminated or not)
+
+2) Many block files 
+  0: 4 bytes DATA_BLOCK_START
+  4: 4 bytes BLOCK_VERSION (6)
+     block_header_offset:
+  8:  8 bytes block number
+ 16:  8 bytes number of blocks total in index
+ 24:  8 bytes text_size = total size of indexed text
+ 32:  8 bytes # of documents in the index.
+ 40:  4 bytes bucket_count in this block (number of buckets)
+ 44:  4 bytes size of this block (uncompressed L section) - normally block_size
+        but smaller for the last block.
+ 48:  4 bytes 0 for constant block size (1 UNSUPPORTED for variable block size)
+ 52:  4 bytes max_block_size (from block parameters)
+ 56:  4 bytes bucket_size
+ 60:  4 bytes mark period
+ 64:  4 bytes indicating the marking type
+         (0==none, 1==logical offset, 2==UNUSED ?docid+offset)
+ 68:  4 bytes 0 for constant chunk size (1 UNSUPPORTED variable block size)
+ 72:  4 bytes indicating the chunk size (0 for no chunks)
+ 76:  4 bytes indicating the wavelet tree settings (compiled-in value must match)
+ 80:  4 bytes ALPHA_SIZE (complied-in value must match)
+ 84:  4 bytes END_OF_HEADER
+
+    bucket_directory_offset:
+ 88: buckets_per_block+1 4-byte integers representing offsets to
+     start of buckets. buckets_per_block = ceil(max_block_size/bucket_size).
+ 
+    bucket_occs_offset:
+ 88+4*(buckets_per_block+1):
+     ALPHA_SIZE*bucket_count 4-byte integers.
+     bucket_occs[c,b] is the number of times c appeared in this block's L column
+      before bucket b since the start of the block, in network byte order.
+      this is stored first by character then by bucket.
+
+    zero-padding to 16-bytes.
+    followed by bucket entries (pointed to in bucket directory).
+
+  A bucket entry:
+      0: BUCKET_START (4-byte magic #)
+      4: 4-byte Bucket offset of mapping table & Huffman coding
+      8: 4-byte Bucket offset of the wavelet tree
+     12: 4-byte Bucket offset of the leaf mark-table
+     16: 4-byte Bucket offset of the marking arrays
+     20: 4-byte Bucket number of chunks in this bucket
+
+        -- chunk directory
+     24: chunk_count+1 4-byte integers representing offsets to chunk records
+         -- the chunks must be contiguous, so that chunk i is
+            stored at offsets [offsets[i]..offsets[i+1])
+         -- the last one is the end of the last chunk
+
+      -- chunks. A chunk record:
+        -- # unique document numbers for the chunk's range of rows
+           in (num_bits(chunk_size) bits)
+        -- byte boundry
+        -- then differences of document numbers are gamma coded
+           (stored values are 1+doc#)
+
+
+     -- mapping table & Huffman coding
+      Mapping table representing characters in use inside this bucket.
+       This contains 16 bits, inUse16, where inUse16[i]=1 indicates that
+       at least one of the 16 characters 16*i..16*(i+1)-1 is in use, and then,
+       for each inUse16 which was a 1, 16 bits indicating which of those
+       16 characters are in use.
+      Coding table representing the Huffman coding (character->leaf#)
+       for the values in the wavelet tree. Gives numInternal and numLeaves
+     -- wavelet tree
+      Wavelet tree storing occurence and character data for the bucket.
+     -- leaf mark-table
+      Relative (to mark-table) 
+       offsets of numInUse RLE-gamma encoded leaf entries for wavelet tree 
+       followed by the values - these entries record, for every character, 
+       which rows ending with that character are marked. Queries for location
+       will check the leaf entry for the relevant character and if it is a 1,
+       it'll use the number of 1s in that structure as an index to the marking
+       arrays. (I no longer know why this is done per-character; presumably
+       it reduces the space required). These are binary sequences.
+     -- marking arrays
+      Relative (to marking-arrays) offsets
+       of numInUse marking arrays - each of these arrays contains
+       the location info in fixed-length records. Each of these is encoded in
+       enough bits to represent text_size. These refer to the L character.
+
+
+
+The Wavelet Tree:
+  0: a directory, for each node in the wavelet tree,
+     the offset to the binary sequence storing that node. Nodes are based
+     on the Huffman coding of the text.
+
+  ... followed by binary sequence data.
+
+A Binary Sequence:
+   0: an 8-byte header containing:
+      4 bytes UNUSED must be 0
+      4 bytes NUM_GROUPS
+      4 bytes TOTAL_SEGMENT_WORDS so that tha last segment can be short
+      4 bytes D_OFFSET
+   8: the A0 array -- NUM_GROUPS integers
+   8 + 4*NUM_GROUPS:
+      the A1 array -- NUM_GROUPS integers
+   8 + 8*NUM_GROUPS:
+      the AP array -- NUM_GROUPS integers
+   8 + 12*NUM_GROUPS:
+      the group sums (31 segments per group)
+  D_OFFSET == 16-byte align of 16 + 8*NUM_GROUPS + GROUP_SUMS_BYTES:
+      the encoded binary sequence data.
+
+      the data is encoded into 128-byte segments.
+      Each segment begins with a 0 or a 1 indicating whether or
+      not the segment is compressed (or just the actual binary sequence).
+      If 1:
+        -- the next bit indicates the first bit in the segment
+           (since we need to know if the runs start with 0 or 1)
+        -- then follows gamma-encoded run lengths (how many of the first bit?
+           how many of !first_bit? etc).
+      If 0:
+        -- the binary sequence data is stored uncompressed in the rest of this
+           segment.
+
+

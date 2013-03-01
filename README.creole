@@ -1,0 +1,74 @@
+== ABOUT ==
+FEMTO is an indexing and search system for queries on sequences of bytes.
+FEMTO stands for the FM-index for External Memory with Throughput Optimizations.
+This tool supports building large indexes in parallel with MPI and then
+searching large indexes with a multithreaded server.
+
+== REQUIREMENTS ==
+FEMTO requires a 64-bit machine to build and test. 32-bit machines are
+supported for search only. FEMTO is known to build with GCC for Linux/x86-64.
+
+MPI is required for parallel index construction. Note that MPI runs accross
+machines of different endianness are not supported.
+
+If you'd like to use MPI-parallel index construction, you'll need to
+install a version of MPI which supports threads. We have used
+OpenMPI 1.4.2, configured in the following way:
+ ./configure --prefix=/opt/openmpi1.4.2 --enable-mpirun-prefix-by-default --enable-mpi-threads --with-threads
+ make
+ make install # on all compute nodes
+ # To make sure mpirun and mpicc are in the path for use with FEMTO
+ export PATH=$PATH:/opt/openmpi1.4.2/bin
+ export LD_LIBRARY_PATH=/opt/openmpi1.4.2/lib
+
+If you're using a source checkout (vs a release), you will need
+GNU Autotools and Libtool.
+
+== COMPILATION ==
+
+Make sure you have met the requirements first!
+
+To build FEMTO, issue the following commands:
+ ./configure
+ make
+
+To run the included unit tests, use
+ make check
+
+== INSTALLATION ==
+
+To install FEMTO in a particular place, be sure to include --prefix in
+your configure line, as in
+ ./configure --prefix ~/femto_install
+
+As usual,
+ make install
+will install the FEMTO tools to the destination specified by ./configure.
+
+You can also run the commands from the build directory.
+
+See src/mod_femto/README for information about installing the FEMTO
+apache module.
+
+== USAGE ==
+
+To build an index, run
+ femto/src/dcx_cc/femto_index --tmp /path/to/tmp_dir \
+                             --outdir /path/to/index_dir \
+                             files_or_directories_to_index
+
+Then, to query the index, use femto_search.
+To count the number of occurences (quickly!), use:
+ femto/src/main/femto_search /path/to/index_dir --count 'pattern'
+To report documents that matched (time depends on # reported), use:
+ femto/src/main/femto_search /path/to/index_dir 'pattern'
+To report documents and offsets that matched (time depends on # reported), use:
+ femto/src/main/femto_search /path/to/index_dir --offsets 'pattern'
+
+To learn more about what kinds of patterns you can use, see
+femto/src/main/QUERY_FORMAT.txt
+
+== THIRD PARTY ACKNOWLEDGEMENTS ==
+
+FEMTO source includes the Google RE2 package, jQuery, jQuery SlickGrid, and jQuery SVG.
+

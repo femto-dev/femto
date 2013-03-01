@@ -1,0 +1,123 @@
+
+img.bg {
+  /* Set rules to fill background */
+  min-height: 480px;
+  min-width: 480px;
+
+  /* Set up nonproportionate scaling */
+  width: 100%;
+  height: 100%;
+
+  /* Set up positioning */
+  position: fixed;
+  top: 0;
+  left: 0;
+
+  z-index:-1;
+}
+
+div#content {
+  /* We need our content to show up on top of the background */
+  position: relative; 
+  z-index:0;
+  margin: 0;
+  padding: 0;
+  padding-left: 80px;
+  background: url('/imgs/logo-sm.png') no-repeat;
+  min-height: 40px;
+  width: 100%;
+}
+
+svg {
+  cursor: crosshair;
+}
+div#filenames_outer {
+  /* We need our filenames to show up on top of the background */
+  z-index:0;
+  background-color: #DDDDDD;
+  padding: 0;
+  margin: 0;
+  margin-top: 1px;
+  clear: both;
+}
+div#filenames_inner {
+	display: none;
+	padding-left: 0.5em;
+}
+table#filenames_table {
+	text-align: left;
+}
+table#filenames_table a {
+	color: #444444;
+}
+
+body {
+  position: fixed;
+  top: 0;
+  left: 0;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+
+body, th, td 		{font: 8pt verdana, helvetica;}	
+
+a {	text-decoration: none; }
+a:hover {	text-decoration: underline; }
+a.action, a.action:visited {
+	font-size: 10pt;
+	color: black;
+}
+div#search {
+float: left;
+	width: 50%;
+	margin-top: 5px;
+}
+div#tools {
+	float: right;
+	margin: 0;
+	margin-top: 3px;
+	margin-right: 5px;
+}
+div#tools a img {
+	border: 0;
+	text-decoration: none;
+}
+
+p.pm	{width: 100%; padding: 0px; margin: 0px; border-bottom: 1px solid #810000; color: white;
+         background-color: #940C12; text-align: center; font-size: 7pt; font-weight: bold;}
+
+.tip {
+	font: 12px Arial, Helvetica, sans-serif;
+	border: solid 1px #666666;
+	width: 300px;
+	padding: 0.5em;
+	position: absolute;
+	z-index: 100;
+	visibility: hidden;
+	color: #333333;
+	top: 0px;
+	left: 0px;
+	background-color: #ffffcc;
+}
+.tip h1 {
+  display: block;
+  font-family: monospace;
+  font-weight: bold;
+  font-size: 34px;
+  padding: 2px;
+  margin-top: 5px;
+  border: 1px solid #aaaa88;
+  min-width: 34px;
+  min-height: 34px;
+}
+.tip h2{
+  font-family: monospace;
+  font-weight: bold;
+  font-size: 24px;
+  padding: 0;
+  margin: 0;
+}
+

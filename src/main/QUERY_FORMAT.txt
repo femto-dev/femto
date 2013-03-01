@@ -1,0 +1,161 @@
+== FEMTO QUERY FORMAT ==
+
+FEMTO attempts to allow a simple query format that is similar to other
+query formats you may know. However, it includes features that other
+systems do not have and so the query format is necessarily different.
+
+== SIMPLE QUERIES ==
+
+Simple FEMTO queries consist of whitespace-separated terms. The
+terms will be concatenated and the result will be searched for. Note
+that this is different from Google. For example, the query
+ black sheep
+in Google would return documents that contain both terms (ie black AND sheep)
+where in FEMTO it returns documents containing "blacksheep".
+All FEMTO queries search for byte patterns.
+
+== QUOTING ==
+
+The characters
+  [ ] ( ) | * + ? - { } .
+and the words
+  AND OR NOT THEN WITHIN APPROX
+have special meaning to FEMTO. To search for these, for space characters,
+or for other strange ascii characters, you need to quote them. FEMTO supports
+three ways of quoting characters.
+
+First, backslashes can help in searching for non-ascii or punctuation
+characters. To escape whitespace or punctuation, you can just put a \ in
+front of the character in question. For example '\ ' (quotes are not
+part of the pattern) will search for a space character, and \[ will search for
+the [ character. In addition, the following escape sequences are honored:
+ \\    -- \ (ie the backslash itself, ASCII \x5C)
+ \n    -- newline (ASCII \x0A)
+ \t    -- tab (ASCII \x09)
+ \r    -- carriage return (ASCII \x0D)
+ \b    -- backspace (ASCII \x08)
+ \f    -- form feed (ASCII \x0C)
+ \a    -- alarm bell (ASCII \x07)
+ \e    -- escape (ASCII \x1B)
+ \v    -- vertical tab (ASCII \x0B)
+ \xNN  -- the hexadecimal byte NN (as in \xFF or \xAB)
+ \X    -- where X stands for any other character, just translate to X.
+          In particular, to search for a quote, you could use \".
+
+Second, double-quotes are available. Double quotes attempt to offer a
+less restrictive environment in which you can still express any string.
+Within double quotes, backslash (\) and double-quote (") must be escaped
+with backslash. Also, the escape sequences described above are honored,
+including \xNN.
+
+Third, single-quotes are available. Backslashes do not need to be
+escaped in a single-quote area. Anything inside the single quotes
+will be interpreted literally, except for single quote, which ends
+the sequence.
+
+== BINARY QUERIES ==
+To search for a non-ascii pattern, use \xNN to write the hexadecimal
+byte to search for -- for example, \x20 would search for a space character.
+To search for longer hexadecimal sequences, use the {x } expression;
+for example {x 00 01 01 2A } and {x0001012A} and \x00 \x01 \x01 \x2A
+all search for the same sequence of bytes. Spaces in the {x } expression
+are ignored (except that { x} is not allowed -- the x must be next to the
+opening brace).
+
+Note that with {x }, there must be an even number of hexadecimal digits,
+since the pattern must be a whole number of bytes. If there is an odd number
+of digits, the extra digit will be ignored. 
+
+== BOOLEAN QUERIES ==
+To search for documents containing two expressions, use AND:
+ black AND sheep
+
+To find documents containing one of two expressions, use OR:
+ black OR sheep
+
+To exclude documents containing some expressions from the results, use NOT:
+ black NOT sheep
+
+To find documents containing two expressions in order, use THEN:
+ black THEN 20 sheep
+(ie this would match a document that contained "black" and then "sheep" in the
+ next 20 characters after the start of the match to black, but not the document
+ "sheep black")
+
+To find documents containing two expressions in either order, use WITHIN:
+ black WITHIN 20 sheep
+(ie this would match a document that contained "black" and then "sheep" within
+ 20 characters of the start of the match to black, including "sheep black").
+
+Parenthesis ( ) are available for grouping boolean queries.
+
+== REGULAR EXPRESSIONS ==
+
+FEMTO attempts to follow the POSIX Extended Regular Expressions standard;
+however, since queries include other possibilities, there are some differences.
+In particular:
+* spaces separate terms instead of being literal (you can always put " " for a literal space, or "\t" for a literal tab, or escape the space in a [] expression)
+* single and double quotes have special meaning (since you use them to quote things)
+
+As with POSIX Extended Regular Expression, the following characters have special meaning:
+ .     -- means match any single character
+ [ ]   -- matches any single character contained within the brackets;
+          note that \ - ] all have special meaning within the brackets
+          and so must be escaped with \ (ie \\ \- \]). The usual \ escapes,
+          such as \n are honored. Whitespace is literal within the [],
+          so [ ] will seach for a space character, and [ \t] will search
+          for a space or a tab.
+ [a b] -- for example, matches 'a' or 'b'. Note that the space is ignored.
+ [a-f] -- for example, matches any one of the characters abcdef
+ [Aa-f]-- for example, matches A or abcdef
+ [^ ]  -- inverse of a bracketed expression
+ ( )   -- group parts of a regular expression
+ *     -- matches the preceding element zero or more times
+ +     -- matches the preceding element one or more
+ ?     -- matches the preceding element zero or one times
+ |     -- matches either of two expressions
+ {m,n} -- where m and n are decimal numbers, matches the preceding element
+          at least m but not more than n times.
+ {m,}  -- matches the preceding element at least m times
+ {m}   -- matches the preceding element exactly m times
+ ()    -- parantheses are used for grouping
+
+The following POSIX regular expression features are not supported:
+ ^    -- in POSIX, matches the start of a string or line, but FEMTO
+         has neither concept.
+ $    -- in POSIX, matches the end of a string or line, but FEMTO
+         has neither concept.
+
+== APPROXIMATE SEARCH ==
+
+FEMTO supports approximate search. To perform an approximate search,
+simply prefix your search with the APPROX keyword, as in
+ APPROX blacksheep
+
+It is also possible to specify the desired edit distance, as in
+ APPROX 2 blacksheep
+will search allow 2 insertions, substitutions, or deletions. Note
+that APPROX 0 (exact match), APPROX 1 (one error), and APPROX 2
+(two errors) are supported, but APPROX 3 is too computationally expensive.
+APPROX 1 and 2 will return matches with that many or fewer errors;
+so exact matches are always returned.
+
+The approximate search will never allow substitutions at the last
+character. This offers significant speedups and these changes are
+usually covered by deletions.
+
+Lastly, it is possible to customize the approximate search to,
+for example, only allow characters to be missing from the pattern,
+using the form
+ APPROX <max_cost>:<subst_cost>:<delete_cost>:<insert_cost>
+where
+- <max_cost> is the total allowable cost for a match
+- <subst_cost> is the cost for a substitution
+- <delete_cost> is the cost for a missing character in the data
+- <insert_cost> is the cost for an extra character in the data
+The default value for all of these is 1 when APPROX is used with
+no arguments.
+
+So to allow only deletions, we can use:
+ APPROX 1:2:1:2 blacksheep
+

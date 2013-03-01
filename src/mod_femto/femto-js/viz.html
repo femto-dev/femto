@@ -1,0 +1,187 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+
+  <title>FEMTO</title>
+
+  <link rel="stylesheet" href="femto-js/contrib/jquery-slickgrid/slick.grid.css"/>
+  <!-- <link rel="stylesheet" href="femto-js/contrib/jquery-ui/css/smoothness/jquery-ui-1.8.9.custom.css"/> -->
+  <link rel="stylesheet" href="femto-js/contrib/jquery-slickgrid/css/smoothness/jquery-ui-1.8.5.custom.css" type="text/css" media="screen" charset="utf-8" />
+  <!-- <link rel="stylesheet" href="femto-js/contrib/jquery-svg/jquery.svg.css"/> -->
+  <!-- <link rel="stylesheet" href="femto-js/contrib/jquery-slickgrid/examples/examples.css"/> -->
+  <link rel="stylesheet" href="femto-js/contrib/jquery-slickgrid/css/smoothness/jquery-ui-1.8.5.custom.css" type="text/css" media="screen" charset="utf-8" />
+  <link rel="stylesheet" href="femto-js/vizgrid.css" type="text/css" media="screen" charset="utf-8" />
+
+  <!-- html,body { margin:0; padding:0; background-color:lightgray; } -->
+  <style>
+    html,body { margin:0; padding:0; }
+    body { font:11px Helvetica,Arial,sans-serif; }
+    body {
+      position: fixed;
+      top: 0;
+      left: 0;
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #F2F2F2;
+    }
+    .tip {
+      font: 12px Arial, Helvetica, sans-serif;
+      border: solid 1px #666666;
+      position: absolute;
+      /*width: 300px;*/
+      padding: 0.5em;
+      z-index: 2;
+      color: #333333;
+      /*top: 0px;
+      left: 0px;*/
+      background-color: #ffffcc;
+      background: rgba(255,255,208,0.8);
+      /*font-family: monospace;*/
+      font-weight: bold;
+      font-size: 24px;
+    }
+    .tip h1 {
+      display: block;
+      font-size: 34px;
+      padding: 2px;
+      margin-top: 5px;
+      border: 1px solid #aaaa88;
+      min-width: 34px;
+      min-height: 34px;
+    }
+    .tip h2{
+      /*font-family: monospace;*/
+      font-weight: bold;
+      font-size: 24px;
+      padding: 0;
+      margin: 0;
+    }
+    #documents-grid { position:absolute; top:0; left:0; right:0; bottom:0; }
+    #matches-grid { position:absolute; top:0; left:0; right:0; bottom:0; }
+    #navigation-bar {
+      z-index:1;
+      /*position: absolute;
+      top: 0;
+      left: 10;*/
+      background: rgba(250,250,250,0.6);
+    }
+    #search {
+      position:relative;
+      top:-1em;
+      margin-right: 1em;
+    }
+    #svgcanvas {
+      width: 100%;
+      height: 100%;
+      /*
+      position: absolute;
+      top: 0;
+      left: 0;*/
+      z-index:0;
+    }
+    #query_matches {
+      font-weight: bold;
+    }
+    .femtobox {
+    }
+    #viz-breadcrumbs-label {
+      font-weight: bold;
+      font-size: 24px;
+    }
+    #viz-breadcrumbs-match {
+      font-weight: bold;
+      font-size: 24px;
+    }
+    .femtomatch {
+      font-size: 24px;
+      font-weight: bold
+    }
+    .femtotext {
+      text-anchor: middle;
+      dominant-baseline: mathematical;
+      /*font-family: monospace;*/
+      font-weight: bold;
+      font-size: 48px; /* overridden, this is FYI */
+    }
+    .femtosubtext {
+      /*font-family: monospace;*/
+      font-size: 10px; /* overridden, this is FYI */
+    }
+    .workingspinner {
+      width:16px;
+      height:16px;
+      background-image: url('femto-js/spinner.gif');
+    }
+    .donespinner {
+      width:16px;
+      height:16px;
+    }
+
+    svg {
+      cursor: crosshair;
+    }
+  </style>
+
+</head>
+<body>
+  <!-- <script type="text/javascript" src="femto-js/contrib/jquery-ui/js/jquery-1.4.4.min.js"></script> -->
+  <script language="JavaScript" src="femto-js/contrib/jquery-slickgrid/lib/jquery-1.4.3.min.js"></script>
+  <!-- <script type="text/javascript" src="femto-js/contrib/jquery-ui/js/jquery-ui-1.8.9.custom.min.js"></script> -->
+  <script language="JavaScript" src="femto-js/contrib/jquery-slickgrid/lib/jquery-ui-1.8.5.custom.min.js"></script>
+  <script type="text/javascript" src="femto-js/contrib/jquery-slickgrid/lib/jquery.event.drag-2.0.min.js"></script>
+
+  <script type="text/javascript" src="femto-js/contrib/jquery-slickgrid/slick.grid.js"></script>
+  <script type="text/javascript" src="femto-js/contrib/jquery-slickgrid/slick.model.js"></script>
+
+  <script type="text/javascript" src="femto-js/contrib/jquery-svg/jquery.svg.js"></script>
+
+  <script type="text/javascript" src="femto-js/viz.js"></script>
+
+  <div id="tooltip" class="tip">
+  </div>
+
+  <div id="documents-dialog">
+    <!-- title="Document List">  -->
+    <div id="documents-grid"></div>
+  </div>
+
+  <div id="matches-dialog">
+    <div id="matches-grid"></div>
+  </div>
+
+  <div id="matches-list" style="position: absolute" class="femtomatch">
+  </div>
+
+  <div id="hidden-form" style="display: none">
+      <form id="query-form" method="get" action="index.html">
+        <input type="text" name="query" id="hidden-query" />
+        <input type="text" name="index" id="hidden-index" />
+      </form>
+  </div>
+  <div id="navigation-bar">
+    <span id="logo">
+      <img src="femto-js/logo-sm.png" alt="logo" />
+    </span>
+    <span id="search">
+      <input type="text" name="query-js" id="query" class="text ui-widget-content ui-corner-all" size="50" autofocus="true"/>
+      <span id="query_matches">enter a query</span>
+      <button id="show-matches">Matches</button>
+      <button id="show-documents">Documents</button>
+      <span id="spinner">
+        <img src="femto-js/spinner.gif" alt="loading"/>
+      </span>
+    </span>
+    <div id="viz-breadcrumbs">
+      <button id="viz-all"> Show All </button> <span id="viz-breadcrumbs-label"> Showing subtree for: </span>
+      <span id="viz-breadcrumbs-match"></span>
+    </div>
+  </div>
+  <div id="svgcanvas">
+  </div>
+
+
+</body>
+</html>

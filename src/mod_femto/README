@@ -1,0 +1,59 @@
+== ABOUT ==
+The FEMTO apache module serves queries on indexes in the /femto/
+directory on the webserver. Supported are described in src/main/femto.h,
+and a query is sent as a POST request.
+
+This package also includes a demonstration javascript and SVG based
+visualization tool, in femto.xhtml.
+
+== DEPENDENCIES ==
+
+This Apache module has been tested with Apache httpd 2.2.16.
+
+== BUILDING ==
+We have built it with an installation from source of httpd. There
+have been some problems where the mod_femto finds the wrong apr
+headers; we reccomend on Fedora systems to remove the apr-devel
+package before installing apache httpd from source.
+
+== INSTALLING ==
+As root (or someone who can write to your Apache http directories)
+run:
+ make apxs-install
+
+Create a directory femto in your htdocs (ie /usr/local/apache2/htdocs/femto).
+Copy femto-js to that directory (/htdocs, not /htdocs/femto).
+Next, set up a MatchAlias to
+redirect /femto/index_name/viz to viz.xhtml by adding the following
+to your httpd.conf file (possibly next to other ScriptAlias commands):
+    <IfModule femto_module>
+     <IfModule alias_module>
+       AliasMatch ^/femto/(.*)/femto-js/(.*)$ /usr/local/apache2/htdocs/femto-js/$2
+       AliasMatch ^/femto/(.*)/index.html$ /usr/local/apache2/htdocs/femto-js/viz.html
+     </IfModule>
+   </IfModule>
+
+Be sure to set the path appropriately (ie replace 
+/usr/local/apache2/htdocs/femto-js/ with the full path to your
+copied femto-js directory).
+
+Finally, copy (or possibly link) a FEMTO index into the femto directory;
+in the example /usr/local/apache2/htdocs/femto.
+
+Now browse to one of the index directories!
+
+== RUNNING ==
+Run the httpd server as usual. For testing, we use
+ httpd -X
+
+== USING ==
+If you've installed the visualization tool, point Chrome or Firefox at
+http://server/femto/your_index_name/ and everything should work!
+
+You can also use wget or curl to interact with the FEMTO server. For example,
+to find the start and end rows beginning with aa in the index, use:
+ wget http://server/femto/your_index_name/ --post-data='string_rows 97 97' -O -
+or
+ curl http://server/femto/your_index_name/ --data 'string_rows 97 97'
+
+

@@ -11,3 +11,36 @@
 *.lai
 *.la
 *.a
+
+# Flex and Bison output files
+src/main/posix.bison.c
+src/main/posix.flex.c
+
+# Other version control systems
+.svn
+CVS
+.hg
+.bzr
+.hgignore
+
+# Auto-tools things
+aclocal.m4
+autom4te.cache
+compile
+config.guess
+config.h
+config.h.in
+config.h.in~
+config.log
+config.status
+config.sub
+depcomp
+install-sh
+libtool
+ltmain.sh
+Makefile.in
+missing
+stamp-h1
+ylwrap
+.deps
+

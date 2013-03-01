@@ -1,0 +1,22 @@
+Michael Ferguson <michaelferguson@acm.org> is the primary author of FEMTO.
+
+FEMTO contains code from:
+ - OpenBSD sys/tree.h (by Niels Provos) and sys/queue.h
+ - Julian Seward's bzip2: huffman.c, basis for bzlib_private.h
+ - N. Jesper Larsson's suffix sorting implementation: qsufsort.c
+ - Google's RE2 regular expression library: src/re2/re2
+ - jQuery Foundation's jQuery UI: src/mod_femto/femto-js/contrib/jquery-ui
+ - Michael Leibman's SlickGrid: src/mod_femto/femto-js/contrib/jquery-slickgrid
+ - Keith Wood's jQuery SVG: src/mod_femto/femto-js/contrib/jquery-svg
+
+FEMTO contains algorithmic ideas from:
+ - Paolo Ferragina and Giovanni Manzini
+ -- invented the FM-index upon which FEMTO is based
+ - Nancy Walia, John E Dorband, and Yaacov Yesha (UMBC)
+ -- for help in developing a parallel, external memory indexing algorithm
+ - Juha Kärkkäinen, Peter Sanders, Stefan Burkhardt
+ -- for inventing Difference Cover O(n) suffix array construction
+ - Roman Dementiev, Juha Kärkkäinen, Jens Mehnert, Peter Sanders
+ -- demonstrated linear-time external memory suffix array construction with DC3
+ - Fabian Kulla Peter Sanders
+ -- demonstrated  parallel suffix array construction with DC3.

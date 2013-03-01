@@ -1,0 +1,69 @@
+Update for a particular block -
+DATA_UPDATE kind of block.
+
+BLOCK UPDATE FORMAT:
+4 bytes BLOCK_UPDATE_START
+4 bytes BLOCK_VERSION
+4 bytes settings_offset
+4 bytes chunk_ends_offset
+4 bytes uncompressed_updates_offset
+4 bytes compressed_chunks_new_rows_offset
+4 bytes compressed_chunks_offset
+4 bytes compressed_updates_offset
+4 bytes END_OF_OFFSETS
+
+at settings_offset:
+  4 bytes of chunk_size (from the destination block), or 0 to use the chunk ends
+  4 bytes number of chunks (from the destination block)
+  4 bytes of start_uncompressed
+  4 bytes of max_uncompressed
+  1 byte offset_size_bits
+  variable bytes of ratio (string encoded with printf("%a"))
+
+# chunk_ends is the same as stored in the destination block but
+# it is copied here for conviencence
+at chunk_ends_offset:
+  chunk_count 4-byte integers indicating the end of each chunk
+  (in terms of rows within this block)
+
+at uncompressed_updates
+  4 bytes max_updates (number of uncompressed updates available in the file)
+  4 bytes number_updates (number of uncompressed updates)
+  for each of the number_updates updates
+    4 bytes dst_row_in_block
+    4 bytes L character for this update 
+    8 bytes src_row - row number in source index
+    8 bytes of logical offset in the destination index,
+        if it should be marked, or -1 if it shouldn't be marked
+    8 bytes of document number (this could be determined from the logical
+        offset, but only if it is always provided and we do a bsearch on
+        the document ends in the header block)
+
+at compressed_chunks_new_rows_offset
+  for each chunk, we have:
+    4 bytes num_rows = the number of rows in the UPDATE for this chunk
+
+at compressed_chunks_offset:
+  for chunk_count+1 we have 4-byte offsets
+
+at each compressed_chunk offset
+    gamma encoded number of documents in the chunk
+    num_docs delta-gamma encoded document numbers
+
+at compressed_updates:
+  4 bytes number_updates (number of compressed updates)
+  #storing gamma-encoded differences (across the whole block) and L values
+  # the differences can be 0.
+  4 bytes first dst_row_number
+  8 bytes first src_row_number
+  RLE entries:
+    1 or 0 indicating if it's got a different character
+    if 1, ALPHA_SIZE_BITS bits of character
+    if 0, character is the same as the last entry.
+    dst_row_number_delta+1, gamma-encoded
+    src_row_number_delta+1, gamma-encoded
+    1 or 0 to indicate if that one has an offset
+    if 1, offset_size_bits of logical offset
+
+
+

@@ -1,0 +1,50 @@
+-- Remove dependency/use of GNU parallel stl
+
+-- evaluate removing the Huffman tree from each bucket.
+   Removing the Huffman encoding should not increase the size
+   of the data -- only possibly make queries less L2 cache-efficient.
+   But it might improve external memory operation (since no
+   longer would we have to do anything complicated to 'open' a bucket).
+
+-- index update:add document/remove document
+
+-- index merge
+
+-- wavelet tree compressed document array more efficient Boolean searches
+
+-- add readahead with madvise, possibly based on "Sequential Access FM-indexes"
+ http://arxiv.org/abs/1205.1195
+
+-- better faster/less space suffix array/index construction
+
+- Improve the suffix array construction algorithm by
+  removing runs of unique characters from the recursion.
+  This trick is documented in 'The Performance of Linear Time
+   Suffix Sorting Algorithms' from Puglisi, Smyth, and Turpin.
+  In order to avoid making two complete passes over parts of
+  the data (and to keep it distributed nicely), we would simply
+  store with each character for recursion whether or not it
+  is unique and then when deciding if a tuple is unique just
+  decide it's unique only if the first character is unique
+  (or if any character is unique).
+
+  This would offer a 5-7% improvement in speed according
+  to experiments (and so is not clearly worth doing).
+
+- Improve AND/NOT query performance by caching results for subqueries
+  on disk in an LRU cache. The rest of the query could be computed
+  while the initial results are being sent in.
+
+- Cluster the documents during index construction and renumber
+  the documents based upon the clustering. This will hopefully
+  improve the compression of document result list.s
+  The easy algorithm is to create records
+   doc, next_row_doc
+   doc, prev_row_doc
+  and then sort by the 1st and then the 2nd column. Start with
+  the largest document, and then choose the next document which
+  has the most appearances in the sorted list (using majority vote,
+  and discounting documents that we have already given numbers; if
+  no next-document matches these criterion we use the original 'next-doc'.
+
+

@@ -1,0 +1,20 @@
+bucket sort optimization infos.
+
+2 prefetches in count on minmax -- 7.38s count/2.33 distribute
+0 prefetches in count on minmax -- 6.3s count/2.28 distribute
+no minmax update -- 1.21 s for count.
+no conditional i==0 -> 6.27 s for count.
+only one update (max no min) -> 4.1s for count.
+only one update + prefetching -> 4.8s for count.
+comparisons always with startbin -> 6.14s for count.
+comparisons replaced with .key checks -> 1.16s for count.
+comparisons replaced with .key checks within compare_record -> 5.6s count
+using -O4
+count 0.375 distribute 1.04
+
+Then with -O4, we get 1 GB in 4.7s ie 216 MB/s
+(compare with 270 MB/s for the std::sort in many cores
+   or         101 MB/s for std::sort serial)
+
+
+So we are at a 2x speedup! However, -O4 is key..

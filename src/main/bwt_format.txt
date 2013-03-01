@@ -1,0 +1,42 @@
+The BWT format -
+
+4-bytes BWT_START
+4-bytes BWT_VERSION
+8-bytes number-of-characters
+8-bytes number-of-documents
+8-bytes alphabet_size
+8-bytes mark period
+1-byte alphabet_size_bits
+1-byte offset_size_bits
+A sequence of RLE entries:
+  alphabet_size_bits bits of character
+  1 followed by offset_size_bits of logical offset
+  - or - 
+  0 followed by gamma-code # zeros
+
+
+The auxillary document-map format
+4-bytes DOC_MAP_START
+4-bytes DOC_MAP_VERSION
+8-bytes number-of-characters
+8-bytes number-of-documents
+8-bytes chunk-size
+8-bytes number-of-chunks
+A sequence of chunks.
+  For each chunk (chunk-size parts):
+    [byte aligment] 
+    chunk_size_num_bits of # unique docs in this chunk
+    delta/gamma coded document numbers
+  [byte alignment]
+  chunk_size_num_bits of 0
+
+
+The auxillary document-info format:
+4-bytes DOC_INFO_START
+4-bytes DOC_INFO_VERSION
+8-bytes number-of-characters
+8-bytes number-of-documents
+number-of-documents 8-byte document ends (including ssort-added EOFs) for logical offset
+number-of-documents+1 8-byte offsets
+at each offset, until the next offset, is the document info.
+
