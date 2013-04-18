@@ -58,7 +58,7 @@ To build an index, run
                              files_or_directories_to_index
 
 Then, to query the index, use femto_search.
-To count the number of occurences (quickly!), use:
+To count the number of occurrences (quickly!), use:
  femto/src/main/femto_search /path/to/index_dir --count 'pattern'
 To report documents that matched (time depends on # reported), use:
  femto/src/main/femto_search /path/to/index_dir 'pattern'
