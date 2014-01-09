@@ -89,7 +89,7 @@ void test_regexp_search(void)
     // create the query:
     // initialize q, the regexp_query_t
     // (function in server.c)
-    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa);
+    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa, 0);
     die_if_err(err);
 
     err = femto_run_query(&srv, (query_entry_t*) &q);
@@ -139,7 +139,7 @@ void test_regexp_search(void)
     // create the query:
     // initialize q, the regexp_query_t
     // (function in server.c)
-    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa);
+    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa, 0);
     die_if_err(err);
 
     err = femto_run_query(&srv, (query_entry_t*) &q);
@@ -180,7 +180,7 @@ void test_regexp_search(void)
     // create the query:
     // initialize q, the regexp_query_t
     // (function in server.c)
-    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa);
+    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa, 0);
     die_if_err(err);
     
     err = femto_run_query(&srv, (query_entry_t*) &q);
@@ -265,7 +265,7 @@ void test_regexp_search2(void)
     // create the query:
     // initialize q, the regexp_query_t
     // (function in server.c)
-    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa);
+    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa, 0);
     die_if_err(err);
 
     err = femto_run_query(&srv, (query_entry_t*) &q);
@@ -320,7 +320,7 @@ void test_regexp_search2(void)
     // create the query:
     // initialize q, the regexp_query_t
     // (function in server.c)
-    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa);
+    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa, 0);
     die_if_err(err);
 
     err = femto_run_query(&srv, (query_entry_t*) &q);
@@ -370,7 +370,7 @@ void test_regexp_search2(void)
     // create the query:
     // initialize q, the regexp_query_t
     // (function in server.c)
-    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa);
+    err = setup_regexp_query_take_nfa(&q, NULL, loc, nfa, 0);
     die_if_err(err);
 
     err = femto_run_query(&srv, (query_entry_t*) &q);

@@ -97,6 +97,7 @@ void return_result (server_state_t* ss, process_entry_t* ce_p)
     /* if we're returning an error code and there's outstanding requests */
     if( ce_p->entry.err_code && ce_p->num_pending_requests > 0 ) {
       /* just wait for the other responses before returning */
+      fprintf(stderr, "Warning: return_result with error %i\n", ce_p->entry.err_code);
     } else {
       /* otherwise, deliver the result. */
       deliver_result(ss, (query_entry_t*) ce_p);
@@ -592,7 +593,7 @@ void do_signal_request(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
       assert(0);
   }
 
-  if( DEBUG_SERVER > 8 ) printf("In do_signal_request %p %p\n", s, sub);
+  if( DEBUG_SERVER > 0 ) printf("In do_signal_request %p %p\n", s, sub);
 
 #define SIG_RETURN \
   { \
@@ -611,20 +612,20 @@ void do_signal_request(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
   while( 1 ) {
     switch( s->proc.entry.state ) {
       case 0:
-        if( DEBUG_SERVER > 8 ) printf("In do_signal_request %p %p scheduling %p\n", s, sub, s->query);
+        if( DEBUG_SERVER > 0 ) printf("In do_signal_request %p %p scheduling %p\n", s, sub, s->query);
         err = schedule_query(ss, s->query);
         SIG_CHECK_ERROR( err );
-        if( DEBUG_SERVER > 8 ) printf("In do_signal_request %p %p waiting\n", s, sub);
+        if( DEBUG_SERVER > 0 ) printf("In do_signal_request %p %p waiting\n", s, sub);
         WAIT_STATE(0x100);
       case 0x100:
-        if( DEBUG_SERVER > 8 ) printf("In do_signal_request %p %p checking\n", s, sub);
+        if( DEBUG_SERVER > 0 ) printf("In do_signal_request %p %p checking\n", s, sub);
 
         if( sub->err_code ) {
           s->proc.entry.err_code = sub->err_code;
 
         }
 
-        if( DEBUG_SERVER > 8 ) printf("In do_signal_request %p %p signalling and returning\n", s, sub);
+        if( DEBUG_SERVER > 0 ) printf("In do_signal_request %p %p signalling and returning\n", s, sub);
 
         // The lock is already held!
         SIG_RETURN;
@@ -660,6 +661,10 @@ error_t setup_string_query(
   memcpy(q->pat, pat, sizeof(alpha_t) * q->plen);
   
   q->i = -1;
+  q->prev_first = 0;
+  q->prev_last = -1;
+  q->prev_len = -1;
+
   return ERR_NOERR;
 }
 
@@ -676,9 +681,10 @@ void do_string_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
   string_query_t* s = NULL;
   block_query_t* bq = NULL;
   header_occs_query_t* hq = NULL;
+  header_loc_query_t* loc_q = NULL;
   error_t err;
   int ch;
-
+  int64_t new_first, new_last;
 
   switch ( mode ) {
     case QUERY_MODE_START:
@@ -691,6 +697,8 @@ void do_string_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
         hq = (header_occs_query_t*) qe;
       } else if( qe->type == QUERY_TYPE_BLOCK ) {
         bq = (block_query_t*) qe;
+      } else if( qe->type == QUERY_TYPE_HEADER_LOC ) {
+        loc_q = (header_loc_query_t*) qe;
       } else assert(0);
       assert( qe->parent->entry.type == QUERY_TYPE_STRING );
       s = (string_query_t*) qe->parent;
@@ -737,14 +745,33 @@ void do_string_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
   while( 1 ) {
    switch (s->proc.entry.state) {
     case 0:
-      // set up - make requests for C[ch] and C[ch+i]
-      s->i = s->plen - 1;
-      ch = s->pat[s->i];
-      // request C[ch] and C[ch+1]
-      HDR_REQUEST_OCCS(&s->hq1, 0x101, HDR_REQUEST_C, 0, ch );
-      HDR_REQUEST_OCCS(&s->hq2, 0x110, HDR_REQUEST_C, 0, ch+1);
-      // wait for C[ch] and C[ch+1]
-      WAIT_STATE(0x100); // wait for these to come back.
+      if (s->plen == 0) {
+        // find n-1.
+        setup_header_loc_query(&s->loc_query,
+                               s->proc.entry.loc,
+                               0x001,
+                               &s->proc,
+                               HDR_LOC_REQUEST_L_SIZE, 0, 0);
+
+        err = schedule_query(ss, (query_entry_t*) &s->loc_query);
+        CHECK_ERROR(err);
+        WAIT_STATE(0x001); // wait for the response to get the L column size.
+      } else {
+        // set up - make requests for C[ch] and C[ch+i]
+        s->i = s->plen - 1;
+        ch = s->pat[s->i];
+        // request C[ch] and C[ch+1]
+        HDR_REQUEST_OCCS(&s->hq1, 0x101, HDR_REQUEST_C, 0, ch );
+        HDR_REQUEST_OCCS(&s->hq2, 0x110, HDR_REQUEST_C, 0, ch+1);
+        // wait for C[ch] and C[ch+1]
+        WAIT_STATE(0x100); // wait for these to come back.
+      }
+    case 0x001: // make the entry
+      CHECK_RESPONSE(loc_q);
+      cleanup_header_loc_query(loc_q);
+      s->first = 0;
+      s->last = loc_q->r.doc_len - 1;
+      RETURN_RESULT;
     case 0x100:
     case 0x101:
     case 0x110:
@@ -847,16 +874,28 @@ void do_string_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
       // fall through
     case 0x333:
       // add in the value from the header
-      s->first = 0;
-      s->last = 0;
+      new_first = 0;
+      new_last = 0;
 
-      s->first += s->hq1.r.occs;
-      s->first += s->bq1.r.occs_in_block;
+      new_first += s->hq1.r.occs;
+      new_first += s->bq1.r.occs_in_block;
 
       // we got the C[ch] + Occ(ch, Last). Add it to last and subtract 1.
-      s->last += s->hq2.r.occs;
-      s->last += s->bq2.r.occs_in_block;
-      s->last--;
+      new_last += s->hq2.r.occs;
+      new_last += s->bq2.r.occs_in_block;
+      new_last--;
+
+      // Did the number of matches change? If so, copy i, oldfirst,
+      // oldlast to our search structure.
+      if( s->last >= s->first &&
+          new_last - new_first != s->last - s->first ) {
+        s->prev_first = s->first;
+        s->prev_last = s->last;
+        s->prev_len = s->plen - s->i;
+      }
+      
+      s->first = new_first;
+      s->last = new_last;
 
       // decrement i and continue the loop
       s->i--;
@@ -1051,6 +1090,37 @@ void do_backward_search_query(server_state_t* ss, query_mode_t mode, query_entry
 /* I havn't figure out how to make forward-search work on the FM-index.
  * While it would be nice, and I believe that it's possible, 
  * this problem must be saved for later.
+ *
+ *
+ *
+ * Forward search works like this:
+ *
+ * - we have a range of rows starting with a shared k-character prefix
+ * - we want a range of rows starting with a shared k+1-character prefix,
+ *   adding in the character ch
+ * - so find the smallest and largest rows such that
+ *     C[ch] <= forward step*k (row) < C[ch+1]
+ *   which can be accomplished in 2 binary searches, but
+ *   we will cache forward_k(start) and forward_k(end).
+ *
+ *  have:
+ *    start
+ *    end
+ *    k // known shared prefix length
+ *    // conceputal known prefix, k characters
+ *    forward_k_start // forward_step*k(start), 1st char is prefix[k-1]
+ *    forward_k_end // forward_step*k(end)
+ *    next_ch // what we want prefix[k] to be
+ *
+ *  - binary search in start/end for the row with prefix[k] = next_ch
+ *    (log n * k work)
+ *
+ *  So forward search to find a pattern of length m would be
+ *    O(m*m log n)
+ *  * except 
+ *    we can check to see if ch is in first-char[forward-k-start] .. first-char[forward-k-end] or if ch is the only character there,
+ *    in which case we just use forward_step on the boundaries
+ *      (which are cached in forward_k_start/end).
  */
 
 
@@ -1158,6 +1228,9 @@ error_t regexp_result_copy(regexp_result_t* dst, regexp_result_t* src)
   dst->first = src->first;
   dst->last = src->last;
   dst->cost = src->cost;
+  dst->prev_first = src->prev_first;
+  dst->prev_last = src->prev_last;
+  dst->prev_len = src->prev_len;
   dst->match_len = src->match_len;
   dst->match = malloc(src->match_len * sizeof(alpha_t));
   if( ! dst->match ) return ERR_MEM;
@@ -1193,7 +1266,8 @@ error_t setup_regexp_query_take_nfa(
         regexp_query_t* q,
         process_entry_t* requestor, 
         index_locator_t loc,
-        nfa_description_t* nfa)
+        nfa_description_t* nfa,
+        int max_nonresults)
 {
   error_t err;
 
@@ -1219,6 +1293,7 @@ error_t setup_regexp_query_take_nfa(
     err = ERR_MEM;
     goto error;
   }
+  q->max_nonresults = max_nonresults;
 
   memset(&q->results, 0, sizeof(regexp_result_list_t));
   memset(q->new_range, 0, ALPHA_SIZE * sizeof(regexp_result_t));
@@ -1244,7 +1319,8 @@ error_t setup_regexp_query(
         regexp_query_t* q,
         process_entry_t* requestor, 
         index_locator_t loc,
-        struct ast_node* ast_node)
+        struct ast_node* ast_node,
+        int max_nonresults)
 {
   error_t err;
   nfa_description_t* nfa = NULL;
@@ -1268,7 +1344,7 @@ error_t setup_regexp_query(
 
   assert(nfa);
 
-  err = setup_regexp_query_take_nfa(q, requestor, loc, nfa);
+  err = setup_regexp_query_take_nfa(q, requestor, loc, nfa, max_nonresults);
   if( err ) return err;
 
   return ERR_NOERR;
@@ -1309,6 +1385,8 @@ void cleanup_regexp_query(regexp_query_t* q )
   free(q->results.results);
   q->results.results = NULL;
   q->results.num_results = 0;
+  free(q->nonresults.results);
+  q->nonresults.results = NULL;
   free_nfa_description( q->nfa );
   free(q->nfa);
   cleanup_process_entry(&q->proc);
@@ -1333,6 +1411,16 @@ int regexp_result_cmp(const void* aPtr, const void* bPtr)
     else return 0;
   }
 }
+int regexp_result_longest_cmp(const void* aPtr, const void* bPtr)
+{
+  regexp_result_t *a = (regexp_result_t*) aPtr;
+  regexp_result_t *b = (regexp_result_t*) bPtr;
+
+  if( a->match_len < b->match_len ) return 1;
+  if( a->match_len > b->match_len ) return -1;
+  return regexp_result_cmp(aPtr, bPtr);
+}
+
 void regexp_result_freef(void* aPtr)
 {
   regexp_result_t *a = (regexp_result_t*) aPtr;
@@ -1340,6 +1428,26 @@ void regexp_result_freef(void* aPtr)
   regexp_result_free(a);
 }
 
+void regexp_nonresult_list_sort(regexp_result_list_t* list)
+{
+  list->num_results = sort_dedup_free(list->results, list->num_results,
+                                 sizeof(regexp_result_t),
+                                 regexp_result_longest_cmp,
+                                 regexp_result_freef);
+
+  // Remove everything other than the longest non-match.
+  if( list->num_results > 0 ) {
+    int longest = list->results[0].match_len;
+    for( int i = 1; i < list->num_results; i++ ) {
+      if( list->results[i].match_len < longest ) {
+        list->num_results = i;
+        break;
+      }
+    }
+  }
+}
+
+ 
 void regexp_result_list_sort(regexp_result_list_t* list)
 {
   list->num_results = sort_dedup_free(list->results, list->num_results,
@@ -1391,6 +1499,7 @@ error_t add_mapping (nfa_description_t* nfa,
   error_t err;
 
   if (new_result->last < new_result->first) {
+    // Keep track of a couple of non-matches.
     return ERR_NOERR;
   }
 
@@ -1433,6 +1542,9 @@ error_t add_mapping (nfa_description_t* nfa,
         key->match = malloc(new_result->match_len * sizeof(alpha_t));
         memcpy(key->match, new_result->match, new_result->match_len * sizeof(alpha_t));
         key->match_len = new_result->match_len;
+        key->prev_first = new_result->prev_first;
+        key->prev_last = new_result->prev_last;
+        key->prev_len = new_result->prev_len;
       }
     } else {
       // otherwise, add the entry to the queue map.
@@ -1471,7 +1583,8 @@ void do_regexp_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
   header_occs_query_t* hq = NULL;
   header_loc_query_t* loc_q = NULL;
   error_t err = ERR_NOERR;
-  
+  int64_t new_first, new_last;
+
   switch ( mode )
     {
     case QUERY_MODE_START:
@@ -1610,6 +1723,9 @@ void do_regexp_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
           new_result.last = n-1;
           new_result.match_len = 0;
           new_result.match = NULL;
+          new_result.prev_first = -1;
+          new_result.prev_last = -2;
+          new_result.prev_len = -1;
 
           s->num_iterations = 0;
 
@@ -1712,6 +1828,9 @@ void do_regexp_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
               s->new_range[chr].cost = MAX_NFA_ERRCNT;
               s->new_range[chr].match_len = 0;
               s->new_range[chr].match = NULL;
+              s->new_range[chr].prev_first = var->prev_first;
+              s->new_range[chr].prev_last = var->prev_last;
+              s->new_range[chr].prev_len = var->prev_len;
             }
 
             // allocate all of the new_range guys.
@@ -1747,6 +1866,10 @@ void do_regexp_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
 
             // sort the results.
             regexp_result_list_sort(&s->results);
+            regexp_nonresult_list_sort(&s->nonresults);
+            if( s->nonresults.num_results > s->max_nonresults ) {
+              s->nonresults.num_results = s->max_nonresults;
+            }
 
             RETURN_RESULT;
           }
@@ -1856,14 +1979,54 @@ void do_regexp_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
         for( alpha_t chr = 0; chr < ALPHA_SIZE; chr++ ) {
           if ( get_bit(CHARACTER_SET_CHUNKS, s->r_c, chr) ) {
             // first = C[ch] + Occ(ch, first - 1)
-            s->new_range[chr].first = s->parts[chr].hq1.r.occs + s->parts[chr].bq1.r.occs_in_block;
+            new_first = s->parts[chr].hq1.r.occs + s->parts[chr].bq1.r.occs_in_block;
             // last = C[ch] + Occ(ch, last) - 1
-            s->new_range[chr].last = s->parts[chr].hq2.r.occs + s->parts[chr].bq2.r.occs_in_block - 1;
+            new_last = s->parts[chr].hq2.r.occs + s->parts[chr].bq2.r.occs_in_block - 1;
+
+            if( s->last >= s->first && 
+                new_last - new_first != s->last - s->first ) {
+              int prev_len;
+              int64_t prev_first, prev_last;
+              prev_first = s->first;
+              prev_last = s->last;
+              prev_len = s->new_range[chr].match_len - 1;
+              s->new_range[chr].prev_first = prev_first;
+              s->new_range[chr].prev_last = prev_last;
+              s->new_range[chr].prev_len = prev_len;
+              if( s->max_nonresults > 0 && prev_len >= 0 ) {
+                regexp_result_t start;
+                regexp_result_t use;
+                start = s->new_range[chr];
+                // set first,last so we can sort it later.
+                start.first = prev_first;
+                start.last = prev_last;
+                // set the match to be the non-matching part of the
+                //  pattern in question.
+                start.match = &start.match[start.match_len-start.prev_len];
+                start.match_len = prev_len;
+                err = regexp_result_copy(&use, &start);
+                CHECK_ERROR( err );
+                // Store this result there...
+                err = regexp_result_list_append(&s->nonresults, &use);
+                CHECK_ERROR( err );
+
+                // Now, clean up house if we have too many results.
+                if( s->nonresults.num_results >= 2*s->max_nonresults ) {
+                  regexp_nonresult_list_sort(&s->nonresults);
+                  if( s->nonresults.num_results > s->max_nonresults ) {
+                    s->nonresults.num_results = s->max_nonresults;
+                  }
+                }
+              }
+            }
+            s->new_range[chr].first = new_first;
+            s->new_range[chr].last = new_last;
           }
         }
         // fall through
       case 0x510: // end of MAIN FOR LOOP (for each reachable ch)
         {
+         
           // handle substitutions.
           // set tmp_states = states reachable after adding a subst error
           approx_get_reachable_states_allchars(s->nfa, s->nfa->settings.subst_cost,
@@ -2730,27 +2893,6 @@ error_t schedule_query_on(shared_server_state_t* shared, int victim, query_entry
 }
 
 
-error_t schedule_query_shared(shared_server_state_t* shared, query_entry_t* qe)
-{
-  size_t x = try_sync_add_size_t(&shared->enqueued_counter, 1);
-  int victim = x % shared->num_threads;
-  error_t err;
- 
-  err = schedule_query_on(shared, victim, qe);
-  if( err ) return err;
-
-  // Wake up the other threads, to get work stealing going.
-  for( int i = 0; i < shared->num_threads; i++ ) {
-    server_state_t* tgt = &shared->threads[i];
-    int rc;
-
-    rc = pthread_cond_broadcast(&tgt->wait_here_for_requests);
-    assert(!rc);
-  }
-
-  return ERR_NOERR;
-}
-
 // Steals requests from shared->threads[victim]
 // Steals up to max_to_steal requests
 // Steals requests in up to max_blocks_to_steal blocks.
@@ -2904,7 +3046,10 @@ void worker_work(server_state_t* ss)
     // Steal some work.. from ourselves.
     stolen = steal_work(shared, my_thread_number, my_thread_number, max_per_iter, max_blocks_per_iter, start_query, &my_work);
 
-    if( stolen == -1 ) return; // terminate this thread!
+    if( stolen == -1 ) {
+      if( DEBUG_SERVER ) printf("%i terminating for stolen==-1\n", ss->thread_number);
+      return; // terminate this thread!
+    }
 
     if( stolen == 0 && ! i_have_work(ss) ) {
       // Look for other work.
@@ -2950,6 +3095,10 @@ void worker_work(server_state_t* ss)
       rc = pthread_mutex_unlock(&ss->lock);
       assert(!rc);
     }
+
+    // Lock the state.
+    rc = pthread_mutex_lock(&ss->lock);
+    assert(!rc);
 
     // Now process whatever we've got in stolen or in our 
     // new request queues.
@@ -3066,9 +3215,6 @@ void worker_work(server_state_t* ss)
     }
 
     if( ss->new_leaf_queries.head.lh_first ) {
-      // Lock the state.
-      rc = pthread_mutex_lock(&ss->lock);
-      assert(!rc);
 
       // Now put any new leaf queries in the shared tree.
       {
@@ -3101,10 +3247,11 @@ void worker_work(server_state_t* ss)
         }
       }
 
-      // Unlock the state.
-      rc = pthread_mutex_unlock(&ss->lock);
-      assert(!rc);
     }
+
+    // Unlock the state.
+    rc = pthread_mutex_unlock(&ss->lock);
+    assert(!rc);
   }
 }
 
@@ -3362,6 +3509,8 @@ error_t set_default_server_settings(server_settings_t* settings)
 
   settings->verbose = 0;
   settings->num_threads = num_threads;
+//TEMP - force number of threads to 1.
+  settings->num_threads = 1;
   settings->block_cache_size = blocks_per_thread;
   settings->bucket_cache_size = bucket_cache_size;
 
@@ -3496,9 +3645,67 @@ void stop_server(shared_server_state_t* shared)
   cleanup_server(shared);
 }
 
-error_t server_schedule_query(shared_server_state_t* shared, process_entry_t* q)
+error_t server_schedule_queries(shared_server_state_t* shared, void* reqs, int nreqs, int reqsize)
 {
-  return schedule_query_shared(shared, (query_entry_t*) q);
+  size_t x = 0;
+  int victim = 0;
+  error_t err;
+  server_state_t* tgt;
+  int rc;
+  int i;
+
+
+  if( shared->num_threads == 1 ) {
+    shared->enqueued_counter++;
+  } else {
+    x = try_sync_add_size_t(&shared->enqueued_counter, 1);
+    victim = x % shared->num_threads;
+  }
+
+  tgt = &shared->threads[victim];
+
+  // Lock
+  rc = pthread_mutex_lock(&tgt->lock);
+  assert(!rc);
+
+  if( tgt->running ) {
+    for( i = 0; i < nreqs; i++ ) {
+      void* addr = reqs + i*reqsize;
+      query_entry_t* qe = (query_entry_t*) addr;
+      err = schedule_query(tgt, qe);
+    }
+  } else {
+    err = ERR_INVALID_STR("server no longer running");
+  }
+
+  // Signal somebody waiting for requests (we only add one).
+  rc = pthread_cond_signal(&tgt->wait_here_for_requests);
+  assert(!rc);
+
+  // Unlock
+  rc = pthread_mutex_unlock(&tgt->lock);
+  assert(!rc);
+
+
+  // Wake up the other threads, to get work stealing going.
+  for( int i = 0; i < shared->num_threads; i++ ) {
+    server_state_t* tgt = &shared->threads[i];
+    int rc;
+
+    if( i == victim ) continue;
+
+    rc = pthread_mutex_lock(&tgt->lock);
+    assert(!rc);
+
+    rc = pthread_cond_broadcast(&tgt->wait_here_for_requests);
+    assert(!rc);
+    
+    rc = pthread_mutex_unlock(&tgt->lock);
+    assert(!rc);
+  }
+
+  return ERR_NOERR;
+
 }
 
 
@@ -4598,11 +4805,29 @@ void do_string_results_query(server_state_t* ss, query_mode_t mode, query_entry_
       assert(0);
   }
 
+/// TODO -- needs to get a whole chunk like the regexp version does!
+//   in do_regexp_results_query.
+// The regexp version may be buggy!
+//
   /** The normal algorithm:
       [first,last] = do_string_query;
+      results = { };
+      chunk_reader = range_to_results_reader
+      chunk = chunk_reader.next
+      while(1) {
+        if( results >= chunk_size )
+          return results;
+        results = results UNION chunk
+        if chunk is the last chunk {
+          return results;
+        }
+      }
+ 
+     
       results = range_to_results;
       */
 
+  while(1) {
   switch (s->results.proc.entry.state) {
     case 0x0: // initial setup
       if( DEBUG > 8 ) printf("string_results_t %p starting\n", s);
@@ -4616,6 +4841,8 @@ void do_string_results_query(server_state_t* ss, query_mode_t mode, query_entry_
       CHECK_RESPONSE(string_query);
       // proceed to getting a chunk with range_to_results.
       // fall through
+    case 0x2: // entry point for restarting the search.
+      // fall through
     case 0x5: // setup the range_to_results query.
       err = setup_range_to_results_query( &s->rtrq,
                &s->results.proc, s->results.proc.entry.loc,
@@ -4623,31 +4850,47 @@ void do_string_results_query(server_state_t* ss, query_mode_t mode, query_entry_
                s->string_query.first, s->string_query.last);
       CHECK_ERROR(err);
       // fall through
-    case 0x10: // get a chunk
+    case 0x15: // entry point for getting another chunk
+      results_clear_set_type(&s->results.results,
+                             results_type(&s->results.results));
+      s->num_results = 0;
+      // fall through
+    case 0x30: // while loop
+      if( s->num_results >= s->results.chunk_size ) {
+        // we've got a whole chunk.
+        s->results.is_last_chunk = 0;
+        // start at case 0x15.
+        s->results.proc.entry.state = 0x15;
+        if( DEBUG > 8 ) printf("string_results_t %p delivering results\n", s);
+        RETURN_RESULT;
+      }
       if( DEBUG > 8 ) printf("string_results_t %p getting chunk\n", s);
       err = schedule_query(ss, (query_entry_t*) &s->rtrq);
       CHECK_ERROR(err);
-      WAIT_STATE(0x20);
-    case 0x20:
-      // we should have a chunk
+      WAIT_STATE(0x31);
+    case 0x31:
+      // we should have a range-to-results
       if( DEBUG > 8 ) printf("string_results_t %p got chunk\n", s);
       CHECK_RESPONSE( rtrq );
-
-      // fall through
-    case 0x30:
-      // use the results.
-      if( s->rtrq.results.is_last_chunk ) {
-        s->results.proc.entry.state = 0x5; // repeat the other query.
+      // union it with our results.
+      s->num_results += results_num_results(&rtrq->results.results);
+      err = unionResults(&s->results.results,
+                         &rtrq->results.results,
+                         &s->results.results);
+      CHECK_ERROR( err );
+      if( rtrq->results.is_last_chunk ) {
+        // we've returned the last chunk.
         s->results.is_last_chunk = 1;
+        // restart at 0x2
+        s->results.proc.entry.state = 0x2;
+        RETURN_RESULT;
       } else {
-        s->results.proc.entry.state = 0x10;
-        s->results.is_last_chunk = 0;
+        s->results.proc.entry.state = 0x30; // start of inner while loop
+        break;
       }
-      results_move( &s->results.results, &s->rtrq.results.results);
-      if( DEBUG > 8 ) printf("string_results_t %p delivering results\n", s);
-      RETURN_RESULT;
     default:
       RETURN_ERROR(ERR_INVALID);
+  }
   }
 }
 
@@ -4672,7 +4915,7 @@ error_t setup_regexp_results_query( regexp_results_query_t* q,
     return ERR_PARAM;
   }
 
-  err = setup_regexp_query( &q->regexp, &q->results.proc, loc, ast_node);
+  err = setup_regexp_query( &q->regexp, &q->results.proc, loc, ast_node, 0);
   if( err ) return err;
 
   q->rtrq.results.proc.entry.type = 0;
@@ -4814,6 +5057,7 @@ void do_regexp_results_query(server_state_t* ss, query_mode_t mode, query_entry_
     case 0x31:
       // we should have a range-to-results
       CHECK_RESPONSE(rtrq);
+      //results_print(stdout, &s->rtrq.results.results);
       // union it with our results.
       s->num_results += results_num_results(&rtrq->results.results);
       err = unionResults(&s->results.results,
@@ -4855,7 +5099,7 @@ error_t create_generic_ast_count_query( process_entry_t** q_ptr,
       err = setup_regexp_query( (regexp_query_t*) ret,
                                 requestor, 
                                 loc,
-                                ast_node);
+                                ast_node, 10);
       break;
     case AST_NODE_STRING:
       {
@@ -6071,6 +6315,9 @@ void cleanup_generic(query_entry_t* e)
       break;
     case QUERY_TYPE_RANGE_TO_RESULTS:
       cleanup_range_to_results_query((range_to_results_query_t*) e);
+      break;
+    case QUERY_TYPE_BACKWARD_SEARCH:
+      cleanup_backward_search_query((backward_search_query_t*) e);
       break;
     default:
       assert(0);

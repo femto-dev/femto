@@ -293,16 +293,24 @@ typedef struct {
   process_entry_t proc;
   int plen;
   alpha_t* pat;
+
   // Needed during processing
-  int i;
+  int i; // (also a result with too_few_matches)
   header_occs_query_t hq1;
   header_occs_query_t hq2;
   block_query_t bq1;
   block_query_t bq2;
+  header_loc_query_t loc_query; // to read n in case patlen == 0
 
   // Result section
   int64_t first;
   int64_t last;
+  // Save the range of rows matching pat[plen-prev_len .. plen]
+  // where prev_len marks is the last position with a larger
+  // number of matches than what we are returning in [first,last].
+  int64_t prev_first;
+  int64_t prev_last;
+  int prev_len;
 } string_query_t;
 
 typedef struct {
@@ -482,6 +490,9 @@ typedef struct {
   int cost;
   int match_len;
   alpha_t* match;
+  int64_t prev_first;
+  int64_t prev_last;
+  int prev_len;
 } regexp_result_t;
 
 //void regexp_result_free(regexp_result_t* v);
@@ -517,9 +528,14 @@ typedef struct {
   nfa_errcnt_tmp_t maxerr;
   // only allow error weights up to 254
   // so we can store #errors in a byte.
+  int max_nonresults; // max number to store in nonresults.
 
   // the results are stored here
   regexp_result_list_t results;
+  // A couple of non-results are stored here.
+  //  (up to max_nonresults). Note - this array
+  //  is only allocated once, not appended to.
+  regexp_result_list_t nonresults;
   // temporary values needed during processing
     // allocated in setup
     queue_map_t queue;
@@ -583,6 +599,7 @@ typedef struct {
   results_query_t results;
   range_to_results_query_t rtrq;
   string_query_t string_query;
+  int64_t num_results;
 } string_results_query_t;
 
 typedef struct {
@@ -697,11 +714,19 @@ error_t setup_locate_range(parallel_query_t* ctx,
                              int64_t first, int64_t last);
 void cleanup_locate_range(parallel_query_t* q );
 
+error_t setup_backward_search_query(
+        backward_search_query_t* q,
+        process_entry_t* requestor, 
+        index_locator_t loc,
+        int64_t first, int64_t last, alpha_t ch);
+void cleanup_backward_search_query(backward_search_query_t* q );
 
 // error_t resolve_offset(server_state_t* ss, index_locator_t loc, int64_t offset, location_info_t* occ);
 
 error_t schedule_query(server_state_t* ss, query_entry_t* q);
-error_t server_schedule_query(shared_server_state_t* shared, process_entry_t* q);
+// reqs must be an array, each element is reqsize, each must be castable to
+// process_entry_t.
+error_t server_schedule_queries(shared_server_state_t* shared, void* reqs, int nreqs, int reqsize);
 error_t server_cancel_query(shared_server_state_t* shared, process_entry_t* q);
 
 void setup_block_query(block_query_t* q,
@@ -798,12 +823,14 @@ error_t setup_regexp_query_take_nfa(
         regexp_query_t* q,
 	process_entry_t* requestor, 
         index_locator_t loc,
-	nfa_description_t* take_this_nfa);
+	nfa_description_t* take_this_nfa,
+        int max_nonresults);
 error_t setup_regexp_query(
         regexp_query_t* q,
 	process_entry_t* requestor, 
         index_locator_t loc,
-	struct ast_node* ast_node);
+	struct ast_node* ast_node,
+        int max_nonresults);
 void cleanup_regexp_query(regexp_query_t* q );
 
 error_t setup_get_doc_info_query(
@@ -868,7 +895,7 @@ int max_leaf_entry_size( void )
   int max = 0;
   int tmp;
   for( int i = QUERY_TYPE_UNDER_LEAF+1; i < QUERY_TYPE_OVER_LEAF; i++ ) {
-    tmp = leaf_entry_size( i );
+    tmp = leaf_entry_size( (query_type_t) i );
     if( tmp > max ) max = tmp;
   }
   return max;
@@ -961,7 +988,7 @@ error_t copy_leaf_response(leaf_entry_t* dst, const leaf_entry_t* src)
     header_loc_query_t* dst_hq = (header_loc_query_t*) dst;
     header_loc_query_t* src_hq = (header_loc_query_t*) src;
     if( src_hq->r.doc_info ) {
-      dst_hq->r.doc_info = malloc(src_hq->r.doc_info_len);
+      dst_hq->r.doc_info = (unsigned char*) malloc(src_hq->r.doc_info_len);
       if( ! dst_hq->r.doc_info ) return ERR_MEM;
       memcpy(dst_hq->r.doc_info, src_hq->r.doc_info, src_hq->r.doc_info_len);
     }
