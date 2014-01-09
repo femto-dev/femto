@@ -107,6 +107,7 @@ extern "C" {
 
 extern unsigned long dcx_g_mem_per_bin;
 extern void setup_mem_per_bin(long sort_memory);
+extern double compute_splitter_factor(int64_t total_files);
 
 // We use up to 2 threads working on 2 input files of up to 2 GB = 8 GB
 #define USE_MEMORY_PER_BIN (dcx_g_mem_per_bin)
@@ -1554,7 +1555,18 @@ public:
     bins->bin_splitters->use_sample_overlap(n_per_bin, bin_overlap);
 
     size_t n_files = sorter_t::get_n_bins(n_per_bin_estimate, USE_MEMORY_PER_BIN);
-
+    // But don't use too many files!
+    // Adjust splitter factor to keep # of open files in distribution
+    // below max open files limit. We will multiply n_files by this number
+    // below, so making it < 1.0 will reduce the number of files used.
+    double splitter_factor = 1.0;
+    {
+      int64_t total_files = n_files;
+      total_files *= bins->n_bins; // but we'll have n_bins each of n_files
+      splitter_factor = compute_splitter_factor(total_files);
+    }
+    n_files *= splitter_factor;
+ 
     printf("writing even files per bin: %lli\n", (long long int) n_files);
 
     // Then, for each bin that is ours, set up splitters.
@@ -3700,7 +3712,23 @@ public:
         }
       }
 
-
+      // Adjust splitter factor to keep # of open files in distribution
+      // below max open files limit. We will multiply n_files by this number
+      // below, so making it < 1.0 will reduce the number of files used.
+      double splitter_factor = 1.0;
+      {
+        int64_t total_files = 0;
+        for( size_t k = 0; k < n_estimate->size(); k++ ) {
+          offset_t n_bins_offset = n_bins;
+          offset_t n_estimate_per_bin = ceildiv_safe((*n_estimate)[k], n_bins_offset);
+          size_t n_files = sorter_t::get_n_bins(n_estimate_per_bin, use_memory_per_subbin, (*record_size)[k]);
+          total_files += n_files;
+        }
+        // But we have also n_bins for each n_estimate!
+        total_files *= n_bins;
+        splitter_factor = compute_splitter_factor(total_files);
+      }
+       
       // Now create file splitters. Do this by making one pass
       // through the mmap'd file of splitters.
       // Then, for each bin, use the splitter material as sample data.
@@ -3715,6 +3743,8 @@ public:
         offset_t n_estimate_per_bin = ceildiv_safe((*n_estimate)[k], n_bins_offset);
         size_t n_files = sorter_t::get_n_bins(n_estimate_per_bin, use_memory_per_subbin,
                                               (*record_size)[k]);
+        // But don't open too many files!
+        n_files *= splitter_factor;
 
         assert( k < whichfile_splitter_records.size());
 

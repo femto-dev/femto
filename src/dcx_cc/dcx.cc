@@ -74,3 +74,36 @@ void setup_mem_per_bin(long sort_memory)
   dcx_g_mem_per_bin = mem_per_bin;
 }
 
+// Compute the factor by which to multiply the number of files
+// per bin in order to keep the number of open files under
+// the current maximum number of open files (from getrlimit).
+// The n_files value should be multiplied by the result;
+// this function returns 1.0 or a number < 1.0.
+double compute_splitter_factor(int64_t total_files)
+{
+  
+  int rc;
+  struct rlimit rlim;
+  rc = getrlimit(RLIMIT_NOFILE, &rlim);
+  if( rc < 0 ) {
+    throw error(ERR_IO_STR("getrlimit failed"));
+  }
+
+  if( rlim.rlim_cur == RLIM_INFINITY ) return 1.0;
+
+  int64_t max_files = rlim.rlim_cur / 2;
+  // make sure max_files is reasonable.
+  if( max_files < 8 ) {
+    fprintf(stderr, "Warning - getrlimit returned unreasonably small maximum number of open files, using 8\n");
+    max_files = 8;
+  }
+  if( max_files > 1000000 ) {
+    fprintf(stderr, "Warning - getrlimit returned unreasonably large maximum number of open files, using 1M\n");
+    max_files = 1000000;
+  }
+  if( total_files >= max_files ) {
+    return ( (double) max_files ) / (double) total_files;
+  }
+  // otherwise, return 1.0
+  return 1.0;
+}
