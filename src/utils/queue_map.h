@@ -61,6 +61,8 @@ void queue_map_destroy(queue_map_t* q);
 int queue_map_retrieve(queue_map_t* q, hm_entry_t* entry);
 
 // inserts an entry, assuming it's not already present.
+// if we make a new entry, it will become map->first (ie, be stored
+// in the top of the list).
 error_t queue_map_push(queue_map_t* q, hm_entry_t* entry);
 
 // returns the element at the top of the list in entry->key and 
