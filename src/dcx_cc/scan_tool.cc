@@ -43,7 +43,7 @@ error_t seq_compile_regexp_from_ast(void** ret, struct ast_node* ast_node)
   opts.set_utf8(false);
 
   // Condense the AST so that we have a regexp printed out...
-  char * str = ast_to_string(ast_node, 1 /* noncapturing groups */);
+  char * str = ast_to_string(ast_node, 1 /* noncapturing groups */, 0 /* usequotes */);
 
   re2::RE2* matcher = new re2::RE2(str, opts);
   if( ! matcher->ok() ) {
