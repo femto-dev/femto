@@ -217,4 +217,3 @@ void fix_final(struct ast_node* node)
   }
 }
 
-
