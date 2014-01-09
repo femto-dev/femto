@@ -43,6 +43,7 @@ error_t femto_setup_request_err(femto_request_t* req,
 
 
 error_t femto_begin_request_err(femto_server_t* srv, femto_request_t* req);
+error_t femto_begin_requests_err(femto_server_t* srv, femto_request_t* reqs, int nreqs);
 error_t femto_wait_request_err(femto_server_t* srv, femto_request_t* req);
 error_t femto_timedwait_request_err(femto_server_t* srv, femto_request_t* req, const struct timespec* ts, int* completed);
 
