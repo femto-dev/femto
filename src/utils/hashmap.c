@@ -22,12 +22,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <assert.h>
 
 #include "hashmap.h"
 #include "bit_funcs.h"
 
 int table_inited;
 hash_t random_table[256];
+
+hm_entry_t* hashmap_retrieve_internal(hashmap_t* h, void* key);
 
 void init_table(void)
 {
@@ -164,30 +167,58 @@ error_t hashmap_resize(hashmap_t* h)
 {
   hm_entry_t* new_map;
   int new_size = 1 + (h->num / HIGH_FULL_RATIO);
+  hm_entry_t* old_map = h->map;
+  int old_size = h->size;
 
   if( h->size < new_size ) { // we're past the high-water mark
     new_size = 1 + (h->num / LOW_FULL_RATIO); // make a new one at low-water mark.
+    //printf("Resizing hashmap %p with %i elements to %i elements\n", h, (int) h->size, (int) new_size);
     new_map = malloc(new_size * sizeof(hm_entry_t));
     if( ! new_map ) return ERR_MEM;
     memset(new_map, 0, new_size * sizeof(hm_entry_t));
 
     // rehash every element and store into new_map....
     // !!!
-    for( hash_t i = 0; i < h->size; i++ ) {
-      if( h->map[i].key != NULL ) {
+    for( hash_t i = 0; i < old_size; i++ ) {
+      hm_entry_t* cur = &old_map[i];
+      if( cur->key != NULL ) {
         hash_t hash;
 
         // first, find the hash.
-        hash = h->hash(h->map[i].key);
+        hash = h->hash(cur->key);
         hash %= new_size;
 
-        hashmap_insert_basic( hash, & h->map[i], new_map, new_size);
+        hashmap_insert_basic( hash, cur, new_map, new_size);
       }
     }
 
-    free( h->map );
     h->map = new_map;
     h->size = new_size;
+
+    // DEBUG CHECK
+    if( EXTRA_CHECKS ) {
+      for( hash_t i = 0; i < old_size; i++ ) {
+        hm_entry_t* cur = &old_map[i];
+        if( cur->key != NULL ) {
+          hash_t hash;
+          hm_entry_t* got;
+  
+          if( h->hash == hash_string_fn ) {
+             //printf("Checking key %s\n", (const char*) cur->key);
+          }
+          // first, find the hash.
+          hash = h->hash(cur->key);
+          hash %= new_size;
+
+          got = hashmap_retrieve_internal(h, cur->key);
+          assert( got->key == cur->key );
+          assert( got->value == cur->value );
+        }
+      }
+    }
+
+   
+    free( old_map );
   }
   
   return ERR_NOERR;
