@@ -91,7 +91,7 @@ struct Sorter : GeneralSorter<Record, Criterion>
 
       //printf("Starting sort %li\n", (long int) num);
 
-      general_sort(crit, min, max, data, num, &settings);
+      GeneralSorter<Record, Criterion>::general_sort(crit, min, max, data, num, &settings);
 
       //printf("Finished sort %li\n", (long int) num);
     }
@@ -382,6 +382,8 @@ struct Sorter : GeneralSorter<Record, Criterion>
 
     // We need at least one bin!
     if( n_bins == 0 ) n_bins++;
+
+    // Don't use more than max files / 2
 
     // This algo will become ridiculous if the splitters
     // would take up more than use_memory.... in fact

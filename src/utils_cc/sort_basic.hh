@@ -260,7 +260,7 @@ struct GeneralSorter : GeneralSorterReally<typename Criterion::criterion_categor
                         Record* data, size_t num_records,
                         const SorterSettings* settings)
   {
-    general_sort(crit, min, max, data, num_records, settings);
+    GeneralSorterReally<typename Criterion::criterion_category,Record,Criterion>::general_sort(crit, min, max, data, num_records, settings);
   }
 
   template<typename RecordIterator>
@@ -290,7 +290,7 @@ struct GeneralSorter : GeneralSorterReally<typename Criterion::criterion_categor
     FileMMap map(NULL, pgs.outer_length, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_POPULATE, fd, pgs.outer_start);
     void* ptr = PTR_ADD(map.data, pgs.start - pgs.outer_start);
     typename RecordTraits<Record>::iterator_t it = RecordTraits<Record>::getiter(ptr);
-    general_sort(crit, min, max, it, end_n - start_n, settings);
+    GeneralSorterReally<typename Criterion::criterion_category,Record,Criterion>::general_sort(crit, min, max, it, end_n - start_n, settings);
   }
 
   static
