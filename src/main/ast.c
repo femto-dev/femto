@@ -440,16 +440,21 @@ void reverse_regexp(struct ast_node* n)
 }
 
 
+static
+void do_icase_ast(struct ast_node** n_ptr);
+
+static
 void icase_regexp_node_list(node_list_t* list)
 {
   for( int i = 0; i < list->num; i++ ) {
-    icase_ast(& list->list[i]);
+    do_icase_ast(& list->list[i]);
   }
 }
 
 /** Turn a regular expression case-insensitive.
     */
-void icase_ast(struct ast_node** n_ptr)
+static
+void do_icase_ast(struct ast_node** n_ptr)
 {
   struct ast_node* n = *n_ptr;
 
@@ -474,7 +479,7 @@ void icase_ast(struct ast_node** n_ptr)
      {
        struct atom_node* a = (struct atom_node*) n;
 
-       icase_ast(&a->child);
+       do_icase_ast(&a->child);
      }
      break;
     case AST_NODE_SET:
@@ -538,13 +543,82 @@ void icase_ast(struct ast_node** n_ptr)
        struct boolean_node* b = (struct boolean_node*) n;
 
        // icase the left
+       do_icase_ast(& b->left);
+       // icase the right
+       do_icase_ast(& b->right);
+    }
+    break;
+    default:
+      assert(0);
+  }
+}
+
+void icase_ast(struct ast_node** n_ptr)
+{
+  struct ast_node* n;
+  do_icase_ast(n_ptr);
+  n = *n_ptr;
+  // Now, if we turned a toplevel or under Boolean
+  // AST_NODE_STRING into an AST_NODE_SEQUENCE,
+  // put the AST_NODE_REGEXP back in.
+  switch(n->type) {
+    case AST_NODE_SEQUENCE:
+     {
+       struct sequence_node* s = (struct sequence_node*) n;
+       struct regexp_node* r = regexp_node_new(s);
+       *n_ptr = (struct ast_node*) r;
+     }
+     break;
+    case AST_NODE_BOOL:
+     {
+       struct boolean_node* b = (struct boolean_node*) n;
+
+       // icase the left
        icase_ast(& b->left);
        // icase the right
        icase_ast(& b->right);
     }
     break;
     default:
-      assert(0);
+    break;
+  }
+}
+
+
+/** Returns an array of pointers into an AST for everything other than a Boolean
+ *  query (ie so that the non-Boolean parts can be counted separately).
+ *  *results must start out as NULL, *nresults as 0.
+ */
+error_t unbool_ast(struct ast_node* n, struct ast_node*** results, int* nresults)
+{
+  error_t err = 0;
+  // go through all of the nodes.
+  // When we get to a sequence_list, reverse it.
+  switch(n->type) {
+    case AST_NODE_BOOL:
+      {
+       struct boolean_node* b = (struct boolean_node*) n;
+
+       err = unbool_ast(b->left, results, nresults);
+       if( err ) return err;
+       err = unbool_ast(b->right, results, nresults);
+       if( err ) return err;
+      }
+      break;
+    default:
+     return append_array(nresults, results, sizeof(struct ast_node*), &n);
+     break;
+  }
+  return 0;
+}
+
+int ast_is_bool(struct ast_node* n)
+{
+  switch(n->type) {
+    case AST_NODE_BOOL:
+      return 1;
+    default:
+      return 0;
   }
 }
 
@@ -709,7 +783,7 @@ void print_ast_node(FILE* f, struct ast_node* n, int indent)
            int bit_idx = 64*i + j;
            if( get_bit(SET_NODE_CHUNKS, s->bits, bit_idx) ) {
              int ch = 64*i + j - CHARACTER_OFFSET;
-             if( isgraph(ch) ) fprintf(f, "%c", ch);
+             if( isgraph(ch) && ch > 0 ) fprintf(f, "%c", ch);
              else fprintf(f, "\\x%02x", ch);
            }
          }
@@ -798,21 +872,33 @@ void print_ast_node(FILE* f, struct ast_node* n, int indent)
 
 }
 
-void ast_char_append(buffer_t* buf, int ch)
+static int ast_in_re = 0;
+static int ast_in_set = 1;
+static int ast_in_dquotes = 2;
+static void ast_char_append(buffer_t* buf, int ch, int context)
 {
-   if( isgraph( ch - CHARACTER_OFFSET ) ) {
+   char* needs_escape = "[]()|*+?-{}.'\"\\";
+   char* needs_escape_set = "]-\\";
+   int chr = ch - CHARACTER_OFFSET;
+   assert(buf->len < buf->max);
+   if( (context == ast_in_dquotes && chr == '"') ||
+       (context == ast_in_set && chr > 0 && strchr(needs_escape_set, chr)) ||
+       (context == ast_in_re && chr > 0 && strchr(needs_escape, chr)) ) {
+     buf->data[buf->len++] = '\\';
+     buf->data[buf->len++] = chr;
+   } else if( chr > 0 && (isgraph( chr ) || chr == ' ') ) {
      buf->data[buf->len++] = ch - CHARACTER_OFFSET;
    } else {
-     if( ch - CHARACTER_OFFSET < 0 ) {
-       buf->len += sprintf((char*) &buf->data[buf->len], "\\x-%02x", CHARACTER_OFFSET - ch);
+     if( chr < 0 ) {
+       buf->len += sprintf((char*) &buf->data[buf->len], "\\x-%02x", -chr);
      } else {
-       buf->len += sprintf((char*) &buf->data[buf->len], "\\x%02x", ch - CHARACTER_OFFSET);
+       buf->len += sprintf((char*) &buf->data[buf->len], "\\x%02x", chr);
      }
    }
 
 }
 
-error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing)
+error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing, int usequotes)
 {
   char* groupstart = "(";
   int groupstartlen;
@@ -832,7 +918,7 @@ error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing)
          memcpy(&buf->data[buf->len], groupstart, groupstartlen);
          buf->len += groupstartlen;
          for( int i = 0; i < r->choices.num; i++ ) {
-           err = ast_to_buf(r->choices.list[i], buf, noncapturing);
+           err = ast_to_buf(r->choices.list[i], buf, noncapturing, usequotes);
            if( err ) return err;
            if( i != r->choices.num - 1 ) {
              buf->data[buf->len++] = '|';
@@ -840,7 +926,7 @@ error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing)
          }
          buf->data[buf->len++] = ')';
        } else if( r->choices.num > 0 ) {
-         err = ast_to_buf(r->choices.list[0], buf, noncapturing);
+         err = ast_to_buf(r->choices.list[0], buf, noncapturing, usequotes);
          if( err ) return err;
        }
      }
@@ -849,7 +935,7 @@ error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing)
      {
        struct sequence_node* s = (struct sequence_node*) n;
        for( int i = 0; i < s->atoms.num; i++ ) {
-         err = ast_to_buf(s->atoms.list[i], buf, noncapturing);
+         err = ast_to_buf(s->atoms.list[i], buf, noncapturing, usequotes);
          if( err ) return err;
        }
      }
@@ -866,7 +952,7 @@ error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing)
        }
 
        // print out the atom
-       err = ast_to_buf(a->child, buf, noncapturing);
+       err = ast_to_buf(a->child, buf, noncapturing, usequotes);
        if( err ) return err;
 
        if( !justone ) buf->data[buf->len++] = ')';
@@ -900,38 +986,86 @@ error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing)
      {
        struct set_node* s = (struct set_node*) n;
        int nset = 0;
+       int lastset = 0;
+       int is_period = 1;
+       int chr = 1;
+       int run_start, run_after;
 
        for( int i = 0; i < ALPHA_SIZE; i++ ) {
+         chr = i;
          if( get_bit(SET_NODE_CHUNKS, s->bits, i) ) {
            nset++;
+           lastset = i;
+           // it's not a period if the set bit is outside of the period range.
+           if( period_range.min > chr || chr > period_range.max ) {
+             is_period = 0;
+           }
+         } else {
+           // it's not a period if the not set bit is in the period range.
+           if( period_range.min <= chr && chr <= period_range.max ) {
+             is_period = 0;
+           }
          }
        }
-
-       if( nset != 1 ) buf->data[buf->len++] = '[';
-       for( int i = 0; i < ALPHA_SIZE; i++ ) {
-         if( get_bit(SET_NODE_CHUNKS, s->bits, i) ) {
-           ast_char_append(buf, i);
+       
+       if( is_period ) {
+         buf->data[buf->len++] = '.';
+       } else if( nset == 1 ) {
+         ast_char_append(buf, lastset, ast_in_set);
+       } else {
+         buf->data[buf->len++] = '[';
+         // Try turning it in to ranges...
+         for( run_start = 0; run_start < ALPHA_SIZE; ) {
+           run_after = run_start + 1;
+           if( get_bit(SET_NODE_CHUNKS, s->bits, run_start) ) {
+             while( run_after < ALPHA_SIZE &&
+                     get_bit(SET_NODE_CHUNKS, s->bits, run_after) ) {
+               run_after++;
+             }
+             if( run_after - run_start == 1 ) {
+               ast_char_append(buf, run_start, ast_in_set);
+             } else if( run_after - run_start == 2 ) {
+               ast_char_append(buf, run_start, ast_in_set);
+               ast_char_append(buf, run_start + 1, ast_in_set);
+             } else {
+               ast_char_append(buf, run_start, ast_in_set);
+               buf->data[buf->len++] = '-';
+               ast_char_append(buf, run_after - 1, ast_in_set);
+             }
+           }
+           run_start = run_after;
          }
+         buf->data[buf->len++] = ']';
        }
-       if( nset != 1 ) buf->data[buf->len++] = ']';
      }
      break;
     case AST_NODE_CHARACTER:
      {
        struct character_node* c = (struct character_node*) n;
-       ast_char_append(buf, c->ch);
+       ast_char_append(buf, c->ch, ast_in_re);
      }
      break;
     case AST_NODE_STRING: 
      {
        struct string_node* s = (struct string_node*) n;
 
-       err = buffer_extend(buf, s->string.len + 2);
+       err = buffer_extend(buf, 5*s->string.len + 4);
        if( err ) return err;
+       
+       if( usequotes ) {
+         // Add a space for readability if we don't already have one.
+         if( buf->len > 0 && buf->data[buf->len-1] != ' ' )
+           buf->data[buf->len++] = ' ';
+         buf->data[buf->len++] = '"';
+       }
 
        for( int i = 0; i < s->string.len; i++ ) {
-         ast_char_append(buf, s->string.chars[i]);
+         if( usequotes )
+           ast_char_append(buf, s->string.chars[i], ast_in_dquotes);
+         else
+           ast_char_append(buf, s->string.chars[i], ast_in_re);
        }
+       if( usequotes ) buf->data[buf->len++] = '"';
      }
      break;
     case AST_NODE_RANGE:
@@ -946,7 +1080,7 @@ error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing)
        struct boolean_node* b = (struct boolean_node*) n;
 
        // print the left
-       err = ast_to_buf(b->left, buf, noncapturing);
+       err = ast_to_buf(b->left, buf, noncapturing, usequotes);
        if( err ) return err;
 
        switch( b->nodeType) {
@@ -970,7 +1104,7 @@ error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing)
        }
 
        // print the right
-       err = ast_to_buf(b->right, buf, noncapturing);
+       err = ast_to_buf(b->right, buf, noncapturing, usequotes);
        if( err ) return err;
      }
      break;
@@ -986,11 +1120,11 @@ error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturing)
   same format as the original.
   The caller is responsible for freeing this string.
   */
-char* ast_to_string(struct ast_node* n, int noncapturinggroups)
+char* ast_to_string(struct ast_node* n, int noncapturinggroups, int usequotes)
 {
   error_t err;
   buffer_t buf = build_buffer(0, NULL);
-  err = ast_to_buf(n, &buf, noncapturinggroups);
+  err = ast_to_buf(n, &buf, noncapturinggroups, usequotes);
   if( err ) goto error;
 
   err = buffer_extend(&buf, 1);
@@ -1002,3 +1136,135 @@ error:
   free(buf.data);
   return NULL;
 }
+
+static
+int and_add(int a, int b)
+{
+  if( a == -1 ) return -1;
+  if( b == -1 ) return -1;
+  return a + b;
+}
+
+// Does the query actually use any regular expression functionality?
+// ie. is it a simple string search?
+// If pat is non-NULL, save the pattern to pat using the length in *npat,
+//  which must have room (call this function twice).
+// Returns the length of the simple query (if it is a simple query)
+//  or -1 if it is not.
+static
+int get_simple_query(struct ast_node* node, alpha_t* pat, int* npat)
+{
+  switch(node->type)
+  {
+    case AST_NODE_BOOL:
+      return -1;
+    case AST_NODE_APPROX:
+      return -1;
+    case AST_NODE_RANGE:
+      // Should never see this
+      return -1;
+    case AST_NODE_REGEXP:
+    {
+      struct regexp_node* rnode = (struct regexp_node*)node;
+      if( rnode->choices.num == 1 && rnode->s.cost_bound <= 1 ) {
+        return get_simple_query(rnode->choices.list[0], pat, npat);
+      }
+      return -1;
+    }
+    case AST_NODE_SEQUENCE:
+    {
+      struct sequence_node* snode = (struct sequence_node*)node;
+      int count = 0;
+      for( int i = 0; i < snode->atoms.num; i++ ) {
+        count = and_add(count,get_simple_query(snode->atoms.list[i],pat,npat));
+      }
+      return count;
+    }
+    case AST_NODE_ATOM:
+    {
+      struct atom_node* anode = (struct atom_node*)node;
+      if( anode->repeat.min == anode->repeat.max ) {
+        int repeat = anode->repeat.min;
+        int count = 0;
+        for( int i = 0; i < repeat; i++ ) {
+          count = and_add(count, get_simple_query(anode->child, pat, npat)); 
+        }
+        return count;
+      }
+      return -1;
+    }
+    case AST_NODE_SET:
+    {
+      struct set_node* snode = (struct set_node*)node;
+      int nset = 0;
+      alpha_t chr = -1;
+      for( int i = 0; i < ALPHA_SIZE; i++ ) {
+        if( get_bit(SET_NODE_CHUNKS, snode->bits, i) ) {
+          nset++;
+          chr = i;
+        }
+      }
+      if( nset == 1 ) {
+        if( pat ) {
+          pat[(*npat)++] = chr;
+        }
+        return 1;
+      }
+      return -1;
+    }
+    case AST_NODE_CHARACTER:
+    {
+      struct character_node* cnode = (struct character_node*)node;
+      alpha_t chr = cnode->ch;
+      if( pat ) pat[(*npat)++] = chr;
+      return 1;
+    }
+    case AST_NODE_STRING:
+    {
+      struct string_node* snode = (struct string_node*)node;
+      alpha_t chr;
+      if( pat ) {
+        for( int i = 0; i < snode->string.len; i++ ) {
+          chr = snode->string.chars[i];
+          pat[(*npat)++] = chr;
+        }
+      }
+      return snode->string.len;
+    }
+  }
+  assert(0);
+  return 0;
+}
+
+error_t simplify_query(struct ast_node** node)
+{
+  int simplecount;
+  if( !node || !*node ) return 0;
+  if( (*node)->type != AST_NODE_STRING ) {
+    if( (*node)->type == AST_NODE_BOOL ) {
+      // Simplify what's inside the BOOLEAN operation.
+      struct boolean_node* b = (struct boolean_node*) *node;
+      simplify_query(&b->left);
+      simplify_query(&b->right);
+    } else {
+      simplecount = get_simple_query(*node, NULL, NULL);
+      if( simplecount != -1 ) {
+        alpha_t* pat = calloc(simplecount, sizeof(alpha_t));
+        int npat = 0;
+        string_t string;
+        struct string_node* new_node;
+        if( ! pat ) return ERR_MEM;
+        get_simple_query(*node, pat, &npat);
+        string.len = npat;
+        string.chars = pat;
+        // Now replace the whole query with a AST_NODE_STRING.
+        new_node = string_node_new(string);
+        if( !new_node ) return ERR_MEM;
+        free_ast_node(*node);
+        *node = (struct ast_node*) new_node;
+      }
+    }
+  }
+  return 0;
+}
+

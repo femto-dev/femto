@@ -192,13 +192,20 @@ struct boolean_node* boolean_node_new( bool_op_t newType, int dist );
 
 void free_ast_node(struct ast_node* n);
 void print_ast_node(FILE* f, struct ast_node* n, int indent);
-error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturinggroups);
+error_t ast_to_buf(struct ast_node* n, buffer_t* buf, int noncapturinggroups, int usequotes);
 // You must free the returned string.
-char* ast_to_string(struct ast_node* n, int noncapturinggroups);
+char* ast_to_string(struct ast_node* n, int noncapturinggroups, int usequotes);
 struct ast_node* parse_file(FILE* f);
 struct ast_node* parse_string(int len, const char* data);
 
 void reverse_regexp(struct ast_node* r);
 void icase_ast(struct ast_node** n);
+error_t unbool_ast(struct ast_node* n, struct ast_node*** results, int* nresults);
+int ast_is_bool(struct ast_node* n);
+
+// Queries that are represented as regexps but that have
+// no variation will be collapsed down into queries
+// with the top node as QUERY_TYPE_STRING.
+error_t simplify_query(struct ast_node** node);
 
 #endif
