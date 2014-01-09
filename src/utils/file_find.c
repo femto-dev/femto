@@ -139,7 +139,10 @@ error_t go_down(file_find_state_t* s)
 
     // Just starting out with root cur_root..
     err = stat(s->cur_path, &stats);
-    if( err ) return ERR_IO_STR("Could not stat file");
+    if( err ) {
+      fprintf(stderr, "Cannot stat file at path '%s'\n", s->cur_path);
+      return ERR_IO_STR("Could not stat file");
+    }
 
     if( ! S_ISDIR(stats.st_mode) ) {
       // OK! Not a directory.
@@ -241,6 +244,15 @@ error_t init_file_find(file_find_state_t* s, int num_paths, const char** paths)
     if( ! root_paths[i] ) {
       err = ERR_MEM;
       goto free_root_paths;
+    }
+    // Remove trailing slash from root_paths[i].
+    {
+      ssize_t len = strlen(root_paths[i]);
+      len--;
+      while( len > 0 && root_paths[i][len] == '/' ) {
+        root_paths[i][len] = '\0';
+        len--;
+      }
     }
   }
 
