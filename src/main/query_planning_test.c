@@ -35,7 +35,7 @@ void testQueryPlanning(void)
     char* valid = "(b|bb?)c";
     result = parse_string(strlen(query1),query1);
     streamline_query(result);
-    stringResult = ast_to_string(result, 0);
+    stringResult = ast_to_string(result, 0, 0);
     if( 0 == strcmp(stringResult,valid) )
     {
       printf("Test 1 Passed.\n");
@@ -55,7 +55,7 @@ void testQueryPlanning(void)
     char* valid = "(bc|d)";
     result = parse_string(strlen(query1),query1);
     streamline_query(result);
-    stringResult = ast_to_string(result, 0);
+    stringResult = ast_to_string(result, 0, 0);
     if( 0 == strcmp(stringResult,valid) )
     {
       printf("Test 2 Passed.\n");
@@ -75,7 +75,7 @@ void testQueryPlanning(void)
     char* valid = "(bc|d)";
     result = parse_string(strlen(query1),query1);
     streamline_query(result);
-    stringResult = ast_to_string(result, 0);
+    stringResult = ast_to_string(result, 0, 0);
     if( 0 == strcmp(stringResult,valid) )
     {
       printf("Test 3 Passed.\n");
@@ -95,7 +95,7 @@ void testQueryPlanning(void)
     char* valid = "(cd|fg?)h";
     result = parse_string(strlen(query1),query1);
     streamline_query(result);
-    stringResult = ast_to_string(result, 0);
+    stringResult = ast_to_string(result, 0, 0);
     if( 0 == strcmp(stringResult,valid) )
     {
       printf("Test 4 Passed.\n");
@@ -115,7 +115,7 @@ void testQueryPlanning(void)
     char* valid = "cd";
     result = parse_string(strlen(query1),query1);
     streamline_query(result);
-    stringResult = ast_to_string(result, 0);
+    stringResult = ast_to_string(result, 0, 0);
     if( 0 == strcmp(stringResult,valid) )
     {
       printf("Test 5 Passed.\n");
@@ -135,7 +135,7 @@ void testQueryPlanning(void)
     char* valid = "abc";
     result = parse_string(strlen(query1),query1);
     streamline_query(result);
-    stringResult = ast_to_string(result, 0);
+    stringResult = ast_to_string(result, 0, 0);
     if( 0 == strcmp(stringResult,valid) )
     {
       printf("Test 6 Passed.\n");
@@ -155,7 +155,7 @@ void testQueryPlanning(void)
     char* valid = "ab*c";
     result = parse_string(strlen(query1),query1);
     streamline_query(result);
-    stringResult = ast_to_string(result, 0);
+    stringResult = ast_to_string(result, 0, 0);
     if( 0 == strcmp(stringResult,valid) )
     {
       printf("Test 7 Passed.\n");
