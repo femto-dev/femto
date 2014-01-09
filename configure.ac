@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.59)
-AC_INIT(femto, 1.2.8, michaelferguson@acm.org)
+AC_INIT(femto, 1.2.9, michaelferguson@acm.org)
 AM_INIT_AUTOMAKE([1.9 foreign tar-pax])
 AC_CONFIG_SRCDIR([src/main/bwt_writer.h])
 AM_CONFIG_HEADER([config.h])
