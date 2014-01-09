@@ -125,6 +125,32 @@ uint64_t reciprocal_divide(uint64_t n, uint64_recip_t inv)
 
 #warning reciprocal_divide not defined, not 64-bit
 
+static inline
+uint64_recip_t compute_reciprocal(uint64_t d)
+{
+  uint64_recip_t ret;
+  ret.mprime = d;
+}
+
+static inline
+uint64_t reciprocal_divide(uint64_t n, uint64_recip_t inv)
+{
+  return n / inv.mprime;
+}
+
+static inline
+uint64_recip_t compute_reciprocal(uint64_t d)
+{
+  uint64_recip_t ret;
+  ret.mprime = d;
+}
+
+static inline
+uint64_t reciprocal_divide(uint64_t n, uint64_recip_t inv)
+{
+  return n / inv.mprime;
+}
+
 #endif
 
 #endif
