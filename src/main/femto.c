@@ -32,6 +32,7 @@
 #include "error.h"
 #include "server.h"
 #include "query_planning.h"
+#include "json.h"
 
 // returns 0 for no error.
 int femto_version(const char **version)
@@ -79,36 +80,51 @@ void femto_stop_server(femto_server_t* srv)
   srv->state = NULL;
 }
 
-error_t femto_begin_request_err(femto_server_t* srv, femto_request_t* req)
+error_t femto_begin_requests_err(femto_server_t* srv, femto_request_t* reqs, int nreqs)
 {
   error_t err;
   int rc;
+  int i;
 
-  if( ! req->query ) return ERR_INVALID_STR("No query in request");
+  for( i = 0; i < nreqs; i++ ) {
+    femto_request_t* req = &reqs[i];
+    if( ! req->query ) return ERR_INVALID_STR("No query in request");
 
-  err = server_schedule_query(srv->state, (process_entry_t*) req);
-  if( err ) return err;
+    rc = pthread_mutex_lock(&req->proc.lock);
+    if( rc ) return ERR_PTHREADS("Could not lock mutex", rc);
 
-  rc = pthread_mutex_lock(&req->proc.lock);
-  if( rc ) return ERR_PTHREADS("Could not lock mutex", rc);
+    assert( req->state & REQ_INITED );
 
-  assert( req->state & REQ_INITED );
+    req->state |= REQ_BEGUN;
 
-  req->state |= REQ_BEGUN;
-
-  rc = pthread_mutex_unlock(&req->proc.lock);
-  if( rc ) {
-    warn_if_err(ERR_PTHREADS("Could not unlock mutex", rc));
+    rc = pthread_mutex_unlock(&req->proc.lock);
+    if( rc ) {
+      warn_if_err(ERR_PTHREADS("Could not unlock mutex", rc));
+    }
   }
+
+  err = server_schedule_queries(srv->state, (void*) reqs, nreqs, sizeof(femto_request_t));
+  if( err ) return err;
 
   return ERR_NOERR;
 }
 
-int femto_begin_request(femto_server_t* srv, femto_request_t* req)
+int femto_begin_requests(femto_server_t* srv, femto_request_t* reqs, int nreqs)
 {
-  error_t err = femto_begin_request_err(srv, req);
+  error_t err = femto_begin_requests_err(srv, reqs, nreqs);
 
   return return_err(err);
+}
+
+error_t femto_begin_request_err(femto_server_t* srv, femto_request_t* req)
+{
+  return femto_begin_requests_err(srv, req, 1);
+}
+
+
+int femto_begin_request(femto_server_t* srv, femto_request_t* req)
+{
+  return femto_begin_requests(srv, req, 1);
 }
 
 err_code_t femto_wait_request_core(femto_server_t* srv, femto_request_t* req)
@@ -798,58 +814,6 @@ int femto_create_generic_request(femto_request_t** req,
           }
 
 #define MAX_NUM (100)
-
-#define MAX_JSON 16
-
-// dst must have space for MAX_JSON per character.
-static inline
-int encode_ch_json(char* dst, int ch)
-{
-  int k;
-
-  k = 0;
-  switch( ch ) {
-    case '"':
-      dst[k++] = '\\';
-      dst[k++] = '"';
-      break;
-    case '\\':
-      dst[k++] = '\\';
-      dst[k++] = '\\';
-      break;
-    default:
-      if( isprint(ch) ) dst[k++] = ch;
-      else {
-        // encode with \u
-        dst[k++] = '\\';
-        dst[k++] = 'u';
-        k += sprintf(&dst[k], "%04x", ch);
-      }
-      break;
-  }
-  dst[k] = '\0';
-  return k;
-}
-
-static inline
-int encode_str_json(char* dst, const char* str)
-{
-  int i,k;
-  k = 0;
-  for( i=0; str[i]; i++ ) {
-    k += encode_ch_json(&dst[k], str[i]);
-  }
-  return k;
-}
-
-// dst must have space for MAX_JSON characters
-static inline
-int encode_alpha_json(char* dst, alpha_t alpha)
-{
-  char buf[MAX_ALPHATOS];
-  alphatos(buf, alpha);
-  return encode_str_json(dst, buf);
-}
 
 
 /* Prints out things of the form

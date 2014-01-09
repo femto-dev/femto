@@ -56,6 +56,7 @@ void femto_stop_server(/*IN*/ femto_server_t* srv);
  */
 
 int femto_begin_request(femto_server_t* srv, femto_request_t* req);
+int femto_begin_requests(femto_server_t* srv, femto_request_t* reqs, int nreqs);
 
 /* It is not necessary to call femto_wait_request or femto_get_result;
  * femto_cancel_request will block until the request is actually
