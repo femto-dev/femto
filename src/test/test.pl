@@ -14,10 +14,10 @@ srand(1);
 # to support VPATH build in make distcheck.
 $Bin = ".";
 
-$INDEX_TOOL = "$Bin/../dcx_cc/femto_index --no-limit-check";
+$INDEX_TOOL = "$Bin/../dcx_cc/femto_index --no-limit-check --no-enable-core";
 #$BWT_TOOL = "$Bin/../main/bwt_tool_qss";
 #$CONSTRUCT_TOOL = "$Bin/../main/construct_tool --multifile";
-$SEARCH_TOOL = "$Bin/../main/femto_search";
+$SEARCH_TOOL = "$Bin/../main_cc/femto_search";
 
 #$MARK_PERIOD = 2;
 #$CHUNK_SIZE = 4;
@@ -41,7 +41,7 @@ $MAX_RAND_QUERY = 16;
 # if there are this many matches, stop using that query.
 $NUM_DOCS_REGEXPD = 18;
 
-$VERBOSE = 100; #2
+$VERBOSE = 0;
 
 @allbytes = ();
 for( my $i=0; $i < 256; $i++ ) {
@@ -52,6 +52,7 @@ $allbytes_str = join('', @allbytes);
 
 @docs = ("a", "aa", "aab", "aac", "bb", "test", "fun", "\x00\x00",
          "\x00\x01\x00", "bannana", "seeresses", "equal", "un", "undo",
+         "bbababcc",
          $allbytes_str, );
 
 
@@ -458,7 +459,7 @@ print "Running queries\n";
 for my $q (keys %queries) {
   my $expected_results = $expected{$q};
   my $quoted_q = $q; #x_escaped($q);
-  print "Looking for $q perlre $queries{$q}\n";
+  print "Looking for $q\n";
 
   # Run looking for offsets.
   mysystem("$SEARCH_TOOL --offsets --output $dir/results $dir/index '$quoted_q'");

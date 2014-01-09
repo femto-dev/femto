@@ -7,7 +7,7 @@ AM_YFLAGS = -d
 
 regexp_sources = posix.bison.y posix.flex.l ast.h ast.c compile_regexp.h compile_regexp.c nfa.h nfa.c query_planning.h query_planning.c
 seq_sources = sequential_search.h sequential_search.c
-index_sources = block_storage.h block_storage.c bzlib_private.h huffman.c server.h server.c wtree.h wtree_funcs.h wtree.c index.h index.c results.h results.c index_merge.h index_merge.c femto_internal.h femto.c
+index_sources = block_storage.h block_storage.c bzlib_private.h huffman.c server.h server.c wtree.h wtree_funcs.h wtree.c index.h index.c results.h results.c index_merge.h index_merge.c femto_internal.h json.c femto.c
 bwt_sources = index_types.h bwt_writer.h bwt_writer.c bwt.h bwt_reader.h bwt_reader.c bwt_prepare.h bwt_prepare.c construct.h construct.c
 
 libfemto_la_SOURCES = $(regexp_sources) $(index_sources)
@@ -32,14 +32,14 @@ index_test_SOURCES = index_test.c bwt_creator.h bwt_creator.c bwt_qsufsort.c
 query_test_SOURCES = query_test.c bwt_creator.h bwt_creator.c bwt_qsufsort.c
 regexp_test_SOURCES = regexp_test.c bwt_creator.h bwt_creator.c bwt_qsufsort.c
 
-bin_PROGRAMS = femto_search femto_flatten femto_handle_request femto_info femto_flatten
+bin_PROGRAMS = femto_flatten femto_handle_request femto_info femto_flatten femto_common
 noinst_PROGRAMS = femto_multiquery
 
 femto_multiquery_SOURCES = query_tool.c
-femto_search_SOURCES = search_tool.c
 femto_flatten_SOURCES = flatten_tool.c
 femto_handle_request_SOURCES = handle_request.c
 femto_info_SOURCES = info_tool.c
+femto_common_SOURCES = common_tool.c
 
 EXTRA_DIST = block_format.txt update_format.txt bwt_format.txt compile_regexp_test.c flex_bison_parser.h flex_bison_parser.c index_test_funcs.c nfa_approx_tool.h nfa_approx_tool.c nfa_tool.c parse_regexp.c qsufsort.c QUERY_FORMAT.txt
 

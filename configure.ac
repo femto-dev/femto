@@ -90,6 +90,9 @@ AC_CHECK_LIB([aio], [io_submit],
               AC_CHECK_LIB([aio], [io_submit]),
              [AM_CONDITIONAL([HAS_LINUX_LIBAIO], [false])])
 
+AC_CHECK_LIB([ssl], [SSL_library_init])
+,
+
 # Checks for header files.
 AC_HEADER_DIRENT
 AC_HEADER_STDC
@@ -175,10 +178,6 @@ AC_MSG_NOTICE([Using default C compiler flags])
   AX_ADD_CFLAG([-std=gnu99])
   AX_ADD_CFLAG([-Wall])
   AX_ADD_CFLAG([-m64 -D_64_BIT])
-  AX_ADD_CFLAG([-march=core2])
-  AX_ADD_CFLAG([-mtune=core2])
-  AX_ADD_CFLAG([-march=native])
-  AX_ADD_CFLAG([-mtune=native])
   # Add support for OpenMP if available
   AX_ADD_CFLAG([-fopenmp])
   AX_ADD_CFLAG([-fnested-functions])
@@ -196,6 +195,10 @@ AC_MSG_NOTICE([Using default C compiler flags])
     AX_ADD_CFLAG([-O4])
     AX_ADD_CFLAG([-fomit-frame-pointer])
     AX_ADD_CFLAG([-DEXTRA_CHECKS=0])
+    AX_ADD_CFLAG([-march=core2])
+    AX_ADD_CFLAG([-mtune=core2])
+    AX_ADD_CFLAG([-march=native])
+    AX_ADD_CFLAG([-mtune=native])
   else
     AX_ADD_CFLAG([-g])
     AX_ADD_CFLAG([-DEXTRA_CHECKS=1])
@@ -211,10 +214,6 @@ AC_MSG_NOTICE([Using default C++ compiler flags])
   AX_ADD_CXXFLAG([-Wall])
 #  AX_ADD_CXXFLAG([-Weffc++]) These seem to be noisy and not totally useful.
   AX_ADD_CXXFLAG([-m64 -D_64_BIT])
-  AX_ADD_CXXFLAG([-march=core2])
-  AX_ADD_CXXFLAG([-mtune=core2])
-  AX_ADD_CXXFLAG([-march=native])
-  AX_ADD_CXXFLAG([-mtune=native])
 #  AX_ADD_CXXFLAG([-fnested-functions]) not supported in C++
   # Add support for OpenMP if available
   AX_ADD_CXXFLAG([-fopenmp])
@@ -232,6 +231,10 @@ AC_MSG_NOTICE([Using default C++ compiler flags])
     AX_ADD_CXXFLAG([-O4])
     AX_ADD_CXXFLAG([-fomit-frame-pointer])
     AX_ADD_CXXFLAG([-DEXTRA_CHECKS=0])
+    AX_ADD_CXXFLAG([-march=core2])
+    AX_ADD_CXXFLAG([-mtune=core2])
+    AX_ADD_CXXFLAG([-march=native])
+    AX_ADD_CXXFLAG([-mtune=native])
   else
     AX_ADD_CXXFLAG([-g])
     AX_ADD_CXXFLAG([-DEXTRA_CHECKS=1])
@@ -248,6 +251,7 @@ AC_CONFIG_FILES([Makefile
                  src/utils_cc/Makefile
                  src/mpi/Makefile
                  src/main/Makefile
+                 src/main_cc/Makefile
 		 src/dcx_cc/Makefile
 		 src/test/Makefile
 		 src/scripts/Makefile
