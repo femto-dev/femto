@@ -72,15 +72,15 @@ To build an index, run
 Then, to query the index, use femto_search.
 To count the number of occurrences (quickly!), use:
 {{{
- femto/src/main/femto_search /path/to/index_dir --count 'pattern'
+ femto/src/main_cc/femto_search /path/to/index_dir --count 'pattern'
 }}}
 To report documents that matched (time depends on # reported), use:
 {{{
- femto/src/main/femto_search /path/to/index_dir 'pattern'
+ femto/src/main_cc/femto_search /path/to/index_dir 'pattern'
 }}}
 To report documents and offsets that matched (time depends on # reported), use:
 {{{
- femto/src/main/femto_search /path/to/index_dir --offsets 'pattern'
+ femto/src/main_cc/femto_search /path/to/index_dir --offsets 'pattern'
 }}}
 
 To learn more about what kinds of patterns you can use, see
