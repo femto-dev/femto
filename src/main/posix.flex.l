@@ -9,6 +9,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
+#include <strings.h>
 
 #if YYDEBUG > 0 
 #define LEX_DEBUG 1
@@ -135,6 +136,7 @@ int handle_hex_escape(char* str)
 %x doublestr
 %x singlestr
 %x bracket
+%x word
 
 %%
 
@@ -264,31 +266,76 @@ int handle_hex_escape(char* str)
                     yylval->range = range_node_new_r(construct_range(yytext));
                     if( LEX_DEBUG ) printf("T_REPEAT_RANGE\n");
                     return T_REPEAT_RANGE; }
-"AND"		  { if( LEX_DEBUG ) printf("T_BOOL_AND\n");
+
+("AND"|"and")	  { if( LEX_DEBUG ) printf("T_BOOL_AND\n");
                     yylval->node = NULL;
                     return T_BOOL_AND; }
-"OR"		  { if( LEX_DEBUG ) printf("T_BOOL_OR\n");
+("OR"|"or")	  { if( LEX_DEBUG ) printf("T_BOOL_OR\n");
                     yylval->node = NULL;
                     return T_BOOL_OR; }
-"NOT"		  { if( LEX_DEBUG ) printf("T_BOOL_NOT\n");
+("NOT"|"not")	  { if( LEX_DEBUG ) printf("T_BOOL_NOT\n");
                     yylval->node = NULL;
                     return T_BOOL_NOT; }
-"THEN"[[:space:]]+[[:digit:]]*	{ if( LEX_DEBUG ) printf("T_BOOL_THEN\n");
+("THEN"|"then")[[:space:]]+[[:digit:]]*	{ if( LEX_DEBUG ) printf("T_BOOL_THEN\n");
 				  int x = read_int_part(yytext, INT_MAX);
 				  yylval->range = range_node_new(x,x);
 				  return T_BOOL_THEN; }
-"WITHIN"[[:space:]]+[[:digit:]]+	{ if( LEX_DEBUG ) printf("T_BOOL_WITHIN\n");
+("WITHIN"|"within")[[:space:]]+[[:digit:]]+	{ if( LEX_DEBUG ) printf("T_BOOL_WITHIN\n");
 				  int x = read_int_part(yytext, INT_MAX);
 				  yylval->range = range_node_new(x,x);
 				  return T_BOOL_WITHIN; }
   
-"APPROX"[[:space:]]+([[:digit:]]+(:[[:digit:]]+){0,3})?	  { if( LEX_DEBUG ) printf("T_APPROX\n");
+("APPROX"|"approx")[[:space:]]+([[:digit:]]+(:[[:digit:]]+){0,3})?	  { if( LEX_DEBUG ) printf("T_APPROX\n");
                     yylval->approx = approx_node_new(yytext);
 
                     return T_APPROX; }
+
+ /* group characters to avoid something like aORb pulling out the OR
+    but if it's followed by a repeat specification, we must not
+    do this, since the repeat only applies to the last character.
+  */
+[^[:space:][:punct:]]/[^[:space:][:punct:]][^[:space:][:punct:]]  {
+                   if( LEX_DEBUG ) printf("starting T_STRING word %c\n", yytext[0]);
+                        clear_str(&PARM->extra);
+                        append_char(&PARM->extra, yytext[0]); 
+                        BEGIN(word); }
+
+ /* grab characters followed char followed by punctuation - this one wins
+    because it is the longest match.
+ */
+<word>[^[:space:][:punct:]]+/[^[:space:][:punct:]][[:punct:]] {
+                      int i;
+                      for( i = 0; i < yyleng; i++ ) {
+                        if( LEX_DEBUG ) printf("appending T_STRING word %c\n", yytext[i]);
+                        append_char(&PARM->extra, yytext[i]);
+                      }
+                      BEGIN(INITIAL);
+                      yylval->string = string_node_new(dup_string(PARM->extra.string));
+                      clear_str(&PARM->extra);
+                      return T_STRING;
+                    }
+
+ /* These terminate the <word> area */
+<word>[[:space:]] |
+<word><<EOF>> {          
+                      if( LEX_DEBUG ) printf("finishing T_STRING word\n");
+                      BEGIN(INITIAL);
+                      yylval->string = string_node_new(dup_string(PARM->extra.string));
+                      clear_str(&PARM->extra);
+                      return T_STRING;
+
+             }
+
+ /* Any other character in <word> just gets appended */
+<word>. {
+                      if( LEX_DEBUG ) printf(".appending T_STRING word %c\n", yytext[0]);
+                      append_char(&PARM->extra, yytext[0]);
+                      }
+
+
 [^[:space:]]    { unsigned int temp = yytext[0];
                     yylval->character = character_node_new(temp);
-                    if( LEX_DEBUG ) printf("catchall T_CHARACTER token %x\n", temp);
+                    if( LEX_DEBUG ) printf("catchall T_CHARACTER %c token %x\n", yytext[0], temp);
                     return T_CHARACTER; }
  
 [[:space:]]       /* eat up whitespace */
