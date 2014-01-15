@@ -483,6 +483,21 @@ TEST(EmptyCharset, Fuzz) {
     CHECK(!RE2(empties[i]).Match("abc", 0, 3, RE2::UNANCHORED, NULL, 0));
 }
 
+// Bitstate assumes that kInstFail instructions in
+// alternations or capture groups have been "compiled away".
+TEST(EmptyCharset, BitstateAssumptions) {
+  // Captures trigger use of Bitstate.
+  static const char *nop_empties[] = {
+    "((((()))))" "[^\\S\\s]?",
+    "((((()))))" "([^\\S\\s])?",
+    "((((()))))" "([^\\S\\s]|[^\\S\\s])?",
+    "((((()))))" "(([^\\S\\s]|[^\\S\\s])|)"
+  };
+  StringPiece group[6];
+  for (int i = 0; i < arraysize(nop_empties); i++)
+    CHECK(RE2(nop_empties[i]).Match("", 0, 0, RE2::UNANCHORED, group, 6));
+}
+
 // Test that named groups work correctly.
 TEST(Capture, NamedGroups) {
   {
@@ -988,14 +1003,14 @@ TEST(RE2, UTF8) {
   // Check UTF-8 handling
   // Three Japanese characters (nihongo)
   const char utf8_string[] = {
-       0xe6, 0x97, 0xa5, // 65e5
-       0xe6, 0x9c, 0xac, // 627c
-       0xe8, 0xaa, 0x9e, // 8a9e
+       (char)0xe6, (char)0x97, (char)0xa5, // 65e5
+       (char)0xe6, (char)0x9c, (char)0xac, // 627c
+       (char)0xe8, (char)0xaa, (char)0x9e, // 8a9e
        0
   };
   const char utf8_pattern[] = {
        '.',
-       0xe6, 0x9c, 0xac, // 627c
+       (char)0xe6, (char)0x9c, (char)0xac, // 627c
        '.',
        0
   };
@@ -1244,6 +1259,16 @@ TEST(RE2, NeverNewline) {
   }
 }
 
+// Check that dot_nl option works.
+TEST(RE2, DotNL) {
+  RE2::Options opt;
+  opt.set_dot_nl(true);
+  EXPECT_TRUE(RE2::PartialMatch("\n", RE2(".", opt)));
+  EXPECT_FALSE(RE2::PartialMatch("\n", RE2("(?-s).", opt)));
+  opt.set_never_nl(true);
+  EXPECT_FALSE(RE2::PartialMatch("\n", RE2(".", opt)));
+}
+
 // Check that there are no capturing groups in "never capture" mode.
 TEST(RE2, NeverCapture) {
   RE2::Options opt;
@@ -1366,6 +1391,14 @@ TEST(RE2, RegexpToStringLossOfAnchor) {
   EXPECT_EQ(RE2("^[a-c]at").Regexp()->ToString(), "(?-m:^)[a-c]at");
   EXPECT_EQ(RE2("ca[t-z]$", RE2::POSIX).Regexp()->ToString(), "ca[t-z]$");
   EXPECT_EQ(RE2("ca[t-z]$").Regexp()->ToString(), "ca[t-z](?-m:$)");
+}
+
+// Issue 10131674
+TEST(RE2, Bug10131674) {
+  // Some of these escapes describe values that do not fit in a byte.
+  RE2 re("\\140\\440\\174\\271\\150\\656\\106\\201\\004\\332", RE2::Latin1);
+  EXPECT_FALSE(re.ok());
+  EXPECT_FALSE(RE2::FullMatch("hello world", re));
 }
 
 }  // namespace re2

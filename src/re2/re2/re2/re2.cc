@@ -13,6 +13,7 @@
 #include <string>
 #include <pthread.h>
 #include <errno.h>
+#include "util/atomicops.h"
 #include "util/util.h"
 #include "util/flags.h"
 #include "re2/prog.h"
@@ -26,10 +27,10 @@ namespace re2 {
 static const int kMaxArgs = 16;
 static const int kVecSize = 1+kMaxArgs;
 
-const VariadicFunction2<bool, const StringPiece&, const RE2&, RE2::Arg, RE2::FullMatchN> RE2::FullMatch;
-const VariadicFunction2<bool, const StringPiece&, const RE2&, RE2::Arg, RE2::PartialMatchN> RE2::PartialMatch;
-const VariadicFunction2<bool, StringPiece*, const RE2&, RE2::Arg, RE2::ConsumeN> RE2::Consume;
-const VariadicFunction2<bool, StringPiece*, const RE2&, RE2::Arg, RE2::FindAndConsumeN> RE2::FindAndConsume;
+const VariadicFunction2<bool, const StringPiece&, const RE2&, RE2::Arg, RE2::FullMatchN> RE2::FullMatch = {};
+const VariadicFunction2<bool, const StringPiece&, const RE2&, RE2::Arg, RE2::PartialMatchN> RE2::PartialMatch = {};
+const VariadicFunction2<bool, StringPiece*, const RE2&, RE2::Arg, RE2::ConsumeN> RE2::Consume = {};
+const VariadicFunction2<bool, StringPiece*, const RE2&, RE2::Arg, RE2::FindAndConsumeN> RE2::FindAndConsume = {};
 
 // This will trigger LNK2005 error in MSVC.
 #ifndef COMPILER_MSVC
@@ -44,6 +45,7 @@ RE2::Options::Options(RE2::CannedOptions opt)
     max_mem_(kDefaultMaxMem),
     literal_(false),
     never_nl_(false),
+    dot_nl_(false),
     never_capture_(false),
     case_sensitive_(true),
     perl_classes_(false),
@@ -150,6 +152,9 @@ int RE2::Options::ParseFlags() const {
 
   if (never_nl())
     flags |= Regexp::NeverNL;
+
+  if (dot_nl())
+    flags |= Regexp::DotNL;
 
   if (never_capture())
     flags |= Regexp::NeverCapture;
@@ -888,11 +893,13 @@ bool RE2::Rewrite(string *out, const StringPiece &rewrite,
 int RE2::NumberOfCapturingGroups() const {
   if (suffix_regexp_ == NULL)
     return -1;
-  ANNOTATE_BENIGN_RACE(&num_captures_, "benign race: in the worst case"
-    " multiple threads end up doing the same work in parallel.");
-  if (num_captures_ == -1)
-    num_captures_ = suffix_regexp_->NumCaptures();
-  return num_captures_;
+  int n;
+  ATOMIC_LOAD_RELAXED(n, &num_captures_);
+  if (n == -1) {
+    n = suffix_regexp_->NumCaptures();
+    ATOMIC_STORE_RELAXED(&num_captures_, n);
+  }
+  return n;
 }
 
 // Checks that the rewrite string is well-formed with respect to this
@@ -1107,6 +1114,7 @@ bool RE2::Arg::parse_uint_radix(const char* str,
   return true;
 }
 
+#ifdef RE2_HAVE_LONGLONG
 bool RE2::Arg::parse_longlong_radix(const char* str,
                                    int n,
                                    void* dest,
@@ -1145,6 +1153,7 @@ bool RE2::Arg::parse_ulonglong_radix(const char* str,
   *(reinterpret_cast<uint64*>(dest)) = r;
   return true;
 }
+#endif
 
 static bool parse_double_float(const char* str, int n, bool isfloat, void *dest) {
   if (n == 0) return false;

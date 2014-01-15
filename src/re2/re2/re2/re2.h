@@ -179,12 +179,15 @@
 //         RE2::Octal(&a), RE2::Hex(&b), RE2::CRadix(&c), RE2::CRadix(&d));
 // will leave 64 in a, b, c, and d.
 
-
 #include <stdint.h>
 #include <map>
 #include <string>
 #include "re2/stringpiece.h"
 #include "re2/variadic_function.h"
+
+#ifndef RE2_HAVE_LONGLONG
+#define RE2_HAVE_LONGLONG 1
+#endif
 
 namespace re2 {
 
@@ -240,7 +243,7 @@ class RE2 {
     ErrorBadPerlOp,          // bad perl operator
     ErrorBadUTF8,            // invalid UTF-8 in regexp
     ErrorBadNamedCapture,    // bad named capture group
-    ErrorPatternTooLarge,    // pattern too large (compile failed)
+    ErrorPatternTooLarge     // pattern too large (compile failed)
   };
 
   // Predefined common options.
@@ -429,7 +432,7 @@ class RE2 {
   enum Anchor {
     UNANCHORED,         // No anchoring
     ANCHOR_START,       // Anchor at start only
-    ANCHOR_BOTH,        // Anchor at start and end
+    ANCHOR_BOTH         // Anchor at start and end
   };
 
   // Return the number of capturing subpatterns, or -1 if the
@@ -512,6 +515,7 @@ class RE2 {
     //   max_mem          (see below)  approx. max memory footprint of RE2
     //   literal          (false) interpret string as literal, not regexp
     //   never_nl         (false) never match \n, even if it is in regexp
+    //   dot_nl           (false) dot matches everything including new line
     //   never_capture    (false) parse all parens as non-capturing
     //   case_sensitive   (true)  match is case-sensitive (regexp can override
     //                              with (?i) unless in posix_syntax mode)
@@ -567,13 +571,14 @@ class RE2 {
       max_mem_(kDefaultMaxMem),
       literal_(false),
       never_nl_(false),
+      dot_nl_(false),
       never_capture_(false),
       case_sensitive_(true),
       perl_classes_(false),
       word_boundary_(false),
       one_line_(false) {
     }
-    
+
     /*implicit*/ Options(CannedOptions);
 
     Encoding encoding() const { return encoding_; }
@@ -599,14 +604,17 @@ class RE2 {
     bool log_errors() const { return log_errors_; }
     void set_log_errors(bool b) { log_errors_ = b; }
 
-    int max_mem() const { return max_mem_; }
-    void set_max_mem(int m) { max_mem_ = m; }
+    int64_t max_mem() const { return max_mem_; }
+    void set_max_mem(int64_t m) { max_mem_ = m; }
 
     bool literal() const { return literal_; }
     void set_literal(bool b) { literal_ = b; }
 
     bool never_nl() const { return never_nl_; }
     void set_never_nl(bool b) { never_nl_ = b; }
+
+    bool dot_nl() const { return dot_nl_; }
+    void set_dot_nl(bool b) { dot_nl_ = b; }
 
     bool never_capture() const { return never_capture_; }
     void set_never_capture(bool b) { never_capture_ = b; }
@@ -631,6 +639,7 @@ class RE2 {
       max_mem_ = src.max_mem_;
       literal_ = src.literal_;
       never_nl_ = src.never_nl_;
+      dot_nl_ = src.dot_nl_;
       never_capture_ = src.never_capture_;
       case_sensitive_ = src.case_sensitive_;
       perl_classes_ = src.perl_classes_;
@@ -648,6 +657,7 @@ class RE2 {
     int64_t max_mem_;
     bool literal_;
     bool never_nl_;
+    bool dot_nl_;
     bool never_capture_;
     bool case_sensitive_;
     bool perl_classes_;
@@ -669,8 +679,10 @@ class RE2 {
   static inline Arg CRadix(unsigned int* x);
   static inline Arg CRadix(long* x);
   static inline Arg CRadix(unsigned long* x);
+  #ifdef RE2_HAVE_LONGLONG
   static inline Arg CRadix(long long* x);
   static inline Arg CRadix(unsigned long long* x);
+  #endif
 
   static inline Arg Hex(short* x);
   static inline Arg Hex(unsigned short* x);
@@ -678,8 +690,10 @@ class RE2 {
   static inline Arg Hex(unsigned int* x);
   static inline Arg Hex(long* x);
   static inline Arg Hex(unsigned long* x);
+  #ifdef RE2_HAVE_LONGLONG
   static inline Arg Hex(long long* x);
   static inline Arg Hex(unsigned long long* x);
+  #endif
 
   static inline Arg Octal(short* x);
   static inline Arg Octal(unsigned short* x);
@@ -687,8 +701,10 @@ class RE2 {
   static inline Arg Octal(unsigned int* x);
   static inline Arg Octal(long* x);
   static inline Arg Octal(unsigned long* x);
+  #ifdef RE2_HAVE_LONGLONG
   static inline Arg Octal(long long* x);
   static inline Arg Octal(unsigned long long* x);
+  #endif
 
  private:
   void Init(const StringPiece& pattern, const Options& options);
@@ -768,8 +784,10 @@ class RE2::Arg {
   MAKE_PARSER(unsigned int,       parse_uint);
   MAKE_PARSER(long,               parse_long);
   MAKE_PARSER(unsigned long,      parse_ulong);
+  #ifdef RE2_HAVE_LONGLONG
   MAKE_PARSER(long long,          parse_longlong);
   MAKE_PARSER(unsigned long long, parse_ulonglong);
+  #endif
   MAKE_PARSER(float,              parse_float);
   MAKE_PARSER(double,             parse_double);
   MAKE_PARSER(string,             parse_string);
@@ -815,8 +833,10 @@ class RE2::Arg {
   DECLARE_INTEGER_PARSER(uint);
   DECLARE_INTEGER_PARSER(long);
   DECLARE_INTEGER_PARSER(ulong);
+  #ifdef RE2_HAVE_LONGLONG
   DECLARE_INTEGER_PARSER(longlong);
   DECLARE_INTEGER_PARSER(ulonglong);
+  #endif
 
 #undef DECLARE_INTEGER_PARSER
 };
@@ -837,14 +857,16 @@ inline bool RE2::Arg::Parse(const char* str, int n) const {
   inline RE2::Arg RE2::CRadix(type* ptr) { \
     return RE2::Arg(ptr, RE2::Arg::parse_ ## name ## _cradix); }
 
-MAKE_INTEGER_PARSER(short,              short);
-MAKE_INTEGER_PARSER(unsigned short,     ushort);
-MAKE_INTEGER_PARSER(int,                int);
-MAKE_INTEGER_PARSER(unsigned int,       uint);
-MAKE_INTEGER_PARSER(long,               long);
-MAKE_INTEGER_PARSER(unsigned long,      ulong);
-MAKE_INTEGER_PARSER(long long,          longlong);
-MAKE_INTEGER_PARSER(unsigned long long, ulonglong);
+MAKE_INTEGER_PARSER(short,              short)
+MAKE_INTEGER_PARSER(unsigned short,     ushort)
+MAKE_INTEGER_PARSER(int,                int)
+MAKE_INTEGER_PARSER(unsigned int,       uint)
+MAKE_INTEGER_PARSER(long,               long)
+MAKE_INTEGER_PARSER(unsigned long,      ulong)
+#ifdef RE2_HAVE_LONGLONG
+MAKE_INTEGER_PARSER(long long,          longlong)
+MAKE_INTEGER_PARSER(unsigned long long, ulonglong)
+#endif
 
 #undef MAKE_INTEGER_PARSER
 
