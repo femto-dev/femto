@@ -30,6 +30,17 @@ GNU Autotools and Libtool.
 
 Make sure you have met the requirements first!
 
+If you are starting out with a source checkout as with
+{{{
+ git clone https://github.com/femto-dev/femto.git
+ cd femto
+}}}
+you will need to also generate the configure script:
+{{{
+ sh autogen.sh
+}}}
+The git and autogen.sh are not necessary if you have a FEMTO release tarball.
+
 To build FEMTO, issue the following commands:
 {{{
  ./configure
