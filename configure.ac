@@ -72,6 +72,7 @@ AM_PROG_LEX
 
 # Check for Apache eXtenSion Tool apxs
 AC_CHECK_PROG([APXS],[apxs],[apxs])
+AC_CHECK_PROG([APXS],[apxs2],[apxs2])
 
 AS_IF([test "x$APXS" == "x"],
       [AM_CONDITIONAL([HAS_APXS], [false])],
