@@ -3745,6 +3745,7 @@ public:
                                               (*record_size)[k]);
         // But don't open too many files!
         n_files *= splitter_factor;
+        if( n_files == 0 ) n_files = 1;
 
         assert( k < whichfile_splitter_records.size());
 
