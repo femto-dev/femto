@@ -70,7 +70,7 @@ extern "C" {
 
   #include <stdlib.h> // quicksort
 
-  #include <aio.h>
+  //#include <aio.h>
 
   #include "page_utils.h" // allocate/free pages
   #include "bit_funcs.h" // log2lli
