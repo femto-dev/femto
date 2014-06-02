@@ -350,6 +350,9 @@ int main( int argc, char** argv )
   int64_t total_n = 0;
   int64_t total_docs = 0;
 
+  err = mkdir_if_needed(tmpdir);
+  die_if_err(err);
+
   if( iproc == 0 ) {
     err = mkdir_if_needed(index_path);
     die_if_err(err);
