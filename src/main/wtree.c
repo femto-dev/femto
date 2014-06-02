@@ -150,8 +150,13 @@ error_t save_segment( struct construct_info* s )
   if( s->stats ) {
     s->stats->segment_bits += SEGMENT_BITS;
     s->stats->segment_bits_used += bits_used;
-    s->stats->num_rle_segments++;
-    s->stats->num_unc_segments++;
+    if( s->seg_rle >= 0 ) {
+      s->stats->num_rle_segments++;
+      s->stats->rle_segment_bits_used += bits_used;
+    } else {
+      s->stats->num_unc_segments++;
+      s->stats->unc_segment_bits_used += bits_used;
+    }
   }
  
   err = buffer_extend(&s->segments_buf, sizeof(seg_t));

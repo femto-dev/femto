@@ -42,6 +42,8 @@ typedef struct {
   int max_run;
   long segment_bits;
   long segment_bits_used;
+  long rle_segment_bits_used;
+  long unc_segment_bits_used;
 } bseq_stats_t;
 
 typedef struct {

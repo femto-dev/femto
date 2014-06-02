@@ -49,6 +49,153 @@ int bit_equals(unsigned char* a, unsigned char* b, int bit_len)
   }
 }
 
+void do_experiment(int argc, char** argv)
+{
+  int ndocs = 100000;
+  int sz    = 100000000;
+  //int sz = 10000*ndocs;
+  int pows[] = {1000, 10000, 100000, 1000000, 0};
+  int atn, atm;
+  int npers[] = {1, 10, 100, 1000, 10000, sz, 0};
+  int nper;
+  int* map;
+  int* data;
+  int i, np;
+  int left;
+  error_t err;
+  int zlen;
+  unsigned char* wtree;
+ 
+  wtree_stats_t stats;
+
+  for( atn = 0; pows[atn]; atn++ ) {
+    sz = pows[atn];
+    for( atm = 0; pows[atm]; atm++ ) {
+      ndocs = pows[atm];
+
+      if( sz <= ndocs ) continue;
+
+      printf("% 6i documents, %6i rows\n", ndocs, sz);
+
+      map = malloc(sizeof(int)* ndocs);
+      data = malloc(sizeof(int)* sz);
+
+      assert(map);
+      assert(data);
+
+      for(i = 0; i < ndocs; i++ ) map[i] = 1+i;
+
+      for(i = 0; i < sz; i++ ) data[i] = random() % ndocs;
+
+      /*
+
+    10,000,000 documents, 10,000,000 rows
+       640000000 bits (80,000,000 bytes) for documents count table
+       240000000 bits for document array of 10000000 entries
+      2000478912 bits for wavelet tree of 10000000 entries with 1 long ascending sequences
+      2000478784 bits for wavelet tree of 10000000 entries with 10 long ascending sequences
+      1993033216 bits for wavelet tree of 10000000 entries with 100 long ascending sequences
+      1966111872 bits for wavelet tree of 10000000 entries with 1000 long ascending sequences
+      1932646848 bits for wavelet tree of 10000000 entries with 10000 long ascending sequences
+      1820092224 bits for wavelet tree of 10000000 entries with 10000000 long ascending sequences
+
+    1,000,000 documents, 10,000,000 rows
+        64000000 bits (8,000,000 bytes) for documents count table
+       200000000 bits for document array of 10000000 entries
+       374476544 bits for wavelet tree of 10000000 entries with 1 long ascending sequences
+       374476096 bits for wavelet tree of 10000000 entries with 10 long ascending sequences
+       367105408 bits for wavelet tree of 10000000 entries with 100 long ascending sequences
+       340811904 bits for wavelet tree of 10000000 entries with 1000 long ascending sequences
+       307211136 bits for wavelet tree of 10000000 entries with 10000 long ascending sequences
+       197484224 bits for wavelet tree of 10000000 entries with 10000000 long ascending sequences
+
+    100,000 documents, 10,000,000 rows
+         6400000 bits (800,000 bytes) for documents count table
+       170000000 bits for document array of 10000000 entries
+       175665856 bits for wavelet tree of 10000000 entries with 1 long ascending sequences
+       175664128 bits for wavelet tree of 10000000 entries with 10 long ascending sequences
+       167925952 bits for wavelet tree of 10000000 entries with 100 long ascending sequences
+       141523520 bits for wavelet tree of 10000000 entries with 1000 long ascending sequences
+       107400256 bits for wavelet tree of 10000000 entries with 10000 long ascending sequences
+        20613504 bits for wavelet tree of 10000000 entries with 10000000 long ascending sequences
+
+    10,000 documents, 10,000,000 rows
+          640000 bits (80,000 bytes) for documents count table
+       140000000 bits for document array of 10000000 entries
+       123393344 bits for wavelet tree of 10000000 entries with 1 long ascending sequences
+       123393664 bits for wavelet tree of 10000000 entries with 10 long ascending sequences
+       115752640 bits for wavelet tree of 10000000 entries with 100 long ascending sequences
+        88908160 bits for wavelet tree of 10000000 entries with 1000 long ascending sequences
+        55424512 bits for wavelet tree of 10000000 entries with 10000 long ascending sequences
+         2204544 bits for wavelet tree of 10000000 entries with 10000000 long ascending sequences
+
+    1000 documents 10,000,000 rows
+           64000 bits (8,000 bytes) for documents count table
+       100000000 bits for document array of 10000000 entries
+        85662080 bits for wavelet tree of 10000000 entries with 1 long ascending sequences
+        85662016 bits for wavelet tree of 10000000 entries with 10 long ascending sequences
+        78202176 bits for wavelet tree of 10000000 entries with 100 long ascending sequences
+        51960448 bits for wavelet tree of 10000000 entries with 1000 long ascending sequences
+        18625728 bits for wavelet tree of 10000000 entries with 10000 long ascending sequences
+          240768 bits for wavelet tree of 10000000 entries with 10000000 long ascending sequences
+
+    10,000 documents 100,000,000 rows
+          640000 bits (80,000 bytes) for documents count table
+      1400000000 bits for document array of 100000000 entries
+      1218173824 bits for wavelet tree of 100000000 entries with 1 long ascending sequences
+      1218174208 bits for wavelet tree of 100000000 entries with 10 long ascending sequences
+      1141755456 bits for wavelet tree of 100000000 entries with 100 long ascending sequences
+       873337408 bits for wavelet tree of 100000000 entries with 1000 long ascending sequences
+       538698368 bits for wavelet tree of 100000000 entries with 10000 long ascending sequences
+         2412032 bits for wavelet tree of 100000000 entries with 100000000 long ascending sequences
+
+    100,000 documents 100,000,000 rows
+         6400000 bits (800,000 bytes) for documents count table
+      1700000000 bits for document array of 100000000 entries
+      1590122432 bits for wavelet tree of 100000000 entries with 1 long ascending sequences
+      1590112000 bits for wavelet tree of 100000000 entries with 10 long ascending sequences
+      1512700992 bits for wavelet tree of 100000000 entries with 100 long ascending sequences
+      1248657856 bits for wavelet tree of 100000000 entries with 1000 long ascending sequences
+       907609664 bits for wavelet tree of 100000000 entries with 10000 long ascending sequences
+        22053248 bits for wavelet tree of 100000000 entries with 100000000 long ascending sequences
+
+    */
+
+      printf("% 12i bits for table of %i document counts\n", ndocs * num_bits32(ndocs), ndocs);
+      printf("% 12i bits for document array of %i entries\n", sz * num_bits32(ndocs), sz);
+
+      for( np = 0; npers[np]; np++ ) {
+        nper = npers[np];
+
+        if( nper > sz ) continue;
+
+        // Now sort in chunks of predetermined size.
+        if( nper != 1 ) {
+          for(i = 0; i < sz; i += nper ) {
+            left = nper;
+            if( i + left > sz ) left = sz - i;
+            qsort(&data[i], left, sizeof(int), int_cmp);
+          }
+        }
+
+        memset(&stats, 0, sizeof(stats));
+
+        err = wtree_construct(&zlen, &wtree, ndocs, map, sz, data, &stats);
+        assert(!err);
+
+        printf("% 12li bits for wavelet tree (no nodes) of %i entries with %i long ascending sequences\n", stats.bseqs*8, sz, nper);
+        printf("  % 12li rle segments bits and % 12li uncompressed segment bits\n", stats.bseq_stats.num_rle_segments*SEGMENT_BITS, stats.bseq_stats.num_unc_segments*SEGMENT_BITS);
+        printf("  % 12li segment bits used; % 12li rle segments bits used and % 12li uncompressed segment bits used\n", stats.bseq_stats.segment_bits_used, stats.bseq_stats.rle_segment_bits_used, stats.bseq_stats.unc_segment_bits_used);
+
+        free(wtree);
+      }
+
+      free(map);
+      free(data);
+    }
+  }
+}
+
 int main(int argc, char** argv)
 {
   error_t err;
@@ -63,7 +210,12 @@ int main(int argc, char** argv)
   buffer_t tbuf = build_buffer(100, test_buf);
 
   printf("Sizeof void*=%i int=%i long=%i long long int=%i\n", (int) sizeof(void*), (int) sizeof(int), (int) sizeof(long), (int) sizeof(long long int));
-  
+ 
+ if( argc != 1 ) {
+   do_experiment(argc, argv);
+   return 0;
+ }
+
   // check build_buffer worked correctly.
   assert(tbuf.max == 100);
   assert(tbuf.len == 0 );
