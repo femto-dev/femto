@@ -30,6 +30,7 @@ extern "C" {
 }
 #include <cerrno>
 #include <cassert>
+#include <cstdio>
 #include "error.hh"
 #include "utils.hh" // file_len
 

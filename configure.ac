@@ -81,10 +81,15 @@ AS_IF([test "x$APXS" == "x"],
 # Checks for libraries.
 AC_CHECK_LIB([rt], [clock_gettime])
 AC_CHECK_LIB([c],[aio_read],
-             [POSIX_AIO_LIB=-lc],
+             [POSIX_AIO_LIB=-lc
+              AC_DEFINE([HAS_POSIX_AIO],[1],[Has POSIX AIO e.g. aio_read])
+              AM_CONDITIONAL([HAS_POSIX_AIO], [true])],
              [AC_CHECK_LIB([rt], [aio_read],
-                           [POSIX_AIO_LIB=-lrt],
-                           [AC_MSG_ERROR([Could not find aio_read in librt or libc])])])
+                           [POSIX_AIO_LIB=-lrt
+                            AC_DEFINE([HAS_POSIX_AIO],[1],[Has POSIX AIO e.g. aio_read])
+                            AM_CONDITIONAL([HAS_POSIX_AIO], [true])],
+                           [POSIX_AIO_LIB=
+                            AM_CONDITIONAL([HAS_POSIX_AIO], [false])])])
 AC_CHECK_LIB([aio], [io_submit],
              [AM_CONDITIONAL([HAS_LINUX_LIBAIO], [true])
               AC_DEFINE([HAS_LINUX_LIBAIO],[1],[Has linux AIO e.g. io_submit])]
@@ -92,7 +97,6 @@ AC_CHECK_LIB([aio], [io_submit],
              [AM_CONDITIONAL([HAS_LINUX_LIBAIO], [false])])
 
 AC_CHECK_LIB([ssl], [SSL_library_init])
-,
 
 # Checks for header files.
 AC_HEADER_DIRENT

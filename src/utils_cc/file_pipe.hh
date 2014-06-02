@@ -24,9 +24,9 @@
 
 #include "pipelining.hh"
 
+/*
 #include "aio_pipe.hh"
 
-/*
 typedef aio_read_pipe file_read_pipe_t;
 typedef aio_write_pipe file_write_pipe_t;
 */

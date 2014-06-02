@@ -40,7 +40,7 @@ extern "C" {
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <aio.h>
+//#include <aio.h>
 #include <sys/mman.h>
 #include "page_utils.h"
 #include "timing.h"

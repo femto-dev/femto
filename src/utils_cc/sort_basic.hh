@@ -287,7 +287,12 @@ struct GeneralSorter : GeneralSorterReally<typename Criterion::criterion_categor
     Pages pgs = get_pages_for_records(page_size, start_n, end_n, record_size);
     if( pgs.outer_length == 0 ) return;
 
-    FileMMap map(NULL, pgs.outer_length, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_POPULATE, fd, pgs.outer_start);
+    int flags = MAP_SHARED;
+#ifdef MAP_POPULATE
+    flags |= MAP_POPULATE;
+#endif
+
+    FileMMap map(NULL, pgs.outer_length, PROT_READ|PROT_WRITE, flags, fd, pgs.outer_start);
     void* ptr = PTR_ADD(map.data, pgs.start - pgs.outer_start);
     typename RecordTraits<Record>::iterator_t it = RecordTraits<Record>::getiter(ptr);
     GeneralSorterReally<typename Criterion::criterion_category,Record,Criterion>::general_sort(crit, min, max, it, end_n - start_n, settings);
