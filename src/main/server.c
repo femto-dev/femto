@@ -1087,13 +1087,50 @@ void do_backward_search_query(server_state_t* ss, query_mode_t mode, query_entry
 
 }
 
-/* I havn't figure out how to make forward-search work on the FM-index.
- * While it would be nice, and I believe that it's possible, 
- * this problem must be saved for later.
+/*
+ * There are a few things that might be called forward search on an FM-index.
+ *
+ * First, given a set of ranges of rows, compute the ranges corresponding to
+ * LF-1(row).  Note that these ranges are likely to be few in number if the
+ * original data was very compressible.
+ *
+ * forward_step_rows:
+ * ranges = { backward_search(pattern) } // for example
+ * for p in pattern
+ *   next ranges = { }
+ *   for (first,last) in ranges 
+ *     checkfirst = the row with the (first+1-C[p])th occurence of p in L
+ *     checklast = the row with the (last+1-C[p])th occurence of p in L
+ *     if checklast - checkfirst == last - first
+ *       next ranges = {(checkfirst, checklast)}
+ *     else
+ *       while true
+ *         n = the number of contiguous rows with L[row]=p starting from checkfirst
+ *         if checkfirst + n - 1 > checklast then n = checklast - checkfirst + 1
+ *         next ranges += (checkfirst, checkfirst + n - 1)
+ *         checkfirst = checkfirst + n
+ *         if checkfirst == checklast then break
  *
  *
+ * Second, given a range of rows known to start with a k-character pattern p,
+ * determine if all next-characters in that range of rows start with the same
+ * character, and what it is.
+ * The issues here are twofold:
+ *  1) there might be a variety of next-characters (reducing last_k-first_k)
+ *  2) there might be more rows added in-between that have
+ *     different L column values and so are not part of this match
+ *     (increasing last_k - first_k).
  *
- * Forward search works like this:
+ *     start with first, last and p.
+ *     first_k = forward step first k + 1 times.
+ *     last_k = forward step last k + 1 times.
+ *     x = character with C[x] <= first_k < C[x+1]
+ *     ... now step backwards k times and check?
+ *     This one doesn't seem to be useful as described.
+ *
+ * Third, given a range of rows starting with a shared k-character prefix,
+ * compute the range of rows starting with a shared k+1-character prefix,
+ * adding character ch.
  *
  * - we have a range of rows starting with a shared k-character prefix
  * - we want a range of rows starting with a shared k+1-character prefix,
@@ -2199,7 +2236,7 @@ void do_back_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
   CHECK_ERROR( err ) \
 }
 
-  /* The normal algorithm:
+  /* The normal algorithm: computes LF(row)
    chr = L[row]
    row = C[chr] + Occ(chr, row) - 1;
   */
@@ -2395,7 +2432,7 @@ void do_forward_query(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
   CHECK_ERROR( err ); \
 }
 
-  /* The normal algorithm:
+  /* The normal algorithm computes LF-1(row):
    chr = the first character of our row, from binary searching C.
    row = the row number of the (row + 1 - C[chr])'th occurence of chr in L.
   */

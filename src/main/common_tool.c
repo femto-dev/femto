@@ -369,6 +369,15 @@ int main( int argc, char** argv )
 
         // Set up the queries on all the indexes to get all previous characters.
         for( int i = 0; i < num_indexes; i++ ) {
+          // TODO -- we might be able to establish that only one character
+          // actually occurs here as the previous character (quite likely)
+          // and in that case wouldn't have to do O(256) work. But it seems
+          // that such optimization should be supported more directly within
+          // the index (since it just corresponds to a really big run in
+          // the L column wavelet tree; in other words we should be just reading
+          // the # occs in the L column for each character and can probably
+          // do that more efficiently, but if not at least could guess
+          // that it's all one character and check the number of results is the same).
           parallel_query_t* pq = NULL;
           pq = malloc(sizeof(parallel_query_t));
           err = setup_parallel_query(pq, NULL, locs[i],
@@ -494,6 +503,9 @@ int main( int argc, char** argv )
             } else {
               // report the parent.
               // Output this string. (future work - check prefix)
+              //
+              // TODO -- also form mandatory suffix by forward stepping
+              // with first, last until they differ.
               if (nfound < max_results) {
                 fprintf(out, "\"");
                 fprint_alpha_json(out, from_depth->pattern_length,
