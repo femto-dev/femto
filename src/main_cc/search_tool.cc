@@ -59,7 +59,6 @@ void usage(char* name)
   printf(" --matches Show strings matching approximate search and/or regular expression\n");
   printf(" --suggest with --matches, show matches for some related queries\n");
   printf(" --suggest-starts divide the query pattern into at most this many parts while suggesting\n");
-  printf(" --common-context Show most common leading and trailing context\n");
   printf(" --output <filename> output query results to file instead of stdout\n");
   printf(" --null seperate output lines with 0 bytes instead of newlines\n");
   printf(" --icase make the search case-insensitive\n");
@@ -544,7 +543,6 @@ int main( int argc, char** argv )
   const char* grepdir = ".";
   int count = 0;
   int matches = 0;
-  int common_context = 0;
   char sep = '\n';
   int icase = 0;
   int json = 0;
@@ -588,10 +586,6 @@ int main( int argc, char** argv )
         count = 1;
       } else if( 0 == strcmp(argv[i], "--suggest") ) {
         suggest = 1;
-      } else if( 0 == strcmp(argv[i], "--common-context") ) {
-        matches = 1;
-        count = 1;
-        common_context = 1;
       } else if( 0 == strcmp(argv[i], "--output") ) {
         i++; // pass --output
         output_fname = argv[i];

@@ -34,7 +34,7 @@
 #include "buffer.h"
 #include "util.h"
 
-static inline buffer_t build_buffer(int64_t max, unsigned char* data)
+static inline buffer_t build_buffer(uintptr_t max, unsigned char* data)
 {
   buffer_t b = {max, 0, data, 0, 0, 0};
   return b;

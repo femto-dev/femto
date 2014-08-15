@@ -71,9 +71,9 @@ int main( int argc, char** argv )
   {
     setup_mem_per_bin(0);
 
+#ifdef HAVE_MPI_H
     long long int nperbin = dcx_g_mem_per_bin;
     long long int themin = 0;
-#ifdef HAVE_MPI_H
     MPI_Allreduce( &nperbin, &themin, 1, MPI_LONG_LONG_INT, MPI_MIN, MPI_COMM_WORLD );
     dcx_g_mem_per_bin = themin;
 #endif
