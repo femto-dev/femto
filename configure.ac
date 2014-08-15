@@ -92,8 +92,7 @@ AC_CHECK_LIB([c],[aio_read],
                             AM_CONDITIONAL([HAS_POSIX_AIO], [false])])])
 AC_CHECK_LIB([aio], [io_submit],
              [AM_CONDITIONAL([HAS_LINUX_LIBAIO], [true])
-              AC_DEFINE([HAS_LINUX_LIBAIO],[1],[Has linux AIO e.g. io_submit])]
-              AC_CHECK_LIB([aio], [io_submit]),
+              AC_DEFINE([HAS_LINUX_LIBAIO],[1],[Has linux AIO e.g. io_submit])],
              [AM_CONDITIONAL([HAS_LINUX_LIBAIO], [false])])
 
 AC_CHECK_LIB([ssl], [SSL_library_init])
@@ -256,6 +255,7 @@ AC_CONFIG_FILES([Makefile
                  src/utils_cc/Makefile
                  src/mpi/Makefile
                  src/main/Makefile
+#                 src/dcy/Makefile
                  src/main_cc/Makefile
 		 src/dcx_cc/Makefile
 		 src/test/Makefile
