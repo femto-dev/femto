@@ -251,11 +251,11 @@ AC_CONFIG_FILES([Makefile
                  src/utils_cc/Makefile
                  src/mpi/Makefile
                  src/main/Makefile
-#                 src/dcy/Makefile
                  src/main_cc/Makefile
 		 src/dcx_cc/Makefile
 		 src/test/Makefile
 		 src/scripts/Makefile
 		 src/mod_femto/Makefile
 		 ])
+#                 src/dcy/Makefile
 AC_OUTPUT
