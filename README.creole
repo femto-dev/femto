@@ -48,7 +48,11 @@ To build FEMTO, issue the following commands:
  ./configure
  make
 }}}
-You'll see lots of warnings that things are declared/defined but not used; this is normal and not a problem.  If you get errors and compilation fails, you may not have all the required dev libraries installed. (e.g. if it is running g++ and fails to find -lssl, that would indicate you need to install libssl)
+
+You'll see lots of warnings that things are declared/defined but not used; this
+is normal and not a problem.  If you get errors and compilation fails, you may
+not have all the required dev libraries installed. (e.g. if it is running g++
+and fails to find -lssl, that would indicate you need to install libssl)
 
 To run the included unit tests, use
 {{{
