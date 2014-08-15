@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.59)
-AC_INIT(femto, 1.2.9, michaelferguson@acm.org)
+AC_INIT(femto, 1.2.9.1, michaelferguson@acm.org)
 AM_INIT_AUTOMAKE([1.9 foreign tar-pax])
 AC_CONFIG_SRCDIR([src/main/bwt_writer.h])
 AM_CONFIG_HEADER([config.h])
@@ -199,8 +199,6 @@ AC_MSG_NOTICE([Using default C compiler flags])
     AX_ADD_CFLAG([-O4])
     AX_ADD_CFLAG([-fomit-frame-pointer])
     AX_ADD_CFLAG([-DEXTRA_CHECKS=0])
-    AX_ADD_CFLAG([-march=core2])
-    AX_ADD_CFLAG([-mtune=core2])
     AX_ADD_CFLAG([-march=native])
     AX_ADD_CFLAG([-mtune=native])
   else
@@ -235,8 +233,6 @@ AC_MSG_NOTICE([Using default C++ compiler flags])
     AX_ADD_CXXFLAG([-O4])
     AX_ADD_CXXFLAG([-fomit-frame-pointer])
     AX_ADD_CXXFLAG([-DEXTRA_CHECKS=0])
-    AX_ADD_CXXFLAG([-march=core2])
-    AX_ADD_CXXFLAG([-mtune=core2])
     AX_ADD_CXXFLAG([-march=native])
     AX_ADD_CXXFLAG([-mtune=native])
   else
