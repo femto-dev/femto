@@ -23,14 +23,17 @@ OpenMPI 1.4.2, configured in the following way:
  export LD_LIBRARY_PATH=/opt/openmpi1.4.2/lib
 }}}
 
-If you're using a source checkout (vs a release), you will need
-GNU Autotools and Libtool.
+You'll need libssl-dev whether you use source checkout or a release.
+
+If you're using a source checkout (vs a release), you will need GNU Autotools and Libtool.
 
 == COMPILATION ==
 
 Make sure you have met the requirements first!
 
-If you are starting out with a source checkout as with
+If you're starting with a FEMTO release tarball, skip down to the step to build FEMTO.
+
+If you're starting out with a source checkout as with
 {{{
  git clone https://github.com/femto-dev/femto.git
  cd femto
@@ -39,13 +42,13 @@ you will need to also generate the configure script:
 {{{
  sh autogen.sh
 }}}
-The git and autogen.sh are not necessary if you have a FEMTO release tarball.
 
 To build FEMTO, issue the following commands:
 {{{
  ./configure
  make
 }}}
+You'll see lots of warnings that things are declared/defined but not used; this is normal and not a problem.  If you get errors and compilation fails, you may not have all the required dev libraries installed. (e.g. if it is running g++ and fails to find -lssl, that would indicate you need to install libssl)
 
 To run the included unit tests, use
 {{{
