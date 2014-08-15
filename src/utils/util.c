@@ -394,7 +394,8 @@ uint64_t lcm64(uint64_t a, uint64_t b)
   return ret;
 }
 
-#ifdef _64_BIT
+#ifdef HAS_RECIPROCAL_DIVIDE
+
 uint64_recip_t compute_reciprocal(uint64_t d)
 {
   // See Division by Invariant Integers using Multiplication

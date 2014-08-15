@@ -101,7 +101,7 @@ typedef struct uint64_recip {
 } uint64_recip_t;
 
 
-#ifdef _64_BIT
+#if defined(_64_BIT) && defined(mul64_128)
 
 #define HAS_RECIPROCAL_DIVIDE 1
 
@@ -123,26 +123,14 @@ uint64_t reciprocal_divide(uint64_t n, uint64_recip_t inv)
 }
 #else
 
-#warning reciprocal_divide not defined, not 64-bit
+#warning reciprocal_divide not defined, using slow version
 
 static inline
 uint64_recip_t compute_reciprocal(uint64_t d)
 {
   uint64_recip_t ret;
   ret.mprime = d;
-}
-
-static inline
-uint64_t reciprocal_divide(uint64_t n, uint64_recip_t inv)
-{
-  return n / inv.mprime;
-}
-
-static inline
-uint64_recip_t compute_reciprocal(uint64_t d)
-{
-  uint64_recip_t ret;
-  ret.mprime = d;
+  return ret;
 }
 
 static inline
