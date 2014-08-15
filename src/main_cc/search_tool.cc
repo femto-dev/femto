@@ -64,6 +64,8 @@ void usage(char* name)
   printf(" --icase make the search case-insensitive\n");
   printf(" --json output json\n");
   printf(" --filter-results <re> filter resulting document names/info by the passed regular expression\n");
+  printf(" --pattern <argument> pattern in argument (by default the pattern is the last non-option argument");
+  printf(" --pattern-from <filename> read pattern from filename instead of intepreting it as the pattern\n");
   exit(-1);
 }
 
@@ -533,6 +535,8 @@ int main( int argc, char** argv )
   char** index_paths = NULL;
   int num_indexes = 0;
   char* pattern = NULL;
+  unsigned char* rawpattern = NULL;
+  uintptr_t rawpattern_len = 0;
   char* output_fname = NULL;
   FILE* out = stdout;
   int verbose = 0;
@@ -604,6 +608,36 @@ int main( int argc, char** argv )
             fprintf(stderr, "error %s\n", filter_info->error().c_str());
           }
         }
+      } else if( 0 == strcmp(argv[i], "--pattern") ) {
+        i++; // pass --pattern
+        pattern = argv[i];
+      } else if( 0 == strcmp(argv[i], "--pattern-from") ) {
+        i++; // pass --pattern-from
+        buffer_t buf = {0};
+        FILE* f = fopen(argv[i], "r");
+        error_t err;
+        if( f ) err = mmap_buffer(&buf, f, 0, 0);
+        if( err || !buf.data ) {
+          printf("Could not read pattern from %s\n", pattern);
+          exit(-1);
+        }
+        pattern = (char*) buf.data;
+      } else if( 0 == strcmp(argv[i], "--raw-pattern") ) {
+        i++; // pass --raw-pattern
+        rawpattern = (unsigned char*) argv[i];
+        rawpattern_len = strlen(argv[i]);
+      } else if( 0 == strcmp(argv[i], "--raw-pattern-from") ) {
+        i++; // pass --raw-pattern-from
+        buffer_t buf = {0};
+        FILE* f = fopen(argv[i], "r");
+        error_t err;
+        if( f ) err = mmap_buffer(&buf, f, 0, 0);
+        if( err || !buf.data ) {
+          printf("Could not read pattern from %s\n", pattern);
+          exit(-1);
+        }
+        rawpattern = buf.data;
+        rawpattern_len = buf.len;
       } else if( argv[i][0] == '-' ) {
         printf("Unknown option %s\n", argv[i]);
         usage(argv[0]);
@@ -619,11 +653,27 @@ int main( int argc, char** argv )
     sep = '\n';
   }
 
-  if( num_indexes < 2 ) usage(argv[0]);
 
-  // pattern takes the last index path.
-  num_indexes--;
-  pattern = index_paths[num_indexes];
+  if( pattern == NULL && rawpattern == NULL ) {
+    // if not set yet, pattern takes the last index path.
+    num_indexes--;
+    pattern = index_paths[num_indexes];
+  }
+  
+  if( num_indexes <= 0 ) usage(argv[0]);
+
+  // Make sure indexes are readable.
+  for( int i = 0; i < num_indexes; i++ ) {
+    int rc;
+    struct stat st;
+    rc = stat(index_paths[i], &st);
+    if( rc == 0 ) {
+      // OK!
+    } else {
+      printf("Could not open index at %s\n", index_paths[i]);
+      exit(-1);
+    }
+  }
 
   if( output_fname ) {
     out = fopen(output_fname, "w");
@@ -659,10 +709,15 @@ int main( int argc, char** argv )
                            (RESULT_TYPE_DOC_OFFSETS):
                              (RESULT_TYPE_DOCUMENTS);
 
-    ast = parse_string(strlen(pattern), pattern);
-    if( ! ast ) {
-      fprintf(stderr, "Could not parse pattern\n");
-      exit(-1);
+    if( rawpattern ) {
+      string_t str = construct_buf_string(rawpattern, rawpattern_len);
+      ast = (struct ast_node*) string_node_new(str);
+    } else {
+      ast = parse_string(strlen(pattern), pattern);
+      if( ! ast ) {
+        fprintf(stderr, "Could not parse pattern %s\n", pattern);
+        exit(-1);
+      }
     }
    
     //Remove useless extra tokens from the Regular Expression

@@ -61,6 +61,16 @@ string_t construct_c_string(char* string)
   return ret;
 }
 
+static inline
+string_t construct_buf_string(unsigned char* buf, uintptr_t len)
+{
+  string_t ret;
+  ret.len = len;
+  ret.chars = strtoalpha(ret.len, buf);
+  return ret;
+}
+
+
 // Used by the parser:
 typedef enum {
   AST_NODE_REGEXP = 1,
