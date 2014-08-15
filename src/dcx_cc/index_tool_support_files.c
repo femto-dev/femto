@@ -39,21 +39,22 @@
 #include "file_find.h"
 #include "hashmap.h"
 
-
 #ifdef HAVE_LIBSSL
 #include <openssl/sha.h>
 #endif
 
 int dedup;
-#ifdef HAVE_LIBSSL
-typedef struct MYHASH_key_s {
-  unsigned char h[SHA_DIGEST_LENGTH];
-} MYHASH_key;
 
 typedef struct MYHASH_value_s {
   int npaths;
   const char** paths;
 } MYHASH_value;
+
+
+#ifdef HAVE_LIBSSL
+typedef struct MYHASH_key_s {
+  unsigned char h[SHA_DIGEST_LENGTH];
+} MYHASH_key;
 
 static
 void MYHASH_print(const MYHASH_key * h, const char* path)
@@ -86,7 +87,6 @@ hashmap_t dedup_table;
 // For the canonical version of a name, goes to the MYHASH_value record.
 // For a duplicate, goes to NULL.
 hashmap_t dups;
-
 #endif
 
 #define GLOM_CHAR '|'
@@ -406,6 +406,7 @@ error_t get_next_non_dup_path(char** path_out, MYHASH_value** dups_out)
     if( err ) break;
     if( !path ) break;
     if( !dedup ) break;
+#ifdef HAVE_LIBSSL
     entry.key = path;
     entry.value = NULL;
     if( !hashmap_retrieve(&dups, &entry) ) {
@@ -418,6 +419,9 @@ error_t get_next_non_dup_path(char** path_out, MYHASH_value** dups_out)
       } // otherwise, continue looping.
     }
     free(path);
+#else
+    break;
+#endif
   }
   *path_out = path;
   *dups_out = d;
