@@ -1,0 +1,11 @@
+add_subdirectory(re2)
+add_subdirectory(utils)
+add_subdirectory(utils_cc)
+add_subdirectory(mpi)
+add_subdirectory(main)
+add_subdirectory(main_cc)
+add_subdirectory(dcx_cc)
+
+add_subdirectory(test)
+add_subdirectory(mod_femto)
+add_subdirectory(scripts)
