@@ -615,7 +615,7 @@ int main( int argc, char** argv )
         i++; // pass --pattern-from
         buffer_t buf = {0};
         FILE* f = fopen(argv[i], "r");
-        error_t err;
+        error_t err = 0;
         if( f ) err = mmap_buffer(&buf, f, 0, 0);
         if( err || !buf.data ) {
           printf("Could not read pattern from %s\n", pattern);
@@ -630,7 +630,7 @@ int main( int argc, char** argv )
         i++; // pass --raw-pattern-from
         buffer_t buf = {0};
         FILE* f = fopen(argv[i], "r");
-        error_t err;
+        error_t err = 0;
         if( f ) err = mmap_buffer(&buf, f, 0, 0);
         if( err || !buf.data ) {
           printf("Could not read pattern from %s\n", pattern);

@@ -8,7 +8,10 @@
 
 %}
 
-%define api.pure
+/*This seems to only exist for Bison 3? not 2.3 at least*/
+/*%define api.pure*/
+/* %pure-parser seems to be the way to do it before then. */
+%pure-parser
 
 /*
 %parse-param {parser_state_t *parm}

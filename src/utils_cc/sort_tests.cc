@@ -686,7 +686,7 @@ int main(int argc, char** argv)
                            path, use_procs, use_procs, false, n_bins,
                            1024*1024*1024);
 
-      printf("Sorting %li records using %li memory (%li bins) and %li processors\n", num, use_memory, status.n_bins, use_procs);
+      printf("Sorting %li records using %li memory (%li bins) and %li processors\n", num, (long) use_memory, status.n_bins, use_procs);
 
       file_pipe_context input_fctx = fctx_fixed_cached(fileno(f));
       // input pipe must accomadate num_procs threads.
@@ -787,7 +787,7 @@ int main(int argc, char** argv)
                          path, use_procs, use_procs, false, n_bins,
                          1024*1024*1024);
 
-    printf("Sorting %li records using %li memory (%li bins) and %li processors\n", num, use_memory, status.n_bins, use_procs);
+    printf("Sorting %li records using %li memory (%li bins) and %li processors\n", num, (long) use_memory, status.n_bins, use_procs);
 
     // input pipe must accomadate num_procs threads.
     size_t num_tiles = 2 * use_procs + 2;

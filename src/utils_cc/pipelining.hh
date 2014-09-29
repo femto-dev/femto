@@ -53,6 +53,7 @@ extern "C" {
 
 #include <cassert>
 #include <cstdlib>
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <deque>

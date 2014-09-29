@@ -23,6 +23,8 @@
 #include <string.h>
 #include <assert.h>
 #include <ctype.h>
+#include <sys/stat.h> //mkdir
+#include <unistd.h> //unlink,rmdir
 
 #include "timing.h"
 
@@ -32,6 +34,7 @@
 #include "bwt_creator.c"
 #include "bwt_qsufsort.c"
 
+char* TEST_PATH_DIR = "./test_indexes/";
 char* TEST_PATH_INFO = "./test_indexes/info";
 char* TEST_PATH_BWT = "./test_indexes/bwt";
 
@@ -658,10 +661,18 @@ void test_buffer_gamma(void)
 
 int main(int argc, char** argv)
 {
+  // ignore errors (it might exist)
+  mkdir(TEST_PATH_DIR, S_IRWXU);
+
   test_buffer_gamma();
   test_blocksort();
   test_prepare_documents();
   test_encoder();
+
+  // delete the directory
+  unlink(TEST_PATH_INFO);
+  unlink(TEST_PATH_BWT);
+  rmdir(TEST_PATH_DIR);
 
   printf("All bwt tests PASSED\n");
   return 0;

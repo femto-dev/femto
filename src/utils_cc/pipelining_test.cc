@@ -135,11 +135,15 @@ void check_files(FILE* input, FILE* output, size_t nbytes)
   // fcntl to unset O_DIRECT if it's on.
   int flags;
   flags = fcntl(fileno(input), F_GETFL);
+#ifdef O_DIRECT
   flags &= ~O_DIRECT;
+#endif
   fcntl(fileno(input), F_SETFL, flags);
 
   flags = fcntl(fileno(output), F_GETFL);
+#ifdef O_DIRECT
   flags &= ~O_DIRECT;
+#endif
   fcntl(fileno(output), F_SETFL, flags);
 
   // check the output=input+1.
@@ -725,8 +729,12 @@ int main(int argc, char** argv)
     int do_aio=0;
     int do_io=0;
     int do_fcalls=0;
-    bool use_o_direct = (O_DIRECT>0); // if we have O_DIRECT, use it.
+    bool use_o_direct = false;
     int i;
+
+#ifdef O_DIRECT
+    use_o_direct = (O_DIRECT>0); // if we have O_DIRECT, use it.
+#endif
 
     if( argc < 4 ) {
       usage(argc, argv);

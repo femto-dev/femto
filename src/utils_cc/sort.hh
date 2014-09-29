@@ -174,7 +174,7 @@ struct Sorter : GeneralSorter<Record, Criterion>
 
     Pages pgs = get_pages_for_records(page_size,0,num_records,record_size);
 
-    if( NOISY_SORTS ) printf("Starting sort job on %20s of bytes %li\n", job->fctx.fname.c_str(), job->filelen);
+    if( NOISY_SORTS ) printf("Starting sort job on %20s of bytes %li\n", job->fctx.fname.c_str(), (long) job->filelen);
 
     // MMap the next file..
     if( ALWAYS_USE_MMAP || job->oversized ) {
@@ -242,7 +242,7 @@ struct Sorter : GeneralSorter<Record, Criterion>
       job->node->finish();
     }
 
-    if( NOISY_SORTS ) printf("Finished sort job on %20s of bytes %li\n", job->fctx.fname.c_str(), job->filelen);
+    if( NOISY_SORTS ) printf("Finished sort job on %20s of bytes %li\n", job->fctx.fname.c_str(), (long) job->filelen);
 
     job->is_sorted = true;
 

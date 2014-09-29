@@ -102,6 +102,7 @@ struct Record {
   }
 };
 
+
 template<int ExtraBytes>
 static inline
 bool operator<(const Record<ExtraBytes>& a, const Record<ExtraBytes>& b)

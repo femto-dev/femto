@@ -26,6 +26,16 @@
 #include <inttypes.h>
 #include <stdlib.h>
 
+#ifndef _64_BIT
+#ifdef __POINTER_WIDTH__
+#if __POINTER_WIDTH__ == 64
+#define _64_BIT
+#endif
+#endif
+#ifdef __LP64__
+#define _64_BIT
+#endif
+#endif
 
 #define TOP_BIT_64 0x8000000000000000LL
 #define TOP_BIT_32 0x80000000

@@ -21,6 +21,10 @@
 */
 #include "dcx.hh"
 
+extern "C" {
+#include "processors.h"
+}
+
 int64_t dcx_g_cur_disk_usage;
 int64_t dcx_g_max_disk_usage;
 MPI_handler* dcx_g_handler;
@@ -42,9 +46,13 @@ unsigned long dcx_g_max_mem_per_bin = 2L*1024L*1024L*1024L;
 
 void setup_mem_per_bin(long sort_memory)
 {
-  long long int pages = sysconf(_SC_PHYS_PAGES);
-  long long int page_size = sysconf(_SC_PAGE_SIZE);
-  long long int mem_avail = pages * page_size;
+  error_t err;
+  long long mem_avail = 0;
+  err = get_phys_mem(&mem_avail);
+  die_if_err(err);
+  //long long int pages = sysconf(_SC_PHYS_PAGES);
+  //long long int page_size = sysconf(_SC_PAGE_SIZE);
+  //long long int mem_avail = pages * page_size;
 
   long procs = 2;
   if( SORT_PROCS_PER_BIN > procs ) procs = SORT_PROCS_PER_BIN;

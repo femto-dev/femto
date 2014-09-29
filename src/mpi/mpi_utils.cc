@@ -37,12 +37,13 @@
 // We attempt to detect if we're on a shared filesystem..
 void mpi_copy_file(My_comm in_comm, const std::string & from_fname, int from_proc, const std::string & to_fname, int to_proc, bool move_not_copy)
 {
-  int nproc=1;
   int iproc=0;
 
   mpi_barrier(in_comm);
 
 #ifdef HAVE_MPI_H
+  int nproc=1;
+
   int rc;
   My_comm comm;
 

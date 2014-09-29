@@ -116,7 +116,7 @@ extern "C" {
 // With this or fewer records, when permuting, permute directly.
 #define PERMUTESWITCH_DEFAULT (4*1024*1024)
 
-#define SWITCH_STL
+// TODO DEBUG #define SWITCH_STL
 
 //#define PRINT_TIMING 1
 //#define PRINT_TIMING   100000000
@@ -223,7 +223,7 @@ struct BucketSorter {
     // Based on Sedgewick's Shell Sort -- see
     // Analysis of Shellsort and Related Algorithms 1996
     int i, j, k, h;
-    Record v, tmp;
+    Record v;
     //int incs[] = { 701, 301, 132, 57, 23, 10, 4, 1 };
     int incs[] = { 126, 85, 24, 9, 4, 1 };
     //int incs[] = { 85, 24, 9, 4, 1 };

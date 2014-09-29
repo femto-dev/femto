@@ -116,7 +116,7 @@ struct RecordTraitsReally<fixed_size_record_tag, Record> {
 
 // forward declare record iterator.
 template<typename Record>
-struct RecordIterator;
+class RecordIterator;
 
 template<typename Record>
 struct RecordTraitsReally<fixed_size_decoded_record_tag, Record> {

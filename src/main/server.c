@@ -32,6 +32,7 @@
 #include <pthread.h>
 #include <alloca.h>
 #include <errno.h>
+#include <sys/time.h> //gettimeofday for ptread_cond_timedwait
 
 // Print info about scheduled queries.
 #define DEBUG_SERVER 0
@@ -3068,6 +3069,7 @@ void worker_work(server_state_t* ss)
   size_t multiple = 1 + (ss->thread_number / n_primes);
   unsigned int rng_state = ss->thread_number;
   unsigned int rng_stride = multiple * primes[ith_prime];
+  struct timeval tv;
   struct timespec ts;
   int no_work_counter = 0;
   int no_work_before_wait = 2 * num_threads;
@@ -3119,8 +3121,13 @@ void worker_work(server_state_t* ss)
           i_have_work(ss) ) {
         // OK -- work has appeared.
       } else {
-        rc = clock_gettime(CLOCK_REALTIME, &ts);
+        rc = gettimeofday(&tv, NULL);
         assert(!rc);
+        ts.tv_sec = tv.tv_sec;
+        ts.tv_nsec = 0;
+
+        //rc = clock_gettime(CLOCK_REALTIME, &ts);
+        //assert(!rc);
 
         ts.tv_sec += 1;
 

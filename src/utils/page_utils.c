@@ -24,6 +24,7 @@
 #define _GNU_SOURCE 600
 // this one needed to compile on Sun.
 #define __EXTENSIONS__
+#include <unistd.h>
 #include <fcntl.h>
 
 #include "page_utils.h"

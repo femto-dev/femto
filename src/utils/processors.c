@@ -19,8 +19,15 @@
 
   femto/src/utils/processors.c
 */
+
+#define _BSD_SOURCE
+
 #include <stdlib.h>
 #include <stdio.h>
+#include <unistd.h> // for sysconf
+#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/sysctl.h>
 
 #include "processors.h"
 #include "bswap.h" // get right __LINUX__
@@ -77,9 +84,11 @@ error_t get_use_processors(long* use_procs)
 
 error_t get_phys_mem(long long* bytes)
 {
-  long ret;
+  long long mem_bytes = 0;
+#ifdef _SC_PHYS_PAGES  
   long long num_pages;
   long long page_size;
+  long ret;
 
   ret = sysconf(_SC_PHYS_PAGES);
   if( ret <= 0 ) return ERR_INVALID_STR("Could not get number of physical pages");
@@ -88,8 +97,21 @@ error_t get_phys_mem(long long* bytes)
   ret = sysconf (_SC_PAGESIZE);
   if( ret <= 0 ) return ERR_INVALID_STR("Could not get page size");
   page_size = ret;
+  mem_bytes = num_pages * page_size;
+#else
+# ifdef __APPLE__
+  size_t len = sizeof(mem_bytes);
+  int ret = -1;
 
-  *bytes = num_pages * page_size;
+  /* Note hw.memsize is in bytes, so no need to multiply by page size. */
+  ret = sysctlbyname("hw.memsize", &mem_bytes, &len, NULL, 0);
+  if (ret == -1) mem_bytes = 0;
+#endif
+#endif
+
+  *bytes = mem_bytes;
+
+  if( mem_bytes == 0 ) return ERR_INVALID;
   return ERR_NOERR;
 }
 
