@@ -160,12 +160,12 @@ class uncopyable {
     ~uncopyable() {} // not virtual because it's 
                      // got nothing to destruct!
   private:
-    uncopyable(const uncopyable&);
-    uncopyable& operator=(const uncopyable&);
+    uncopyable(const uncopyable&) = delete;
+    uncopyable& operator=(const uncopyable&) = delete;
 };
 
 // "Resource management" class for a pthreads lock.
-struct pthread_mutex : private uncopyable {
+struct pthread_mutex : public uncopyable {
   pthread_mutex_t mutex;
   pthread_mutex() {
     int rc;
@@ -213,13 +213,13 @@ struct pthread_mutex : private uncopyable {
   }
 };
 
-struct pthread_held_mutex : private uncopyable {
+struct pthread_held_mutex : public uncopyable {
   pthread_mutex* lock;
   pthread_held_mutex(pthread_mutex* lock) : lock(lock) { lock->lock(); }
   ~pthread_held_mutex() { lock->unlock_nothrow(); }
 };
 
-struct pthread_rwlock : private uncopyable {
+struct pthread_rwlock : public uncopyable {
   pthread_rwlock_t lock;
   pthread_rwlock() {
     int rc;
@@ -258,7 +258,7 @@ struct pthread_rwlock : private uncopyable {
   }
 };
 
-struct pthread_held_read_lock : private uncopyable {
+struct pthread_held_read_lock : public uncopyable {
   pthread_rwlock* lock;
   pthread_held_read_lock(pthread_rwlock* lock)
     : lock(lock)
@@ -266,7 +266,7 @@ struct pthread_held_read_lock : private uncopyable {
   ~pthread_held_read_lock() { lock->unlock_nothrow(); }
 };
 
-struct pthread_held_write_lock : private uncopyable {
+struct pthread_held_write_lock : public uncopyable {
   pthread_rwlock* lock;
   pthread_held_write_lock(pthread_rwlock* lock)
     : lock(lock)
@@ -275,7 +275,7 @@ struct pthread_held_write_lock : private uncopyable {
 };
 
 // Resource management class for pthread condition variable.
-struct pthread_cond : private uncopyable {
+struct pthread_cond : public uncopyable {
   pthread_cond_t cond;
   pthread_cond() {
     int rc;
@@ -328,7 +328,7 @@ struct pthread_cond : private uncopyable {
 // new tasks to appear in the list.
 // There must be a default constructor for a Task, which means end-of-file.
 template<typename Task>
-class task_queue : private uncopyable {
+class task_queue : public uncopyable {
   pthread_mutex lock;
   pthread_cond cond;
   bool closed; // if it's closed and empty, it'll never be filled again
@@ -576,7 +576,7 @@ class memory_pipe: public read_pipe, public write_pipe {
 // Uses multiple inheritance for interface, which should be O.K.
 // (the alternative would be members implementing each side, but then
 // we'd need to return pointers/references to them).
-class buffered_pipe: public read_pipe, public write_pipe, private uncopyable {
+class buffered_pipe: public read_pipe, public write_pipe, public uncopyable {
   private:
     pthread_mutex lock; // protects tile_size and num_tiles
     size_t tile_size;
@@ -625,7 +625,7 @@ class buffered_pipe: public read_pipe, public write_pipe, private uncopyable {
 // Serializing Buffered unidirectional pipe for inter-thread communication
 // For testing purposes, this pipe stores all the input in memory before
 // providing any output.
-class serial_buffered_pipe: public read_pipe, public write_pipe, private uncopyable {
+class serial_buffered_pipe: public read_pipe, public write_pipe, public uncopyable {
   private:
     pthread_mutex lock; // protects tile_size and num_tiles
     size_t tile_size;
@@ -706,7 +706,7 @@ struct single_tile_pipe: public read_pipe {
  * implement operator() taking a tile as an argument.
  */
 template<typename Callback>
-class async_tile_list : private uncopyable {
+class async_tile_list : public uncopyable {
   pthread_mutex lock;
   pthread_cond cond;
   bool closed;
@@ -1355,7 +1355,7 @@ bool append_record(const Record& r, pipe_back_inserter<Record> * writer)
   return true;
 }
 
-class pipeline_node : private uncopyable {
+class pipeline_node : public uncopyable {
   protected:
     bool is_running;
     pthread_t thread;

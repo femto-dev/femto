@@ -19,6 +19,8 @@ set_target_properties(re2 PROPERTIES IMPORTED_LOCATION ${CMAKE_BINARY_DIR}/src/r
 
 add_dependencies(re2 make_re2)
 
+set_directory_properties(PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES ${CMAKE_SOURCE_DIR}/src/re2/re2/obj)
+
 #install(TARGETS re2 ${INSTALL_TARGETS_DEFAULT_ARGS})
 
 #

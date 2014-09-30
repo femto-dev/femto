@@ -868,7 +868,7 @@ public:
            typename FilterTranslator = IdentityFilterTranslator<Context,Record>,
            typename SplitterTranslator = IdentitySplitterTranslator<Record,Criterion,typename Splitters::splitter_record_t,typename Splitters::splitter_criterion_t>
           >
-  struct Bins : private uncopyable {
+  struct Bins : public uncopyable {
     typedef Context context_t;
     typedef Record record_t;
     typedef Criterion criterion_t;

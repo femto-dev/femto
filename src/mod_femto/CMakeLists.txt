@@ -32,9 +32,9 @@ if(APR_FOUND)
     add_library(libmod_femto mod_femto.c)
     target_link_libraries(libmod_femto ${APR_LIBRARY} ${APU_LIBRARY})
     include_directories(${APXS_INCLUDE_DIR} ${APR_INCLUDE_DIR} ${APU_INCLUDE_DIR})
-    if(DEFINED APR_CPPFLAGS)
+    if(APR_CPPFLAGS)
       add_definitions("${APR_CPPFLAGS}")
-    endif(DEFINED APR_CPPFLAGS)
+    endif(APR_CPPFLAGS)
 
     add_definitions(-D_LARGEFILE64_SOURCE -D_GNU_SOURCE)
     #building just a library. 
