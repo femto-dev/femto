@@ -89,15 +89,15 @@ add_library(femto_bwt STATIC ${FEMTO_BWT_SRCS})
 add_library(femto_seq STATIC ${FEMTO_SEQ_SRCS})
 
 add_executable(femto_multiquery query_tool.c)
-target_link_libraries(femto_multiquery femto femto_bwt femto_util)
+target_link_libraries(femto_multiquery femto femto_bwt femto_util ${DEFAULT_LIBRARIES})
 add_executable(femto_flatten flatten_tool.c)
-target_link_libraries(femto_flatten femto femto_bwt femto_util)
+target_link_libraries(femto_flatten femto femto_bwt femto_util ${DEFAULT_LIBRARIES})
 add_executable(femto_handle_request handle_request.c)
-target_link_libraries(femto_handle_request femto femto_bwt femto_util)
+target_link_libraries(femto_handle_request femto femto_bwt femto_util ${DEFAULT_LIBRARIES})
 add_executable(femto_info info_tool.c)
-target_link_libraries(femto_info femto femto_bwt femto_util)
+target_link_libraries(femto_info femto femto_bwt femto_util ${DEFAULT_LIBRARIES})
 add_executable(femto_common common_tool.c)
-target_link_libraries(femto_common femto femto_bwt femto_util)
+target_link_libraries(femto_common femto femto_bwt femto_util ${DEFAULT_LIBRARIES})
 install(TARGETS femto_flatten femto_handle_request femto_info femto_common
         ${INSTALL_TARGETS_DEFAULT_ARGS})
 
@@ -112,7 +112,7 @@ set(FEMTO_TESTS
 foreach(test ${FEMTO_TESTS})
   add_executable(${test} EXCLUDE_FROM_ALL ${test}.c)
   add_test(${test} ${test})
-  target_link_libraries(${test} femto femto_bwt femto_util)
+  target_link_libraries(${test} femto femto_bwt femto_util ${DEFAULT_LIBRARIES})
   add_dependencies(check ${test})
 endforeach(test)
 
@@ -124,7 +124,7 @@ set(BWT_TESTS
 foreach(test ${BWT_TESTS})
   add_executable(${test} EXCLUDE_FROM_ALL ${test}.c bwt_creator.h bwt_creator.c bwt_qsufsort.c)
   add_test(${test} ${test})
-  target_link_libraries(${test} femto femto_bwt femto_util)
+  target_link_libraries(${test} femto femto_bwt femto_util ${DEFAULT_LIBRARIES})
   add_dependencies(check ${test})
 endforeach(test)
 

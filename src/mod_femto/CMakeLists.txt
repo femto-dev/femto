@@ -1,3 +1,13 @@
+# include ../util
+include_directories(${CMAKE_SOURCE_DIR}/src/utils)
+# include ../util_cc
+#include_directories(${CMAKE_SOURCE_DIR}/src/utils_cc)
+# include ../main
+include_directories(${CMAKE_SOURCE_DIR}/src/main)
+# include ../mpi
+#include_directories(${CMAKE_SOURCE_DIR}/src/mpi)
+# include ../re2
+#include_directories(${CMAKE_SOURCE_DIR}/src/re2/re2/)
 
 find_package(APR)
 find_package(APXS)
@@ -16,18 +26,18 @@ if(APR_FOUND)
     #apxs-install:
     #	${APXS} -i -a -n femto libmod_femto.la
     #
-    execute_process(COMMAND ${APXS} -q INCLUDEDIR OUTPUT_VARIABLE APXS_INCLUDE)
-    include_directories(${APXS_INCLUDE})
+    #    execute_process(COMMAND ${APXS} -q INCLUDEDIR OUTPUT_VARIABLE APXS_INCLUDE)
+    #include_directories(${APXS_INCLUDE})
 
+    add_library(libmod_femto mod_femto.c)
     target_link_libraries(libmod_femto ${APR_LIBRARY} ${APU_LIBRARY})
-    include_directories(${APR_INCLUDE_DIR} ${APU_INCLUDE_DIR})
+    include_directories(${APXS_INCLUDE_DIR} ${APR_INCLUDE_DIR} ${APU_INCLUDE_DIR})
     if(DEFINED APR_CPPFLAGS)
       add_definitions("${APR_CPPFLAGS}")
     endif(DEFINED APR_CPPFLAGS)
 
     add_definitions(-D_LARGEFILE64_SOURCE -D_GNU_SOURCE)
     #building just a library. 
-    add_library(libmod_femto mod_femto.c)
     target_link_libraries(libmod_femto libfemto libfemto_util -module)
   endif(APXS_FOUND)
 endif(APR_FOUND)

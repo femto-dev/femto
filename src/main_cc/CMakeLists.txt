@@ -9,7 +9,7 @@ include_directories(${CMAKE_SOURCE_DIR}/src/re2/re2)
 add_executable(femto_search search_tool.cc)
 #link_directories(${RE2_LIB_DIR})
 #target_link_libraries(femto_search re2 femto_seq femto femto_util)
-target_link_libraries(femto_search ${RE2_LIB} femto_seq femto femto_util)
+target_link_libraries(femto_search ${RE2_LIB} femto_seq femto femto_util ${DEFAULT_LIBRARIES})
 add_dependencies(femto_search make_re2)
 
 install(TARGETS femto_search

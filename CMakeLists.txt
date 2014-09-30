@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8)
-project(FEMTO)
+project(FEMTO C CXX)
 
 set(FEMTO_VERSION "femto 1.2.9.2 from http://github.com/femto-dev/femto")
 
@@ -24,6 +24,7 @@ else(NO_FLEX_BISON)
   find_package(BISON)
 endif(NO_FLEX_BISON)
 
+find_package(Threads REQUIRED)
 find_package(MPI)
 
 #if(NOT ${BISON_VERSION} EQUAL:
@@ -69,6 +70,12 @@ CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/config.h.in ${CMAKE_CURRENT_BINARY_DI
 enable_testing()
 
 set(CMAKE_CXX_FLAGS "-g -Wall")
+
+# Add libaries used everywhere
+set(DEFAULT_LIBRARIES "${CMAKE_THREAD_LIBS_INIT}")
+if( DEFINED HAVE_CLOCK_GETTIME_RT OR DEFINED HAS_POSIX_AIO_RT)
+  set(DEFAULT_LIBRARIES "${DEFAULT_LIBRARIES} -lrt")
+endif()
 
 # Emulate make check
 add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND})

@@ -17,7 +17,12 @@ set(FEMTO_DCX_CC_SRCS
 
 add_library(femto_dcx_cc STATIC ${FEMTO_DCX_CC_SRCS})
 
-set(DCX_LIBS femto_dcx_cc femto_seq femto femto_bwt femto_mpi_cc femto_util_cc femto_util ssl crypto)
+set(DCX_LIBS femto_dcx_cc femto_seq femto femto_bwt femto_mpi_cc femto_util_cc femto_util ssl crypto ${DEFAULT_LIBRARIES})
+
+if(HAS_LINUX_LIBAIO)
+  set(DCX_LIBS "${DCX_LIBS} -laio")
+endif()
+
 
 set(DCX_TESTS dcover_test suffix_sort_test)
 

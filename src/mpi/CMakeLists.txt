@@ -13,7 +13,7 @@ set(MPI_CC_TESTS mpi_utils_test)
 foreach(test ${MPI_CC_TESTS})
   add_executable(${test} EXCLUDE_FROM_ALL ${test}.cc)
   add_test(${test} ${test})
-  target_link_libraries(${test} femto_mpi_cc femto_util_cc femto_util)
+  target_link_libraries(${test} femto_mpi_cc femto_util_cc femto_util ${DEFAULT_LIBRARIES})
   add_dependencies(check ${test})
 endforeach(test)
 
@@ -25,7 +25,7 @@ install(TARGETS femto_hello_mpi ${INSTALL_TARGETS_DEFAULT_ARGS})
 
 add_executable(femto_mpi_cp mpi_cp.cc)
 
-target_link_libraries(femto_mpi_cp femto_mpi_cc femto_util_cc femto_util)
+target_link_libraries(femto_mpi_cp femto_mpi_cc femto_util_cc femto_util ${DEFAULT_LIBRARIES})
 
 install(TARGETS femto_mpi_cp ${INSTALL_TARGETS_DEFAULT_ARGS})
 

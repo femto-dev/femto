@@ -39,14 +39,16 @@ set(FEMTO_UTIL_CC_SRCS
     io_pipe.hh
     io_pipe.cc)
 
-  #if( DEFINED ${HAS_POSIX_AIO_RT} OR DEFINED ${HAS_POSIX_AIO_C})
+# Add libaries used everywhere
+set(LOCAL_DEFAULT_LIBRARIES "${DEFAULT_LIBRARIES}")
+
 if( DEFINED HAS_POSIX_AIO_RT OR DEFINED HAS_POSIX_AIO_C)
-  #if(${HAS_POSIX_AIO_RT} or ${HAS_POSIX_AIO_C})
   set(FEMTO_UTIL_CC_SRCS ${FEMTO_UTIL_CC_SRCS} aio_pipe.hh aio_pipe.cc)
 endif()
 
 if(HAS_LINUX_LIBAIO)
   set(FEMTO_UTIL_CC_SRCS ${FEMTO_UTIL_CC_SRCS} kaio_pipe.hh kaio_pipe.cc)
+  set(LOCAL_DEFAULT_LIBRARIES "${LOCAL_DEFAULT_LIBRARIES} -laio")
 endif()
 
 # include ../util
@@ -68,14 +70,14 @@ set(UTIL_CC_TESTS
 foreach(test ${UTIL_CC_TESTS})
   add_executable(${test} EXCLUDE_FROM_ALL ${test}.cc example_record.hh)
   add_test(${test} ${test})
-  target_link_libraries(${test} femto_util_cc femto_util)
+  target_link_libraries(${test} femto_util_cc femto_util ${LOCAL_DEFAULT_LIBRARIES})
   add_dependencies(check ${test})
 endforeach(test)
 
 
 add_executable(femto_sort_tests sort_tests.hh sort_tests.cc)
 
-target_link_libraries(femto_sort_tests femto_util_cc femto_util)
+target_link_libraries(femto_sort_tests femto_util_cc femto_util ${LOCAL_DEFAULT_LIBRARIES})
 
 install(TARGETS femto_sort_tests ${INSTALL_TARGETS_DEFAULT_ARGS})
 
