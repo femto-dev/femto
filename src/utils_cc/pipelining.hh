@@ -160,8 +160,16 @@ class uncopyable {
     ~uncopyable() {} // not virtual because it's 
                      // got nothing to destruct!
   private:
-    uncopyable(const uncopyable&) = delete;
-    uncopyable& operator=(const uncopyable&) = delete;
+    uncopyable(const uncopyable&)
+#if __cplusplus >= 201103L
+      = delete
+#endif
+    ;
+    uncopyable& operator=(const uncopyable&)
+#if __cplusplus >= 201103L
+      = delete
+#endif
+    ;
 };
 
 // "Resource management" class for a pthreads lock.

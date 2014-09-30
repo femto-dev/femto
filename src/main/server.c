@@ -3124,7 +3124,7 @@ void worker_work(server_state_t* ss)
         rc = gettimeofday(&tv, NULL);
         assert(!rc);
         ts.tv_sec = tv.tv_sec;
-        ts.tv_nsec = 0;
+        ts.tv_nsec = 1000 * tv.tv_usec;
 
         //rc = clock_gettime(CLOCK_REALTIME, &ts);
         //assert(!rc);

@@ -267,6 +267,15 @@ struct RecordStandin
 };
 
 template<typename Record>
+inline void swap(RecordStandin<Record> a, RecordStandin<Record> b)
+{
+  Record read_a = a;
+  Record read_b = b;
+  a = read_b;
+  b = read_a;
+}
+
+template<typename Record>
 class RecordIterator
   : public std::iterator<std::random_access_iterator_tag,
                           Record,

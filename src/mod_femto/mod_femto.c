@@ -149,9 +149,13 @@ static int femto_do_request(request_rec* r, char* dbuf)
 
       for( i = 0; ! r->connection->aborted; i++ ) {
         int completed = 0;
+        struct timeval tv;
         struct timespec ts;
 
-        rc = clock_gettime(CLOCK_REALTIME, &ts);
+        rc = gettimeofday(&tv, NULL);
+        ts.tv_sec = tv.tv_sec;
+        ts.tv_nsec = 1000 * tv.tv_usec;
+        //rc = clock_gettime(CLOCK_REALTIME, &ts);
         if( rc ) {
           ap_log_rerror(APLOG_MARK, APLOG_ERR, rc, r,
                         "FEMTO could not gettime");
@@ -168,7 +172,10 @@ static int femto_do_request(request_rec* r, char* dbuf)
         }
         if( completed ) break;
 
-        rc = clock_gettime(CLOCK_REALTIME, &now);
+        rc = gettimeofday(&tv, NULL);
+        now.tv_sec = tv.tv_sec;
+        now.tv_nsec = 1000 * tv.tv_usec;
+        //rc = clock_gettime(CLOCK_REALTIME, &now);
         if( rc ) {
           ap_log_rerror(APLOG_MARK, APLOG_ERR, rc, r,
                         "FEMTO clock_gettime failed");
