@@ -45,7 +45,7 @@ add_library(femto_util STATIC ${FEMTO_UTIL_SRCS})
 foreach(test ${UTIL_TESTS})
   add_executable(${test} EXCLUDE_FROM_ALL ${test}.c)
   add_test(${test} ${test})
-  target_link_libraries(${test} femto_util)
+  target_link_libraries(${test} femto_util ${DEFAULT_LIBRARIES})
   add_dependencies(check ${test})
 endforeach(test)
 
