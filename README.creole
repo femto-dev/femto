@@ -83,7 +83,7 @@ apache module.
 To build an index, run
 {{{
  femto/src/dcx_cc/femto_index --tmp /path/to/tmp_dir \
-                             --outdir /path/to/index_dir \
+                             --outfile index.femto \
                              files_or_directories_to_index
 }}}
 
