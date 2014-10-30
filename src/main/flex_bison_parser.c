@@ -24,7 +24,7 @@
 #include "ast.h"
 #include "flex_bison_parser.h"
 
-void yyerror(parser_state_t* state, char const* s)
+void yyerror(void* state, void* scanner, char const* s)
 {
   fprintf(stderr, "%s\n", s);
 }
@@ -43,7 +43,7 @@ struct ast_node* parse_string(int len, const char* data)
 
   yylex_init(&pstate.yyscanner);
   yyset_extra(&pstate, pstate.yyscanner);
-  rc = yyparse(&pstate);
+  rc = yyparse(&pstate, pstate.yyscanner);
 
   yylex_destroy(pstate.yyscanner);
 

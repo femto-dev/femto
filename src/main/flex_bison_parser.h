@@ -69,14 +69,17 @@ typedef union my_yystype my_yystype;
 #define YYSTYPE my_yystype
 #define YY_EXTRA_TYPE parser_state_t *
 
+/*
+  these are removed from Bison 3
 #define YYPARSE_PARAM state
 #define YYLEX_PARAM ((parser_state_t*)state)->yyscanner
+*/
 
 int     yylex(YYSTYPE *, void *);
 int     yylex_init(void **);
 int     yylex_destroy(void *);
 void    yyset_extra(YY_EXTRA_TYPE, void *);
-int     yyparse(void*);
+int     yyparse(void*,void*);
 //void    yyerror(void* scanner, parser_state_t* state, const char* yymsg);
 
 #endif

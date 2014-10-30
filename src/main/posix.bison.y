@@ -15,7 +15,8 @@
 
 /*%parse-param {struct parser_state_s *state}*/
 %parse-param {void *state}
-%lex-param {yyscan_t *scanner}
+%parse-param {void *scanner}
+%lex-param {void *scanner}
 
 /*
 %token <string> STRING
