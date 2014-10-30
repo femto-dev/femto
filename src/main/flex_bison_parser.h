@@ -76,7 +76,7 @@ int     yylex(YYSTYPE *, void *);
 int     yylex_init(void **);
 int     yylex_destroy(void *);
 void    yyset_extra(YY_EXTRA_TYPE, void *);
-int     yyparse(void* data);
+int     yyparse(void*);
 //void    yyerror(void* scanner, parser_state_t* state, const char* yymsg);
 
 #endif

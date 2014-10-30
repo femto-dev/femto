@@ -9,15 +9,14 @@
 %}
 
 /*This seems to only exist for Bison 3? not 2.3 at least*/
-/*%define api.pure*/
+/*%define api.pure full*/ /* this is the current documented method */
 /* %pure-parser seems to be the way to do it before then. */
 %pure-parser
 
-/*
-%parse-param {parser_state_t *parm}
-%parse-param {void *scanner}
+/*%parse-param {struct parser_state_s *state}*/
+%parse-param {void *state}
 %lex-param {yyscan_t *scanner}
-*/
+
 /*
 %token <string> STRING
 %type  <string> string

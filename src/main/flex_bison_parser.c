@@ -24,7 +24,7 @@
 #include "ast.h"
 #include "flex_bison_parser.h"
 
-void yyerror(char const* s)
+void yyerror(parser_state_t* state, char const* s)
 {
   fprintf(stderr, "%s\n", s);
 }
