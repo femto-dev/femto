@@ -39,7 +39,8 @@ CHECK_INCLUDE_FILE_CXX(parallel/algorithm HAVE_PARALLEL_ALGORITHM)
 #CHECK_FUNCTION_EXISTS(__sync_fetch_and_add HAVE_DECL___SYNC_FETCH_AND_ADD)
 CHECK_C_SOURCE_COMPILES("int main(int argc, char** argv) { int* a = &argc; __sync_fetch_and_add(a, 1); }" HAVE_DECL___SYNC_FETCH_AND_ADD)
 
-CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h)
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/config.h.cmake.in ${CMAKE_CURRENT_B
+
 
 # Probably not needed.
 #CHECK_INCLUDE_FILE(inttypes.h HAVE_INTTYPES_H)
