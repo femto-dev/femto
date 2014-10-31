@@ -71,7 +71,7 @@ else(NO_FLEX_BISON)
       ADD_CUSTOM_COMMAND(
         OUTPUT ${FLEX_OUTPUT}
         COMMAND ${FLEX_EXECUTABLE}
-                --outfile=${FLEX_OUTPUT}
+                -o${FLEX_OUTPUT}
                 ${FLEX_INPUT}
         MAIN_DEPENDENCY ${FLEX_INPUT}
         COMMENT "Generating posix.flex.c"
