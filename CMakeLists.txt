@@ -15,7 +15,8 @@ include(CheckIncludeFileCXX)
 include(CheckFunctionExists)
 include(CheckCSourceCompiles)
 
-set(NO_FLEX_BISON 1)
+# Uncomment this line to rely on existing flex/bison.
+#set(NO_FLEX_BISON 1)
 
 if(NO_FLEX_BISON)
   # don't try to run flex or bison
@@ -39,8 +40,7 @@ CHECK_INCLUDE_FILE_CXX(parallel/algorithm HAVE_PARALLEL_ALGORITHM)
 #CHECK_FUNCTION_EXISTS(__sync_fetch_and_add HAVE_DECL___SYNC_FETCH_AND_ADD)
 CHECK_C_SOURCE_COMPILES("int main(int argc, char** argv) { int* a = &argc; __sync_fetch_and_add(a, 1); }" HAVE_DECL___SYNC_FETCH_AND_ADD)
 
-CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/config.h.cmake.in ${CMAKE_CURRENT_B
-
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/config.h.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/config.h)
 
 # Probably not needed.
 #CHECK_INCLUDE_FILE(inttypes.h HAVE_INTTYPES_H)
