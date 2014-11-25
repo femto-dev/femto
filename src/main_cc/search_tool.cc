@@ -66,6 +66,7 @@ void usage(char* name)
   printf(" --filter-results <re> filter resulting document names/info by the passed regular expression\n");
   printf(" --pattern <argument> pattern in argument (by default the pattern is the last non-option argument");
   printf(" --pattern-from <filename> read pattern from filename instead of intepreting it as the pattern\n");
+  printf(" --by_index print results per searched index\n");
   exit(-1);
 }
 
@@ -553,6 +554,7 @@ int main( int argc, char** argv )
   int suggest = 0;
   int suggest_starts = 8;
   RE2 *filter_info = NULL;
+  int by_index = 0;
 
   index_paths = (char**) malloc(argc*sizeof(char*));
 
@@ -563,6 +565,8 @@ int main( int argc, char** argv )
       if( 0 == strcmp(argv[i], "-v") ||
           0 == strcmp(argv[i], "--verbose") ) {
         verbose++;
+      } else if( 0 == strcmp(argv[i], "--by_index") ) {
+        by_index = 1;
       } else if( 0 == strcmp(argv[i], "--max_results") ) {
         // set the chunk size
         i++; // pass the -c
@@ -1030,8 +1034,10 @@ int main( int argc, char** argv )
           if( m.last >= m.first ) {
             if( 0 == matchcmp(&matcheis[i], &matcheis[next]) ) {
               num_matches += m.last - m.first + 1;
-              if( verbose ) {
+              if( verbose || by_index ) {
                 fprintf(out, "Results from %s\n", index_paths[m.index]);
+              }
+              if( verbose ) {
                 fprintf(out, "For pattern %s\n", parts[m.query]);
                 
                 if( m.issuggestion ) fputc('*', out);

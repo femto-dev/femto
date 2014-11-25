@@ -426,6 +426,8 @@ typedef struct {
   // on return, url is malloced
   int info_len;
   unsigned char* info;
+  // If requested, on return, document length is here.
+  int64_t doc_len;
   // used during processing.
   //string_query_t string_query; // to search for the right row
   //back_query_t back; // to step back to decode the URL.
@@ -781,11 +783,25 @@ error_t setup_string_query(
         index_locator_t loc,
         int plen, 
         alpha_t* pat);
+error_t setup_string_query_take(
+        string_query_t* q,
+        process_entry_t* requestor, 
+        index_locator_t loc,
+        int plen, 
+        alpha_t* pat);
+
 
 error_t setup_parallel_query(parallel_query_t* q,
                              process_entry_t* requestor,
                              index_locator_t loc,
                              int query_size, int num_queries);
+error_t setup_parallel_query_take(parallel_query_t* q,
+                             process_entry_t* requestor,
+                             index_locator_t loc,
+                             int query_size, int num_queries,
+                             void* queries);
+void cleanup_parallel_query(parallel_query_t* q);
+
 error_t setup_string_results_query(
                              string_results_query_t* q,
                              process_entry_t* requestor,
@@ -837,16 +853,25 @@ error_t setup_get_doc_info_query(
         get_doc_info_query_t* q,
         process_entry_t* requestor, 
         index_locator_t loc,
-        int64_t doc_id);
+        int64_t doc_id,
+        int get_doc_len);
 void cleanup_get_doc_info_query(get_doc_info_query_t* q);
 
 error_t setup_get_doc_info_results( parallel_query_t* ctx,
                              process_entry_t* requestor,
                              index_locator_t loc,
                              results_t* results);
+error_t setup_get_doc_info_doc_len_results( parallel_query_t* ctx,
+                             process_entry_t* requestor,
+                             index_locator_t loc,
+                             results_t* results);
 void cleanup_get_doc_info_results(parallel_query_t* ctx );
 error_t get_doc_info_results( parallel_query_t* ctx, 
                        int* num, long** lensOut, unsigned char*** infosOut );
+error_t get_doc_info_doc_len_results( parallel_query_t* ctx, 
+                       int* num, long** lensOut, unsigned char*** infosOut,
+                       int64_t** doc_lensOut );
+
 error_t setup_string_rows_all_query(
           parallel_query_t* ctx,
           process_entry_t* requestor,

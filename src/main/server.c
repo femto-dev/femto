@@ -636,6 +636,39 @@ void do_signal_request(server_state_t* ss, query_mode_t mode, query_entry_t* qe)
   }
 }
 
+error_t setup_string_query_take(
+        string_query_t* q,
+        process_entry_t* requestor, 
+        index_locator_t loc,
+        int plen, 
+        alpha_t* pat)
+{
+  error_t err;
+
+  memset(q, 0, sizeof(string_query_t));
+
+  err = setup_process_entry( & q->proc, 
+                             // query entry params
+                             QUERY_TYPE_STRING, loc,
+                             0, requestor,
+                             // proc callback
+                             do_string_query);
+  if( err ) return err;
+  q->plen = plen;
+  q->pat = pat;
+  if( ! q->pat ) {
+    return ERR_MEM;
+  }
+  
+  q->i = -1;
+  q->prev_first = 0;
+  q->prev_last = -1;
+  q->prev_len = -1;
+
+  return ERR_NOERR;
+}
+
+
 error_t setup_string_query(
         string_query_t* q,
         process_entry_t* requestor, 
@@ -1167,9 +1200,11 @@ error_t setup_get_doc_info_query(
         get_doc_info_query_t* q,
         process_entry_t* requestor, 
         index_locator_t loc,
-        int64_t doc_id)
+        int64_t doc_id,
+        int get_doc_len)
 {
   error_t err;
+  header_loc_request_type_t type;
 
   memset(q, 0, sizeof(get_doc_info_query_t));
 
@@ -1185,11 +1220,14 @@ error_t setup_get_doc_info_query(
   q->info_len = 0;
   q->info = NULL;
 
+  type = HDR_LOC_REQUEST_DOC_INFO;
+  if( get_doc_len ) type |= HDR_LOC_REQUEST_DOC_LEN;
+
   setup_header_loc_query( &q->hq, 
                             q->proc.entry.loc,
                             0x0,
                             &q->proc,
-                            HDR_LOC_REQUEST_DOC_INFO,
+                            type,
                             0, q->doc_id);
 
   return ERR_NOERR;
@@ -1246,6 +1284,7 @@ void do_get_doc_info_query(server_state_t* ss, query_mode_t mode, query_entry_t*
         s->info_len = hq->r.doc_info_len;
         s->info = hq->r.doc_info;
         hq->r.doc_info = NULL;
+        s->doc_len = hq->r.doc_len;
         // return
         RETURN_RESULT;
       default:
@@ -2364,7 +2403,8 @@ error_t reset_forward_query(
                              0, requestor,
                              // params for proc.
                              do_forward_query);
-       
+  if( err ) return err;
+
   // copy over the request info.
   q->row = row;
   q->doLocate = doLocate;
@@ -3693,7 +3733,7 @@ error_t server_schedule_queries(shared_server_state_t* shared, void* reqs, int n
 {
   size_t x = 0;
   int victim = 0;
-  error_t err;
+  error_t err = ERR_NOERR;
   server_state_t* tgt;
   int rc;
   int i;
@@ -3748,7 +3788,7 @@ error_t server_schedule_queries(shared_server_state_t* shared, void* reqs, int n
     assert(!rc);
   }
 
-  return ERR_NOERR;
+  return err;
 
 }
 
@@ -3890,6 +3930,33 @@ error_t setup_parallel_query(parallel_query_t* q,
   return ERR_NOERR;
 }
 
+error_t setup_parallel_query_take(parallel_query_t* q,
+                             process_entry_t* requestor,
+                             index_locator_t loc,
+                             int query_size, int num_queries,
+                             void* queries)
+{
+  error_t err;
+
+  memset(q, 0, sizeof(parallel_query_t));
+
+  err = setup_process_entry( &q->proc,
+                       QUERY_TYPE_PARALLEL_QUERY, loc,
+                       0, requestor,
+                       do_parallel_query);
+  if( err ) return err;
+
+  q->query_size = query_size;
+  q->num_queries = num_queries;
+  q->queries = NULL;
+
+  if( q->num_queries == 0 ) return ERR_PARAM;
+
+  q->queries = queries;
+  if( ! q->queries ) return ERR_PARAM;
+
+  return ERR_NOERR;
+}
 void cleanup_parallel_query(parallel_query_t* q)
 {
   assert(q->proc.entry.type == QUERY_TYPE_PARALLEL_QUERY);
@@ -4023,10 +4090,11 @@ void cleanup_locate_range(parallel_query_t* q )
   cleanup_parallel_query(q);
 }
 
-error_t setup_get_doc_info_results( parallel_query_t* ctx,
+static
+error_t do_setup_get_doc_info_results( parallel_query_t* ctx,
                              process_entry_t* requestor,
                              index_locator_t loc,
-                             results_t* results)
+                             results_t* results, int get_doc_len)
 {
   long i, j;
   error_t err;
@@ -4044,7 +4112,7 @@ error_t setup_get_doc_info_results( parallel_query_t* ctx,
     j = results_reader_next(&reader, &document, NULL);
 
     err = setup_get_doc_info_query((get_doc_info_query_t*) ith_query(ctx, i),
-                               & ctx->proc, loc, document);
+                               & ctx->proc, loc, document, get_doc_len);
     if( ! err && ! j ) err = ERR_INVALID; // didn't read one!
     if( err ) {
       for( j = 0; j < i; j++ ) {
@@ -4057,6 +4125,22 @@ error_t setup_get_doc_info_results( parallel_query_t* ctx,
 
   return ERR_NOERR;
 }
+error_t setup_get_doc_info_results( parallel_query_t* ctx,
+                             process_entry_t* requestor,
+                             index_locator_t loc,
+                             results_t* results)
+{
+  return do_setup_get_doc_info_results(ctx, requestor, loc, results, 0);
+}
+error_t setup_get_doc_info_doc_len_results( parallel_query_t* ctx,
+                             process_entry_t* requestor,
+                             index_locator_t loc,
+                             results_t* results)
+{
+  return do_setup_get_doc_info_results(ctx, requestor, loc, results, 1);
+}
+
+
 void cleanup_get_doc_info_results(parallel_query_t* ctx ) 
 {
   if( ctx->queries ) {
@@ -4067,28 +4151,44 @@ void cleanup_get_doc_info_results(parallel_query_t* ctx )
   }
   cleanup_parallel_query(ctx);
 }
-error_t get_doc_info_results( parallel_query_t* ctx, 
-                       int* num, long** lensOut, unsigned char*** infosOut )
+error_t get_doc_info_doc_len_results( parallel_query_t* ctx, 
+                       int* num, long** lensOut, unsigned char*** infosOut,
+                       int64_t** doc_lensOut )
 {
   long* lens = NULL;
   unsigned char** infos = NULL;
+  int64_t* doc_lens = NULL;
   if( ctx->queries ) {
     lens = malloc(sizeof(long)*ctx->num_queries);
     if( ! lens ) return ERR_MEM;
     infos = malloc(sizeof(unsigned char*)*ctx->num_queries);
     if( ! infos ) return ERR_MEM;
+    if( doc_lensOut ) {
+      doc_lens = malloc(sizeof(int64_t)*ctx->num_queries);
+      if( ! doc_lens ) return ERR_MEM;
+    }
     for( long j = 0; j < ctx->num_queries; j++ ) {
       get_doc_info_query_t* q = (get_doc_info_query_t*) ith_query(ctx,j);
       lens[j] = q->info_len;
       infos[j] = q->info;
+      if( doc_lensOut ) {
+        // Subtract 1 for the 'EOF' character.
+        doc_lens[j] = q->doc_len - 1;
+      }
       q->info = NULL;
     }
   }
   *num = ctx->num_queries;
   *lensOut = lens;
   *infosOut = infos;
+  if( doc_lensOut ) *doc_lensOut = doc_lens;
 
   return ERR_NOERR;
+}
+error_t get_doc_info_results( parallel_query_t* ctx, 
+                       int* num, long** lensOut, unsigned char*** infosOut )
+{
+  return get_doc_info_doc_len_results(ctx, num, lensOut, infosOut, NULL);
 }
 
 error_t setup_string_rows_all_query(
@@ -4404,7 +4504,8 @@ error_t setup_results_query(
 
 void cleanup_results_query(results_query_t* q)
 {
-  assert( is_result_query(q->proc.entry.type) );
+  assert( is_result_query(q->proc.entry.type) ||
+          q->proc.entry.type == 0 );
   results_destroy(&q->results);
   cleanup_process_entry(&q->proc);
 }
@@ -4439,7 +4540,8 @@ error_t setup_range_to_results_query(
 
 void cleanup_range_to_results_query(range_to_results_query_t* q ) 
 {
-  assert( q->results.proc.entry.type == QUERY_TYPE_RANGE_TO_RESULTS );
+  assert( q->results.proc.entry.type == QUERY_TYPE_RANGE_TO_RESULTS ||
+          q->results.proc.entry.type == 0 );
 
   cleanup_results_query(&q->results);
 }
@@ -6350,6 +6452,7 @@ void cleanup_generic(query_entry_t* e)
         for( long i = 0; i < pq->num_queries; i++ ) {
           cleanup_generic(ith_query(pq, i));
         }
+        cleanup_parallel_query(pq);
       }
       break;
     case QUERY_TYPE_BOOLEAN:

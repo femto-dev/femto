@@ -80,6 +80,13 @@ error_t hashmap_insert(hashmap_t* h, hm_entry_t* entry);
   */
 int hashmap_retrieve(hashmap_t* h, hm_entry_t* entry);
 /**
+  retrieves the entry; returns 1 if it was found, 0 otherwise
+  *valuePtr will be set to, on output, &table_entry.value.
+  This pointer is valid until the next hashtable operation.
+  */
+int hashmap_retrieve_ptr(hashmap_t* h, void* key, void*** valuePtr);
+
+/**
   deletes an entry with key entry->key from the hashmap.
   Sets entry->key and entry->value to the key and value for
   the deleted hashmap.
