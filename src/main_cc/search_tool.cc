@@ -1041,6 +1041,8 @@ int main( int argc, char** argv )
                 fprintf(out, "For pattern %s\n", parts[m.query]);
                 
                 if( m.issuggestion ) fputc('*', out);
+              }
+              if( verbose || by_index ) {
                 fprintf(out, "% 4" PRIi64  " [%" PRIi64 ",%" PRIi64 "] \"", m.last - m.first + 1, m.first, m.last);
                 fprint_alpha(out, m.match_len, m.match);
                 fprintf(out, "\"%c", sep);
