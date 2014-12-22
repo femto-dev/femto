@@ -403,16 +403,44 @@ struct RecordSortingCriterion {
       return compare(a,b) < 0;
     }
 
-    /*
-    // Compare two records with key parts already stored.
-    // This function just assumes that no bytes already match.
-    int compare(const RecordWithKeyPartType& a, const RecordWithKeyPartType& b) const
+    // Operator is less-than to be used as STL comparison function.
+    bool operator()(const Record& a,
+                    const Record& b) const
     {
-      if( sort_ascending ) 
-        return compare_record_with_key(ctx, a, b);
-      else
-        return -1*compare_record_with_key(ctx, a, b);
-    }*/
+      return compare(a, b) < 0;
+    }
+};
+
+template<typename Record,
+         typename Criterion,
+         typename SecondCriterion>
+struct DoubleRecordSortingCriterion {
+    Criterion ctx;
+    SecondCriterion actx;
+    // Constructor saves the context.
+    explicit DoubleRecordSortingCriterion(Criterion ctx, SecondCriterion actx)
+      : ctx(ctx), actx(actx)
+    {
+    }
+
+    // Compare two records with the appropriate context.
+    int compare(const Record& a,
+                const Record& b) const
+    {
+      int cmp = CompareRecord<Record,Criterion>::compare(ctx, a, b);
+      if( cmp == 0 ) cmp =  CompareRecord<Record,SecondCriterion>::compare(actx, a, b);
+      return cmp;
+    }
+
+    bool equals(const Record& a, const Record& b) const
+    {
+      return compare(a,b) == 0;
+    }
+
+    bool less(const Record& a, const Record& b) const
+    {
+      return compare(a,b) < 0;
+    }
 
     // Operator is less-than to be used as STL comparison function.
     bool operator()(const Record& a,
@@ -420,17 +448,8 @@ struct RecordSortingCriterion {
     {
       return compare(a, b) < 0;
     }
-    /*
-    bool operator()(const RecordWithKeyPartType& a,
-                    const RecordWithKeyPartType& b) const
-    {
-      return compare(a, b) < 0;
-    }
-    const Context* get_context() {
-      return ctx;
-    }
-    */
 };
+
 
 
 template <typename Tag, typename Record, typename Criterion>

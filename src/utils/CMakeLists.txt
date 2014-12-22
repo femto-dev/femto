@@ -26,7 +26,11 @@ set(FEMTO_UTIL_SRCS
     processors.h
     processors.c
     iostats.h
-    iostats.c)
+    iostats.c
+    string_sort.h
+    string_sort.c
+    suffix_sort.h
+    suffix_sort.c)
 
 set(UTIL_TESTS
     bit_funcs_test

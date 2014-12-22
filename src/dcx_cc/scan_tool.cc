@@ -113,7 +113,7 @@ int main( int argc, char** argv )
   std::vector<std::string> patterns;
   int rc;
 
-  int has_dashdash = 0;
+  //int has_dashdash = 0;
   int on_patterns = 0;
   int last_pat = 1;
 
@@ -148,7 +148,7 @@ int main( int argc, char** argv )
 
   for( int i = 1; i < argc; i++ ) {
     if( 0 == strcmp(argv[i], "--") ) {
-      has_dashdash = 1;
+      //has_dashdash = 1;
     } else if( argv[i][0] == '-' ) {
       // OK it's an option
     } else {

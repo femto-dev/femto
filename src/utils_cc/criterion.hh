@@ -47,7 +47,7 @@
      key_part_t get_key_part(size_t i) const;
      size_t get_num_key_parts() const;
    }
-   or else imelement KeyTraits for these (see compare_record.hh)
+   or else implement KeyTraits for these (see compare_record.hh)
  *
  * Note -- when using permutation functions, the algorithm needs
  * to be able to convert the key into a number. Therefore,
@@ -56,5 +56,13 @@
 
 struct return_key_criterion_tag { };
 struct compare_criterion_tag { };
+
+struct CompareSameCriterion {
+   typedef compare_criterion_tag criterion_category;
+   template<typename Record>
+   int compare(Record a, Record b) const {
+     return 0;
+   }
+};
 
 #endif

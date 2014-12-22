@@ -4,7 +4,7 @@ CXX=$(MPICXX)
 
 noinst_LTLIBRARIES = libfemto_dcx_cc.la
 
-libfemto_dcx_cc_la_SOURCES = dcx.hh dcx.cc dcover.hh dcover.cc
+libfemto_dcx_cc_la_SOURCES = dcx.hh dcx.cc dcover.hh dcover.cc dcx_inmem.hh dcx_inmem.cc two_stage.hh two_stage.cc
 
 LDADD = libfemto_dcx_cc.la ../main/libfemto_seq.la ../main/libfemto.la ../main/libfemto_bwt.la ../mpi/libfemto_mpi_cc.la ../utils_cc/libfemto_util_cc.la ../utils/libfemto_util.la -lssl -lcrypto
 

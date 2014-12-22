@@ -139,6 +139,15 @@ class Dcover
     return table[i][j];
   }
 
+  const static Dcover<Period> g;
+
+  // Get the instance for this one
+  /*static const Dcover<Period> get(void)
+  {
+    static Dcover<Period> mine;
+    return mine;
+  }*/
+
   void which_samples_to_use(int i, int j, int* i_off, int* j_off) const
   {
     if( EXTRA_CHECKS ) {
@@ -152,6 +161,7 @@ class Dcover
       assert( 0 <= *j_off && *j_off < sample_size );
     }
   }
+
 
   int get_sample(int i) const // return index j s.t. cover[j] == i, or -1.
   {
@@ -253,8 +263,6 @@ class Dcover
     return (cover_reverse_lookup(x) != -1);
   }
 };
-
-
 
 
 

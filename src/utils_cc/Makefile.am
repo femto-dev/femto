@@ -2,7 +2,7 @@ AM_CPPFLAGS = -I$(srcdir)/../utils
 
 noinst_LTLIBRARIES = libfemto_util_cc.la
 
-libfemto_util_cc_la_SOURCES = error.hh error_exception.cc utils.hh mmap.hh mmap.cc utils.cc varint.hh varint.cc pipelining.hh pipelining.cc record.hh criterion.hh compare_record.hh compare_record.cc sort_context.hh merger.hh merge_node.hh merge_node.cc print_records_node.hh file_pipe.hh file_pipe.cc file_pipe_context.hh file_pipe_context.cc compile_time.hh compile_time.cc distribute_utils.hh distribute_utils.cc bucket_sort.hh bucket_sort.cc file_find_node.hh file_find_node.cc distributor_node.hh distributor_node.cc sort_basic.hh sort_basic.cc sort.hh sort.cc io_pipe.hh io_pipe.cc
+libfemto_util_cc_la_SOURCES = error.hh error_exception.cc utils.hh mmap.hh mmap.cc utils.cc varint.hh varint.cc pipelining.hh pipelining.cc record.hh criterion.hh compare_record.hh compare_record.cc sort_context.hh merger.hh merge_node.hh merge_node.cc print_records_node.hh file_pipe.hh file_pipe.cc file_pipe_context.hh file_pipe_context.cc compile_time.hh compile_time.cc distribute_utils.hh distribute_utils.cc bucket_sort.hh bucket_sort.cc file_find_node.hh file_find_node.cc distributor_node.hh distributor_node.cc sort_basic.hh sort_basic.cc sort.hh sort.cc io_pipe.hh io_pipe.cc string_sort.cc
 # removed: bucket_trie.hh bucket_trie.cc form_runs_node.hh form_runs_node.cc sort_node.hh sort_node.cc
 if HAS_LINUX_LIBAIO
 libfemto_util_cc_la_SOURCES += kaio_pipe.hh kaio_pipe.cc

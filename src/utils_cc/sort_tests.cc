@@ -271,7 +271,8 @@ int main(int argc, char** argv)
       start_clock();
 
       typedef BucketSorter<MyRecord, MyCriterion> MySorter;
-      MySorter::simple_sort(crit, &values[0], values.size());
+      MySorter::both_criterion_t use_crit(crit, CompareSameCriterion());
+      MySorter::simple_sort(use_crit, &values[0], values.size());
       stop_clock();
       print_timings("megabytes", num_mb);
     } else if( test == -7 ) {

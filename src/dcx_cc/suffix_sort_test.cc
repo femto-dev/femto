@@ -71,7 +71,7 @@ std::string take_prefix(const char* str, size_t len, size_t max)
 int test_num = 0;
 
 template<typename Character, int nbits_character, typename Offset, int Period>
-void check_ssort_impl(size_t len, const char* input, const int* expected_output, int bins_per_proc, Character max_character=255)
+void check_ssort_impl(size_t len, const char* input, const int* expected_output, int bins_per_proc, int inmem, Character max_character=255)
 {
   typedef Character character_t;
   typedef Offset offset_t;
@@ -151,7 +151,7 @@ void check_ssort_impl(size_t len, const char* input, const int* expected_output,
               8*sizeof(Offset) - 1,
               8*sizeof(Offset) - 1,
               Period> dcx_t;
-  dcx_t dcx(tmpdir, len, nbins, DEFAULT_COMM, 0, NULL);
+  dcx_t dcx(tmpdir, len, nbins, DEFAULT_COMM, inmem, 0, NULL);
 
   file_read_pipe_t input_pipe(fctx_fixed_cached(input_fname));
   fileset output_set(nbins, fctx_fixed_cached(output_fname));
@@ -209,14 +209,14 @@ void check_ssort_impl(size_t len, const char* input, const int* expected_output,
   }
 }
 
-void check_ssort_normal(size_t len, const char* input, const int* expected_output)
+void check_ssort_normal(size_t len, const char* input, const int* expected_output, int inmem)
 {
   for( int i = 0; i < NUMBINCHECK; i++ ) {
     int nbins = bin_check[i];
-    check_ssort_impl<uint8_t, 9, uint32_t, 3>(len, input, expected_output, nbins);
+    check_ssort_impl<uint8_t, 9, uint32_t, 3>(len, input, expected_output, nbins, inmem);
 #ifndef FASTCOMPILE
-    check_ssort_impl<uint8_t, 9, uint32_t, 7>(len, input, expected_output, nbins);
-    check_ssort_impl<uint8_t, 9, uint32_t, 13>(len, input, expected_output, nbins);
+    check_ssort_impl<uint8_t, 9, uint32_t, 7>(len, input, expected_output, nbins, inmem);
+    check_ssort_impl<uint8_t, 9, uint32_t, 13>(len, input, expected_output, nbins, inmem);
 #endif
     //check_ssort_impl<uint8_t, uint32_t, 21>(len, input, expected_output, nbins);
     //check_ssort_impl<uint8_t, uint32_t, 31>(len, input, expected_output, nbins);
@@ -233,7 +233,7 @@ void check_ssort_normal(size_t len, const char* input, const int* expected_outpu
   }
 }
 
-void check_ssort_tiny(size_t len, const char* input, const int* expected_output)
+void check_ssort_tiny(size_t len, const char* input, const int* expected_output, int inmem)
 {
   // Just don't do examples with too-big lengths.
   if( len >= 16000 ) return;
@@ -247,49 +247,53 @@ void check_ssort_tiny(size_t len, const char* input, const int* expected_output)
   for( int i = 0; i < NUMBINCHECK; i++ ) {
 //#ifndef FASTCOMPILE
     int nbins = bin_check[i];
-    check_ssort_impl<uint8_t, 8, uint16_t, 3>(len, input, expected_output, nbins, 254);
+    check_ssort_impl<uint8_t, 8, uint16_t, 3>(len, input, expected_output, nbins, inmem, 254);
 //#endif
   }
 }
 
-void check_ssort_wide(size_t len, const char* input, const int* expected_output)
+void check_ssort_wide(size_t len, const char* input, const int* expected_output, int inmem)
 {
   for( int i = 0; i < NUMBINCHECK; i++ ) {
 #ifndef FASTCOMPILE
     int nbins = bin_check[i];
-    check_ssort_impl<uint64_t, 63, uint64_t, 3>(len, input, expected_output, nbins);
+    check_ssort_impl<uint64_t, 63, uint64_t, 3>(len, input, expected_output, nbins, inmem);
 #endif
   }
 }
 
 void check_ssort(size_t len, const char* input, const int* expected_output)
 {
-  if( iproc == 0 ) {
-    if( VERBOSE ) {
-      std::cout << "##########################" 
-                << " Running tiny suffix sort test with (" << len << ") \'" << take_prefix(input,len,20) << "\'" << std::endl;
+  int inmem = 0;
+  for( inmem = 1; inmem>=0; inmem--) {
+    std::cout << "########################## inmem= " << inmem << std::endl;
+    if( iproc == 0 ) {
+      if( VERBOSE ) {
+        std::cout << "##########################" 
+                  << " Running tiny suffix sort test with (" << len << ") \'" << take_prefix(input,len,20) << "\'" << std::endl;
+      }
     }
-  }
 
-  check_ssort_tiny(len, input, expected_output);
+    check_ssort_tiny(len, input, expected_output, inmem);
 
-  if( iproc == 0 ) {
-    if( VERBOSE ) {
-      std::cout << "##########################" 
-                << " Running normal suffix sort test with (" << len << ") \'" << take_prefix(input,len,20) << "\'" << std::endl;
+    if( iproc == 0 ) {
+      if( VERBOSE ) {
+        std::cout << "##########################" 
+                  << " Running normal suffix sort test with (" << len << ") \'" << take_prefix(input,len,20) << "\'" << std::endl;
+      }
     }
-  }
 
-  check_ssort_normal(len, input, expected_output);
+    check_ssort_normal(len, input, expected_output, inmem);
 
-  if( iproc == 0 ) {
-    if( VERBOSE ) {
-      std::cout << "##########################" 
-                << " Running wide suffix sort test with (" << len << ") \'" << take_prefix(input,len,20) << "\'" << std::endl;
+    if( iproc == 0 ) {
+      if( VERBOSE ) {
+        std::cout << "##########################" 
+                  << " Running wide suffix sort test with (" << len << ") \'" << take_prefix(input,len,20) << "\'" << std::endl;
+      }
     }
-  }
 
-  check_ssort_wide(len, input, expected_output);
+    check_ssort_wide(len, input, expected_output, inmem);
+  }
 }
 
 // Test sequences consisting of descending characters.
@@ -406,6 +410,13 @@ int main(int argc, char** argv)
     }
     MPI_Bcast( tmpdir, len, MPI_BYTE, 0, MPI_COMM_WORLD );
 #endif 
+  }
+ 
+  {
+    const char* input = "ba";
+    int output[] = {1,0};
+    std::cout << "Small test" << std::endl;
+    check_ssort_wide(2, input, output, 1);
   }
 
   /*test_repeats('\0', 1);

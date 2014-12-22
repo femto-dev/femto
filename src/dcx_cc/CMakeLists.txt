@@ -13,7 +13,12 @@ set(FEMTO_DCX_CC_SRCS
     dcx.hh
     dcx.cc
     dcover.hh
-    dcover.cc)
+    dcover.cc
+    dcover_internal.h
+    dcover_internal.c
+    dcx_inmem.cc
+    two_stage.cc
+    )
 
 add_library(femto_dcx_cc STATIC ${FEMTO_DCX_CC_SRCS})
 

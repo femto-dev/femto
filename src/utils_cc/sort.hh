@@ -620,9 +620,9 @@ struct Sorter : GeneralSorter<Record, Criterion>
         }
 
         // Start a new job.
-        typedef typename Splitters::splitter_record_t splitter_record_t;
+        //typedef typename Splitters::splitter_record_t splitter_record_t;
         typedef typename Splitters::splitter_key_t splitter_key_t;
-        typedef typename Splitters::splitter_kc_traits_t splitter_kc_traits_t;
+        //typedef typename Splitters::splitter_kc_traits_t splitter_kc_traits_t;
 
         splitter_key_t min_sk, max_sk;
         min_sk = status->totals_bybin->t[next_to_start].min;

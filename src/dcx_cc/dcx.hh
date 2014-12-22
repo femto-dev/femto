@@ -44,6 +44,7 @@ extern "C" {
 #include "bit_funcs.h"
 #include "buffer.h"
 #include "buffer_funcs.h"
+#include "suffix_sort.h"
 }
 
 #ifdef HAVE_MPI_H
@@ -60,6 +61,8 @@ extern "C" {
 #include "sort.hh"
 #include "compare_record.hh" // right_shift_key_parts
 #include "mpi_utils.hh" // copy_file, DEFAULT_COMM, My_comm, MPI_handler
+
+#include "dcx_inmem.hh"
 
 #define NUM_RANDOM_DOCTORS 1
 
@@ -807,7 +810,11 @@ public:
   typedef Dcx<nbits_name, nbits_offset, nbits_document, Period> SubDcx;
   typedef typename SubDcx::offset_m_name_record_t recursion_input_record_t;
 
-  
+  enum {
+    nbytes_character = (nbits_character + 7)/8,
+    nbytes_offset = (nbits_offset + 7)/8
+  };
+
   // Uses current io stats!
   template<typename Record>
   static
@@ -1502,9 +1509,9 @@ public:
   template<typename InBins>
   void begin_writing_split(InBins* bins, typename InBins::splitters_t* bin_splitters, std::vector<typename InBins::splitters_t*> * file_splitters, long use_mem_per_bin = USE_MEMORY_PER_BIN)
   {
-    typedef typename InBins::splitter_record_t record_t;
-    typedef typename InBins::splitter_criterion_t criterion_t;
-    typedef SampleSplitters<record_t,criterion_t> splitters_t;
+    //typedef typename InBins::splitter_record_t record_t;
+    //typedef typename InBins::splitter_criterion_t criterion_t;
+    //typedef SampleSplitters<record_t,criterion_t> splitters_t;
 
     assert( file_splitters->size() == (size_t ) bins->n_bins );
 
@@ -1827,7 +1834,7 @@ public:
       if( a.name > b.name ) return 1;
      
       int a_amt, b_amt;
-      ctx->cover.which_samples_to_use(a.offset % cover_t::period,
+      cover_t::g.which_samples_to_use(a.offset % cover_t::period,
                                       b.offset % cover_t::period,
                                       &a_amt, &b_amt);
 
@@ -1927,7 +1934,7 @@ public:
   // Call this one to set an offset to the appropriate value for recursion.
   offset_t down_offset( offset_t offset ) const
   {
-    int cover_idx = cover.get_sample(offset % cover_t::period);
+    int cover_idx = cover_t::g.get_sample(offset % cover_t::period);
     if( EXTRA_CHECKS ) assert(0 <= cover_idx && cover_idx < cover_t::period);
     return characters_per_mod * cover_idx + offset/cover_t::period;
   }
@@ -1939,7 +1946,7 @@ public:
     int cover_idx = offset / characters_per_mod;
     if( EXTRA_CHECKS ) assert(0 <= cover_idx && cover_idx < cover_t::period);
     offset_t added = offset - characters_per_mod * cover_idx;
-    return added*cover.period + cover.get_cover(cover_idx);
+    return added*cover_t::period + cover_t::g.get_cover(cover_idx);
     /*} else {
       // it's padding at the end, we don't care about it.
       return n + (offset - sample_n);
@@ -1957,7 +1964,7 @@ public:
     int cover_idx = offset / characters_per_mod;
     if( EXTRA_CHECKS ) assert(0 <= cover_idx && cover_idx < cover_t::period);
     offset_t added = offset - characters_per_mod * cover_idx;
-    return added*cover.sample_size + cover_idx;
+    return added*cover_t::g.sample_size + cover_idx;
   }
 
   // Unpack a previously packed offset.
@@ -1967,7 +1974,7 @@ public:
     int sample_idx = offset % cover_t::sample_size;
     offset_t before_chunks = offset / cover_t::sample_size;
 
-    return before_chunks*cover_t::period + cover.get_cover(sample_idx);
+    return before_chunks*cover_t::period + cover_t::g.get_cover(sample_idx);
   }
 
 
@@ -2186,7 +2193,11 @@ public:
   // MEMBER VARIABLES:
  
 
-  const cover_t cover; // holds difference cover tables.
+  //const cover_t cover; // holds difference cover tables.
+
+  // Should we do an internal memory suffix sort?
+  int force_inmem;
+  int inmem;
 
   // Stuff used here.
   std::string tmp_dir;
@@ -2242,10 +2253,11 @@ public:
   }
 
   // CONSTRUCTOR: Dcx constructor dcx constructor
-  Dcx(std::string tmp_dir, offset_t n_in, bin_idx_t n_bins, My_comm in_comm, size_t depth, const pipeline_node* parent)
+  Dcx(std::string tmp_dir, offset_t n_in, bin_idx_t n_bins, My_comm in_comm, int force_inmem, size_t depth, const pipeline_node* parent)
     : pipeline_node(parent, "dcx d="+num_to_string(depth), (PRINT_TIMING_DCX>0 && n_in>=PRINT_TIMING_DCX)),
+      force_inmem(force_inmem),
       tmp_dir(tmp_dir),
-      bin_overlap(cover.period),
+      bin_overlap(cover_t::period),
       n(0), // set below
       characters_per_mod(0), // set below
       sample_n(0), // set below
@@ -2268,6 +2280,23 @@ public:
       merge_nonsample_whichfile_splitters(),
       num_splitter_records_per_bin(0)
   {
+    // Adjust whether or not we will do it in memory.
+    inmem = force_inmem;
+    if( force_inmem != 0 && force_inmem != 1 ) {
+      // Compute how much memory we would be using.
+      long long mem_avail = 0;
+      get_phys_mem(&mem_avail);
+      long size_text = (nbits_character + 7)/8;
+      long size_offsets = (nbits_offset + 7)/8;
+      long long will_use = n_in * (size_text + 2*size_offsets);
+      //long size_documents = (nbits_document + 7)/8;
+      if( mem_avail/2 > will_use ) {
+        inmem = 1;
+      } else {
+        inmem = 0;
+      }
+    }
+
     if( ! dcx_g_handler ) {
       size_t lcm_sizes = lcm_record_sizes(1);
       lcm_sizes = SubDcx::lcm_record_sizes(lcm_sizes);
@@ -2307,6 +2336,11 @@ public:
     rc = MPI_Comm_rank(comm,&iproc);
     if( rc ) throw error(ERR_IO_STR("MPI_Comm_rank failed"));
 #endif
+
+    // Never use the in-memory algorithm for a distributed job.
+    if( nproc > 1 ) {
+      inmem = 0;
+    }
 
     assert( n_bins >= nproc );
 
@@ -2380,11 +2414,11 @@ public:
     // in other words, we pretend that there are cover.period NULLs at the
     // end of the input string, and we also add a character to make sure that
     // we have a 0 character between each subproblem in recursion.
-    characters_per_mod = 1 + ceildiv(n,cover.period);
+    characters_per_mod = 1 + ceildiv(n,cover_t::period);
         //  (n+cover.period)/cover.period + 1;
 
     {
-      offset_t plus_period = n_in + cover.period;
+      offset_t plus_period = n_in + cover_t::period;
       offset_t n_bins_r = n_bins;
       //printf("n_bins %i n_bins_r %i\n", (int) n_bins, (int) n_bins_r);
       offset_bin_size = ceildiv_safe(plus_period, n_bins_r);
@@ -2397,11 +2431,11 @@ public:
       // This is important to coordinate the sample ranks bins,
       // which have a different numbering system (packed offsets)
       // with the rest of the algorithm.
-      offset_t cov_period = cover.period;
+      offset_t cov_period = cover_t::period;
       offset_t period_multiples = ceildiv_safe(offset_bin_size, cov_period);
       offset_bin_size = period_multiples * cov_period;
 
-      packed_offset_bin_size = period_multiples * cover.sample_size;
+      packed_offset_bin_size = period_multiples * cover_t::g.sample_size;
 
       if( n > 0 ) {
         bin_idx_t last_bin = (n-1)/offset_bin_size;
@@ -2415,7 +2449,7 @@ public:
     // set sample_n
     {
       // set sample_n to a default so it can be used below
-      sample_n = characters_per_mod * cover.sample_size;
+      sample_n = characters_per_mod * cover_t::g.sample_size;
 
       // now compute the proper sample_n by using the maximum value
       // in the sub-problems. We're doing this so that we can avoid
@@ -2425,10 +2459,10 @@ public:
       //printf("sample_n %i\n", (int) sample_n);
       offset_t biggest_sub = 0;
       offset_t start = 0;
-      if( n > cover.period ) start = n - cover.period;
+      if( n > cover_t::period ) start = n - cover_t::period;
 
       for( offset_t i = start; i < n; i++ ) {
-        if( cover.in_cover(i % cover.period) ) {
+        if( cover_t::g.in_cover(i % cover_t::period) ) {
           offset_t sub_offset = down_offset(i);
           if( sub_offset > biggest_sub ) biggest_sub = sub_offset;
         }
@@ -2525,6 +2559,91 @@ public:
     }
     return ret;
   }
+  
+  /* Suffix sort it in memory.
+   */
+  template<typename InputBins,
+           typename InputToCharacterTranslator,
+           typename OutputBins> // some kind of Bins
+  struct sort_inmem_node : public pipeline_node {
+    const Dcx* dcx;
+    suffix_sorting_problem *p;
+    InputBins* input;
+    OutputBins* output;
+
+    sort_inmem_node(const Dcx* dcx,
+                    suffix_sorting_problem *p,
+                    // IN
+                    InputBins* input,
+                    // OUT
+                    OutputBins* output)
+      : pipeline_node(dcx, "sort_inmem d="+dcx->depth_string, dcx->should_print_timing()),
+        dcx(dcx),
+        p(p),
+        input(input),
+        output(output)
+    {
+    }
+    virtual void run()
+    {
+      offset_t n = dcx->n;
+
+      for(bin_idx_t b=0;b < input->n_bins; b++ ) {
+        if( input->is_local(b) ) {
+          input->begin_reading_bin(b);
+
+          typename InputBins::bin_t* input_by_offset = &input->bins[b];
+          // InputBins is:
+          //  recursion input offset_m_name_record_t OffsetMaybeUniqueNameRec
+          // or input_by_offset_t of InCharacter 
+          typedef typename InputBins::record_t input_record_t;
+          pipe_iterator<input_record_t> read(input_by_offset->from_bin);
+          pipe_iterator<input_record_t> end;
+          offset_t offset = input_by_offset->num_before;
+
+          sptr_t byte_offset = 0;
+          unsigned char* T = p->T;
+          for( offset_t i = 0; i < input_by_offset->num_records; i++ ) {
+            if( EXTRA_CHECKS ) {
+              assert( read != end );
+              assert( offset < dcx->n );
+            }
+            input_record_t r = *read;
+            character_t ch = InputToCharacterTranslator::translate(r);
+
+            set_T(T, nbytes_character, byte_offset, ch);
+
+            ++read;
+            offset++;
+            byte_offset += nbytes_character;
+          }
+
+          read.finish();
+        }
+      }
+      
+      // Then, suffix sort in memory.
+      error_t err = dcx_inmem_ssort(p, 3);
+      die_if_err(err);
+
+      assert(p->S);
+
+      sptr_t s_byte_offset = 0;
+      unsigned char* S = p->S;
+      for( offset_t i = 0; i < n; i++ ) {
+        offset_rank_record_t r;
+        sptr_t t_byte_offset = get_S(nbytes_offset, S, s_byte_offset);
+        r.offset = t_byte_offset / nbytes_character;
+        r.rank = i;
+        output->push_back(r);
+        s_byte_offset += nbytes_offset;
+      }
+
+      output->finish();
+    }
+  };
+
+
   /* Given (offset, character) records already distributed into offset bins
      finish permuting them into place. Then create tuple records and 
      distribute them to the rank bins. Note that we are storing the
@@ -2721,7 +2840,7 @@ public:
       all_out_bins->push_back(offset_name);
 
       // Now decide if we need to store in recursion_input
-      if( dcx->cover.in_cover(offset_name.offset % cover_t::period) ) {
+      if( cover_t::g.in_cover(offset_name.offset % cover_t::period) ) {
         offset_m_name_record_t for_recursion = offset_name;
         for_recursion.offset = dcx->down_offset(for_recursion.offset);
         if( DEBUG_DCX > 10 ) {
@@ -2769,7 +2888,7 @@ public:
         end = dcx->up_offset(dcx->characters_per_mod * cover_t::sample_size - 1);
 
         for( offset_t i = dcx->n; i <= end; i++ ) {
-          if( dcx->cover.in_cover(i % cover_t::period) ) {
+          if( cover_t::g.in_cover(i % cover_t::period) ) {
             //offset_m_name_t offset_name;
             //offset_name.offset = i;
             //offset_name.name.set(false, 0);
@@ -3238,7 +3357,7 @@ public:
            offset++,i++ ) {
 
         // Are we on a sample or nonsample suffix?
-        bool is_sample_offset = dcx->cover.in_cover(offset % cover_t::period);
+        bool is_sample_offset = cover_t::g.in_cover(offset % cover_t::period);
 
         if( EXTRA_CHECKS ) {
           if( is_sample_offset ) { 
@@ -3291,7 +3410,7 @@ public:
               }
               sample_by_rank->push_back(r);
             } else {
-              int d = dcx->cover.get_nonsample(offset % cover_t::period); 
+              int d = cover_t::g.get_nonsample(offset % cover_t::period); 
 
               if( DEBUG_DCX > 10 ) {
                 printf("node %i nonsample_out[%i]: %s\n", (int) dcx->iproc, (int) d, r.to_string().c_str());
@@ -3593,9 +3712,9 @@ public:
     typedef Splitters splitters_t;
     typedef typename InputBins::record_t record_t;
     typedef typename InputBins::criterion_t criterion_t;
-    typedef typename InputBins::key_t key_t;
+    //typedef typename InputBins::key_t key_t;
     typedef Sorter<record_t,criterion_t,splitters_t> sorter_t;
-    typedef typename sorter_t::sort_status sort_status_t;
+    //typedef typename sorter_t::sort_status sort_status_t;
     typedef typename RecordTraits<record_t>::iterator_t iterator_t;
 
     // PLAN:
@@ -3901,6 +4020,54 @@ public:
 
     barrier(); // we should all be here!
 
+    if( inmem == 1 && n > 0 ) {
+      printf("RUNNING IN MEMORY SUFFIX SORT\n");
+
+      // Do it in memory!
+      long nalloc = n + 2*Period;
+      suffix_sorting_problem p;
+
+      // First, set up our problem description and try allocating
+      // the necessary buffers.
+      
+      p.n = n;
+      p.t_size = nalloc * nbytes_character;
+      p.s_size = nalloc * nbytes_offset;
+      p.bytes_per_character = nbytes_character;
+      p.bytes_per_pointer = nbytes_offset;
+      p.T = (unsigned char*) malloc(nalloc * nbytes_character);
+      p.S = (unsigned char*) malloc(nalloc * nbytes_offset );
+
+      if( p.T && p.S ) {
+        // We tested we had enough memory, but p.S is actually
+        // allocated by the suffix sorter.
+        free(p.S);
+        p.S = NULL;
+
+        // Zero out extra space at end of T and S
+        for( long i = n; i < nalloc; i++ ) {
+          set_T(p.T, nbytes_character, i*nbytes_character, 0);
+        }
+
+        sort_inmem_node<InputBins,InputToCharacterTranslator,OutputBins>
+           sort_inmem(this, &p, input_bins, output_bins);
+
+        // Read the data from the bins into T and S.
+        input_bins->begin_reading();
+        begin_writing_even(output_bins, output_bin_size, output_bin_overlap);
+        sort_inmem.start();
+        dcx_g_handler->work();
+        sort_inmem.finish();
+        output_bins->end_writing();
+        input_bins->end_reading();
+
+        return;
+      } else {
+        // Couldn't allocate... falling back on external sort.
+        fprintf(stderr, "Warning: couldn't allocate T and S; falling back on external sort\n");
+      }
+    }
+
     {
       if( SHOULD_PRINT_PROGRESS ) {
         printf("permute and form splitters depth=%i n=%lli\n", (int) depth, (long long int) n);
@@ -4004,7 +4171,7 @@ public:
     // Setup the subproblem for the recursion
     // Set the offset bin size for the recursion.
     // This is just based on the number of sample suffixes
-    SubDcx sub(tmp_dir, sample_n, n_bins, comm, depth+1, this);
+    SubDcx sub(tmp_dir, sample_n, n_bins, comm, force_inmem, depth+1, this);
 
     names_by_offset_t all_names_by_offset( this, "all_names_by_offset" );
     typename SubDcx::names_by_offset_t recursion_input( &sub, "input" );
@@ -5841,7 +6008,7 @@ void suffix_sort(OutOffset len, InCharacter max_char, read_pipe* input_pipe, std
       nbits_offset,
       nbits_offset,
       DEFAULT_PERIOD> dcx(tmp_dir, len, output_filenames->size(),
-                          DEFAULT_COMM, 0, NULL);
+                          DEFAULT_COMM, 0/*force_inmem*/, 0, NULL);
 
   // We should have at least enough bins for all processors..
   assert( output_filenames->size() >= (size_t) dcx.nproc );
@@ -5909,7 +6076,7 @@ void do_bwt(int n_bins,
   Dcx<ALPHA_SIZE_BITS,
       nbits_offset,
       nbits_document,
-      DEFAULT_PERIOD> dcx(tmp_dir, len, n_bins, DEFAULT_COMM, 0, NULL);
+      DEFAULT_PERIOD> dcx(tmp_dir, len, n_bins, DEFAULT_COMM, 0/*force_inmem*/, 0, NULL);
 
   dcx.bwt(min_char, max_char, doc_end_char, prepared_input,
           info_filename, params, 

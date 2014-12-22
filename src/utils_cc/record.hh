@@ -29,6 +29,7 @@ extern "C" {
 #include <stdint.h>
 }
 #include "utils.hh" //PTR_ADD
+#include "varint.hh" // so we can make them records.
 
 // A record needs to have
 //   typedef record_tag record_category;
@@ -230,6 +231,48 @@ template<> struct RecordTraits<uint32_t> : IntRecordTraits<uint32_t> {};
 template<> struct RecordTraits<int64_t> : IntRecordTraits<int64_t> {};
 template<> struct RecordTraits<uint64_t> : IntRecordTraits<uint64_t> {};
 
+template<int len>
+struct BeIntRecordTraits
+{
+  enum { record_size = len };
+  static size_t get_record_length(const be_uint<len>& r)
+  {
+    return record_size;
+  }
+  static void decode(be_uint<len>& r, const void* p)
+  {
+    const be_uint<len>* record_ptr = (const be_uint<len>*) p;
+    r = *record_ptr;
+  }
+  static void encode(const be_uint<len>& r, void* p)
+  {
+    be_uint<len>* record_ptr = (be_uint<len>*) p;
+    *record_ptr = r;
+  }
+  typedef be_uint<len>* iterator_t;
+  static void* getbase(be_uint<len>* i) {
+    return i;
+  }
+  static be_uint<len>* getiter(void* v) {
+    return (be_uint<len>*) v;
+  }
+  static be_uint<len> get_empty()
+  {
+    be_uint<len> empty(0);
+    return empty;
+  }
+};
+
+
+template<> struct RecordTraits< be_uint<1> > : BeIntRecordTraits<1> {};
+template<> struct RecordTraits< be_uint<2> > : BeIntRecordTraits<2> {};
+template<> struct RecordTraits< be_uint<3> > : BeIntRecordTraits<3> {};
+template<> struct RecordTraits< be_uint<4> > : BeIntRecordTraits<4> {};
+template<> struct RecordTraits< be_uint<5> > : BeIntRecordTraits<5> {};
+template<> struct RecordTraits< be_uint<6> > : BeIntRecordTraits<6> {};
+template<> struct RecordTraits< be_uint<7> > : BeIntRecordTraits<7> {};
+template<> struct RecordTraits< be_uint<8> > : BeIntRecordTraits<8> {};
+
 template<typename Tag,typename Record>
 struct RecordIteratorReally {
   // error!
@@ -297,6 +340,7 @@ class RecordIterator
   // allow iterator to const iterator conversion
   RecordIterator(const RecordIterator& i) : ptr(i.ptr) { }
 
+  explicit RecordIterator(Record* data) : ptr(data) { }
   explicit RecordIterator(void* data) : ptr(data) { }
   RecordIterator(void* data, size_t i)
     : ptr(PTR_ADD(data,i*record_size))

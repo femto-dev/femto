@@ -37,7 +37,9 @@ set(FEMTO_UTIL_CC_SRCS
     sort.hh
     sort.cc
     io_pipe.hh
-    io_pipe.cc)
+    io_pipe.cc
+    string_sort.cc
+    )
 
 # Add libaries used everywhere
 set(LOCAL_DEFAULT_LIBRARIES "${DEFAULT_LIBRARIES}")

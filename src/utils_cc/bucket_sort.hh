@@ -116,7 +116,7 @@ extern "C" {
 // With this or fewer records, when permuting, permute directly.
 #define PERMUTESWITCH_DEFAULT (4*1024*1024)
 
-// TODO DEBUG #define SWITCH_STL
+#define SWITCH_STL
 
 //#define PRINT_TIMING 1
 //#define PRINT_TIMING   100000000
@@ -151,11 +151,15 @@ struct BucketSorterSettings {
   bool Permute;
   int SortSwitch;
   int SwitchPermute;
+  bool compareAfterKey; // if true, we will use compareAfter
+                        // once we get down to a bin or a small enough
+                        // number of records.
   BucketSorterSettings()
     : Parallel(false),
       Permute(false),
       SortSwitch(SORTSWITCH_DEFAULT),
-      SwitchPermute(PERMUTESWITCH_DEFAULT)
+      SwitchPermute(PERMUTESWITCH_DEFAULT),
+      compareAfterKey(false)
   {
   }
 };
@@ -163,12 +167,15 @@ struct BucketSorterSettings {
 /* Compute the min and max records. */
 template<typename Record, /* Record type */
          typename Criterion, /* Comparison criterion */
+         typename CompareAfter = CompareSameCriterion, /* Compare after */
          typename Size = uint64_t,  /* Type to count records */
          int MaxBins = MAXBINS_DEFAULT
          >
 struct BucketSorter {
   typedef Record record_t;
   typedef Criterion criterion_t;
+  typedef CompareAfter after_criterion_t;
+  typedef DoubleRecordSortingCriterion<Record,Criterion,CompareAfter> both_criterion_t;
   typedef Size offset_t;
   typedef DistributeUtils<Record,Criterion> DU;
   // Note -- it does not make sense to run the permutation
@@ -182,12 +189,12 @@ struct BucketSorter {
 
   static bool less_than(const key_t& a, const key_t& b)
   {
-    return DU::less_than(a,b);
+    return DU::less_than(a,b) ;
   }
 
-  static bool less_than(Criterion ctx, Record a, Record b)
+  static bool less_than(both_criterion_t ctx, Record a, Record b)
   {
-    return DU::less_than(ctx, a, b);
+    return ctx.less(a,b);
   }
 
   static ssize_t bin_for_key(const key_t& key, shift_t shift)
@@ -218,7 +225,7 @@ struct BucketSorter {
     key_traits_t::set(a, num);
   }
 
-  static void shell_sort(Criterion ctx, iterator_t a, int n)
+  static void shell_sort(both_criterion_t ctx, iterator_t a, int n)
   {
     // Based on Sedgewick's Shell Sort -- see
     // Analysis of Shellsort and Related Algorithms 1996
@@ -247,7 +254,7 @@ struct BucketSorter {
       }
     }
   }
-  static void insertion_sort(Criterion ctx, iterator_t a, int n)
+  static void insertion_sort(both_criterion_t ctx, iterator_t a, int n)
   {
     int i,j;
     Record v,tmp;
@@ -262,13 +269,11 @@ struct BucketSorter {
       }
     }
   }
-  static void stl_sort(Criterion ctx, iterator_t a, int n)
+  static void stl_sort(both_criterion_t ctx, iterator_t a, int n)
   {
-    RecordSortingCriterion<Record,Criterion> crit(ctx);
-
-    std::sort(a, a+n, crit);
+    std::sort(a, a+n, ctx);
   }
-  static void simple_sort(Criterion ctx, iterator_t a, int n)
+  static void simple_sort(both_criterion_t ctx, iterator_t a, int n)
   {
 #ifdef SWITCH_STL
     stl_sort(ctx,a,n);
@@ -710,6 +715,7 @@ struct BucketSorter {
    * count for the data before this is called.
    **/
   static void sort_impl(Criterion ctx,
+                        both_criterion_t bctx,
                         key_t min, key_t max,
                         /* in and out */ iterator_t data,
                         offset_t start_n,
@@ -737,7 +743,7 @@ struct BucketSorter {
       permute_inplace(ctx, min, max, data, start_n, end_n);
       return;
     } else if( end_n-start_n <= (offset_t) settings->SortSwitch ) {
-      simple_sort(ctx, data + start_n, end_n-start_n);
+      simple_sort(bctx, data + start_n, end_n-start_n);
       return;
     } else {
       int firstbin, lastbin;
@@ -846,12 +852,20 @@ struct BucketSorter {
         key_t bin_max = bins->minmax[bin].max;
         // Does the bin contain more than 1 record?
         // Are all the records in the bin identical?
-        if( num > 1 &&
-            (0 != DU::compare(bin_min, bin_max ) ) ) {
-          // Now sort the recursive problem (serially).
-          sort_impl(ctx, bin_min, bin_max,
-                    data, bin_start, bin_end, parallel && !go_parallel, settings);
+        
+        // do nothing if the bin has 1 record
+        if( num <= 1 ) continue;
+        // only comparison sort (if necessary) if the keys are the same
+        if( 0 == DU::compare(bin_min, bin_max) ) {
+          if( settings->compareAfterKey ) {
+            simple_sort(bctx, data + bin_start, num);
+          }
+          continue;
         }
+        // Otherwise, recurse
+        // Now sort the recursive problem (serially).
+        sort_impl(ctx, bctx, bin_min, bin_max,
+                  data, bin_start, bin_end, parallel && !go_parallel, settings);
       }
     }
 
@@ -869,10 +883,28 @@ struct BucketSorter {
                     offset_t end_n,
                     const settings_t* settings )
   {
+    after_criterion_t after;
+    both_criterion_t both(ctx, after);
     BucketSorterSettings default_settings;
-    sort_impl(ctx,min,max,data,start_n,end_n, true,
+    sort_impl(ctx,both,min,max,data,start_n,end_n, true,
               (settings==NULL)?(&default_settings):(settings) );
   }
+
+  static void sort_compare_after( Criterion ctx, CompareAfter actx,
+                    key_t min, key_t max,
+                    /* in and out */ iterator_t data,
+                    offset_t start_n,
+                    offset_t end_n,
+                    const settings_t* settings )
+  {
+    both_criterion_t both(ctx, actx);
+    BucketSorterSettings use_settings;
+    if( settings ) use_settings = *settings;
+    use_settings.compareAfterKey = true;
+    sort_impl(ctx,both,min,max,data,start_n,end_n, true,
+              &use_settings);
+  }
+
 
   static void sort_file_mmap_easy(Criterion ctx,
                               key_t min, key_t max,
@@ -883,7 +915,7 @@ struct BucketSorter {
                              )
   {
     if( start_n == end_n ) return;
-
+    
     FileMMap memory;
     Pages pgs = get_pages_for_records(get_file_page_size(fd),start_n,end_n,record_size);
     memory.map( NULL, pgs.outer_length, PROT_READ|PROT_WRITE, MAP_SHARED, fd, pgs.outer_start);
@@ -956,6 +988,37 @@ void sort_array(Criterion ctx, Record min, Record max, Record* data, size_t n_re
 
   MySorter::sort(ctx, ctx.get_key(min), ctx.get_key(max), data, start_n, end_n, NULL);
 }
+
+template<typename Record, // Record type
+         typename Criterion // Comparison criterion
+         >
+void sort_array(Criterion ctx, typename Criterion::key_t min, typename Criterion::key_t max, Record* data, size_t n_records )
+{
+  typedef BucketSorter<Record, Criterion> MySorter;
+  typename MySorter::offset_t start_n, end_n;
+
+  start_n = 0;
+  end_n = n_records;
+
+  MySorter::sort(ctx, min, max, data, start_n, end_n, NULL);
+}
+
+
+template<typename Record, // Record type
+         typename Criterion, // Comparison criterion
+         typename AfterCriterion // Comparison criterion
+         >
+void sort_array_compare_after(Criterion ctx, AfterCriterion actx, typename Criterion::key_t min, typename Criterion::key_t max, Record* data, size_t n_records )
+{
+  typedef BucketSorter<Record, Criterion, AfterCriterion> MySorter;
+  typename MySorter::offset_t start_n, end_n;
+
+  start_n = 0;
+  end_n = n_records;
+
+  MySorter::sort_compare_after(ctx, actx, min, max, data, start_n, end_n, NULL);
+}
+
 
 template<typename Record, /* Record type */
          typename Criterion /* Comparison criterion */
@@ -1065,6 +1128,7 @@ void permute_file(Criterion ctx, Record min, Record max, file_pipe_context& fctx
 
   fctx.close_file_if_needed();
 }
+
 
 #undef record_size
 #undef iterator_t
