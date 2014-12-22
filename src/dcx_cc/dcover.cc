@@ -58,9 +58,9 @@ int dcover_check(void)
   CHECK_COVER(91);
   CHECK_COVER(95);
   CHECK_COVER(133);
-  CHECK_COVER(1024);
-  CHECK_COVER(4096);
-  CHECK_COVER(8192);
+//  CHECK_COVER(1024);
+//  CHECK_COVER(4096);
+//  CHECK_COVER(8192);
 
   return 0;
 }

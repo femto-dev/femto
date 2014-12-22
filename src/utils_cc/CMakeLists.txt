@@ -66,6 +66,7 @@ set(UTIL_CC_TESTS
     compile_time_test
     bucket_sort_test
     sort_unit_test
+    string_sort_test
 )
 
 

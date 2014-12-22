@@ -202,9 +202,9 @@ int compare_with_sample_ranks_core(int p_bytes_per_pointer,
   sa /= p_bytes_per_character;
   sb /= p_bytes_per_character;
 
-  cover_t::g.which_samples_to_use(sa % cover_t::period,
-                                                  sb % cover_t::period,
-                                                  &a_amt, &b_amt);
+  cover_t::g.which_offsets_to_use(sa % cover_t::period,
+                                  sb % cover_t::period,
+                                  &a_amt, &b_amt);
 
   // return the comparison of S[sa+a_amt] vs S[sb+b_amt].
 
@@ -617,12 +617,24 @@ error_t dcx_inmem_ssort(suffix_sorting_problem_t* p, int period)
     return dcx_ssort_core<95>(p, 0);
   } else if( period == 133 ) {
     return dcx_ssort_core<133>(p, 0);
-  } else if( period == 4096 ) {
+/*  } else if( period == 4096 ) {
     return dcx_ssort_core<4096>(p, 0);
   } else if( period == 8192 ) {
     return dcx_ssort_core<8192>(p, 0);
+    */
   } else {
     assert(0 && "dcx_ssort cover period not supported");
     return ERR_PARAM;
   }
 }
+
+int dcx_inmem_supports_period(int period)
+{
+  if( period == 3 ) return 1;
+  else if( period == 7 ) return 1;
+  else if( period == 13 ) return 1;
+  else if( period == 95 ) return 1;
+  else if( period == 133 ) return 1;
+  return 0;
+}
+

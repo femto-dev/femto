@@ -110,6 +110,10 @@ class Dcover
                           // table[j][i] == j_amt
                           // where j_amt is the number of sample
                           //   suffixes to skip of those immediately after j
+  int l_table[period]; // given (i-j)mod v, return i' so that l=(i`-i) mod v
+                       // and (i+l) mod v and (j+l) mod v are both in 
+                       // the difference cover.
+
  public:
 
   Dcover() : cover(cover_table.cover)
@@ -141,13 +145,6 @@ class Dcover
 
   const static Dcover<Period> g;
 
-  // Get the instance for this one
-  /*static const Dcover<Period> get(void)
-  {
-    static Dcover<Period> mine;
-    return mine;
-  }*/
-
   void which_samples_to_use(int i, int j, int* i_off, int* j_off) const
   {
     if( EXTRA_CHECKS ) {
@@ -162,6 +159,28 @@ class Dcover
     }
   }
 
+  void which_offsets_to_use(int i, int j, int* i_off, int* j_off) const
+  {
+    if( EXTRA_CHECKS ) {
+      assert( i>=0 && i< period );
+      assert( j>=0 && j< period );
+    }
+    int d = i - j;
+    if( d < 0 ) d += period;
+    d %= period;
+
+    int iprime = l_table[d];
+    int ell = iprime - i;
+    if( ell < 0 ) ell += period;
+    ell %= period;
+
+    *i_off = ell;
+    *j_off = ell;
+    if( EXTRA_CHECKS ) {
+      assert( 0 <= *i_off && *i_off < period );
+      assert( 0 <= *j_off && *j_off < period );
+    }
+  }
 
   int get_sample(int i) const // return index j s.t. cover[j] == i, or -1.
   {
@@ -229,6 +248,21 @@ class Dcover
       int amt = table[i][i];
       assert( amt == 0 ); // it's always just the next sample!
     }
+
+    // we're computing best_iprime and best_l
+    for( int ip = 0; ip < sample_size; ip++ ) {
+      for( int jp = 0; jp < sample_size; jp++ ) {
+        int iprime = cover[ip];
+        int jprime = cover[jp];
+        int diff;
+        // now i' and j' are in the difference cover.
+        // i'-j' == d mod v
+        diff = iprime - jprime;
+        if( diff < 0 ) diff += period;
+        l_table[diff] = iprime;
+      }
+    }
+
   }
 
   void dc_make_sample()

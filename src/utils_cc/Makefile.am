@@ -13,7 +13,7 @@ endif
 
 LDADD = libfemto_util_cc.la ../utils/libfemto_util.la
 
-check_PROGRAMS = compare_record_test pipelining_test varint_test merger_test compile_time_test bucket_sort_test sort_unit_test
+check_PROGRAMS = compare_record_test pipelining_test varint_test merger_test compile_time_test bucket_sort_test sort_unit_test string_sort_test
 # removed: bucket_trie_test form_runs_node_test sort_node_test
 bin_PROGRAMS = femto_sort_tests
 
@@ -28,6 +28,7 @@ femto_sort_tests_SOURCES = sort_tests.hh sort_tests.cc
 #bucket_trie_test_SOURCES = example_record.hh bucket_trie_test.cc
 bucket_sort_test_SOURCES = sort_tests.hh bucket_sort_test.cc
 sort_unit_test_SOURCES = sort_tests.hh sort_unit_test.cc
+string_sort_test_SOURCES = string_sort_test.cc
 
 TESTS = $(check_PROGRAMS) $(check_SCRIPTS)
 
