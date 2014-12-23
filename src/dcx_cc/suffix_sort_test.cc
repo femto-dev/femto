@@ -419,29 +419,6 @@ int main(int argc, char** argv)
     check_ssort_wide(2, input, output, 1);
   }
 
-  /*test_repeats('\0', 1);
-  {
-    const char* input = "ababab";
-    int output[] = {4,2,0,5,3,1};
-    check_ssort(6, input, output);
-  }*/
-
-  //test_repeats('a', 1024);
-  //test_repeats('a', 50*1024*1024);
-  /*{
-    const char* input = "seeresses";
-    int output[] = {1,2,7,4,3,8,0,6,5};
-    check_ssort(9, input, output);
-  }*/
-
-  /*
-  {
-    const char* input = "a";
-    int output[] = {0};
-    check_ssort_impl<uint64_t, 63, uint64_t, 3>(1,input, output, 1);
-  }
-  */
-
   {
     const char* input = "";
     int output[] = {};

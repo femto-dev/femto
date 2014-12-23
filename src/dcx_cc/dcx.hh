@@ -2601,7 +2601,7 @@ public:
           pipe_iterator<input_record_t> end;
           offset_t offset = input_by_offset->num_before;
 
-          sptr_t byte_offset = 0;
+          sptr_t byte_offset = offset * nbytes_character;
           unsigned char* T = p->T;
           for( offset_t i = 0; i < input_by_offset->num_records; i++ ) {
             if( EXTRA_CHECKS ) {
@@ -2623,7 +2623,7 @@ public:
       }
       
       // Then, suffix sort in memory.
-      error_t err = dcx_inmem_ssort(p, 3);
+      error_t err = dcx_inmem_ssort(p, Period); // TODO DC>3
       die_if_err(err);
 
       assert(p->S);
@@ -6010,7 +6010,7 @@ void suffix_sort(OutOffset len, InCharacter max_char, read_pipe* input_pipe, std
       nbits_offset,
       nbits_offset,
       DEFAULT_PERIOD> dcx(tmp_dir, len, output_filenames->size(),
-                          DEFAULT_COMM, 0/*force_inmem*/, 0, NULL);
+                          DEFAULT_COMM, -1/*force_inmem*/, 0, NULL);
 
   // We should have at least enough bins for all processors..
   assert( output_filenames->size() >= (size_t) dcx.nproc );
@@ -6078,7 +6078,7 @@ void do_bwt(int n_bins,
   Dcx<ALPHA_SIZE_BITS,
       nbits_offset,
       nbits_document,
-      DEFAULT_PERIOD> dcx(tmp_dir, len, n_bins, DEFAULT_COMM, 0/*force_inmem*/, 0, NULL);
+      DEFAULT_PERIOD> dcx(tmp_dir, len, n_bins, DEFAULT_COMM, -1/*force_inmem*/, 0, NULL);
 
   dcx.bwt(min_char, max_char, doc_end_char, prepared_input,
           info_filename, params, 
