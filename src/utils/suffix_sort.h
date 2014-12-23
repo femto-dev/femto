@@ -15,6 +15,7 @@ typedef struct suffix_sorting_problem {
   sptr_t n; // the number of characters in T and suffixes in S
   sptr_t t_size; // the number of bytes in T
   sptr_t s_size; // the number of bytes in S
+  sptr_t t_padding_size; // the number of bytes of 0 padding after T
   int bytes_per_character; // # of bytes per character in T
   int bytes_per_pointer; // # of bytes per pointer in S
   unsigned char* T; // the text in question.
@@ -48,11 +49,20 @@ void set_be(unsigned char* buf, const size_t bytes_per, const sptr_t x)
       *(uint32_t*)buf = hton_32(x>>8);
       buf[4] = x & 0xff;
       return;
-    default:
-      for( size_t j=0; j < bytes_per; j++ ) {
-        int shift = 8*(bytes_per-1-j);
-        buf[j] = (x >> shift) & 0xff;
-      }
+    case 6:
+      *(uint32_t*)buf = hton_32(x>>16);
+      buf[4] = (x>>8) & 0xff;
+      buf[5] = x & 0xff;
+      return;
+    case 7:
+      *(uint32_t*)buf = hton_32(x>>24);
+      buf[4] = (x>>16) & 0xff;
+      buf[5] = (x>>8) & 0xff;
+      buf[6] = x & 0xff;
+      return;
+    case 8:
+      *(uint64_t*)buf = hton_64(x);
+      return;
   }
 }
 
@@ -88,16 +98,39 @@ sptr_t get_be(const unsigned char* buf, const size_t bytes_per)
         ret |= num5;
         return ret;
       }
-    default:
+    case 6:
       {
-        sptr_t ret = 0;
-        for( size_t j=0; j < bytes_per; j++ ) {
-          ret <<= 8;
-          ret |= buf[j];
-        }
+        int32_t num4 = *(const int32_t*)buf;
+        unsigned char num5 = buf[4];
+        unsigned char num6 = buf[5];
+        sptr_t ret;
+        ret = (int32_t) ntoh_32(num4);
+        ret <<= 8;
+        ret |= num5;
+        ret <<= 8;
+        ret |= num6;
         return ret;
       }
+    case 7:
+      {
+        int32_t num4 = *(const int32_t*)buf;
+        unsigned char num5 = buf[4];
+        unsigned char num6 = buf[5];
+        unsigned char num7 = buf[6];
+        sptr_t ret;
+        ret = (int32_t) ntoh_32(num4);
+        ret <<= 8;
+        ret |= num5;
+        ret <<= 8;
+        ret |= num6;
+        ret <<= 8;
+        ret |= num7;
+        return ret;
+      }
+    case 8:
+      return (int64_t) ntoh_64(*(const int64_t*) buf);
   }
+  return 0;
 }
 
 // Set an entry into S given a pointer into S.

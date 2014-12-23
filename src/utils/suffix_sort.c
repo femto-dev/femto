@@ -3,25 +3,6 @@
 #include "error.h"
 #include "suffix_sort.h"
 
-error_t prepare_problem(suffix_sorting_problem_t* p)
-{
-  if( p->n < 0 ) return ERR_PARAM;
-  if( p->T == NULL ) return ERR_PARAM;
-  if( p->S != NULL ) return ERR_PARAM;
-  if( p->bytes_per_character <= 0 ) return ERR_PARAM;
-
-  // set t_size
-  p->t_size = p->n*p->bytes_per_character;
-  // make sure to set p->bytes_per_pointer
-  if( p->bytes_per_pointer == 0 ) {
-    p->bytes_per_pointer = pointer_bytes_needed_for(p->n*p->bytes_per_character);
-  }
-  // set s_size
-  p->s_size = p->n*p->bytes_per_pointer;
-
-  return ERR_NOERR;
-}
-
 static inline
 string_t get_string_from_S_core(const size_t p_bytes_per_pointer, const void* context, const void* data_ptr)
 {
@@ -188,3 +169,23 @@ void print_suffixes(suffix_sorting_problem_t* p, int len)
 
   print_strings(&params, params.base, params.n_memb);
 }
+
+error_t prepare_problem(suffix_sorting_problem_t* p)
+{
+  if( p->n < 0 ) return ERR_PARAM;
+  if( p->T == NULL ) return ERR_PARAM;
+  if( p->S != NULL ) return ERR_PARAM;
+  if( p->bytes_per_character <= 0 ) return ERR_PARAM;
+
+  // set t_size
+  p->t_size = p->n*p->bytes_per_character;
+  // make sure to set p->bytes_per_pointer
+  if( p->bytes_per_pointer == 0 ) {
+    p->bytes_per_pointer = pointer_bytes_needed_for(p->t_size + p->t_padding_size);
+  }
+  // set s_size
+  p->s_size = p->n*p->bytes_per_pointer;
+
+  return ERR_NOERR;
+}
+

@@ -1964,7 +1964,7 @@ public:
     int cover_idx = offset / characters_per_mod;
     if( EXTRA_CHECKS ) assert(0 <= cover_idx && cover_idx < cover_t::period);
     offset_t added = offset - characters_per_mod * cover_idx;
-    return added*cover_t::g.sample_size + cover_idx;
+    return added*cover_t::sample_size + cover_idx;
   }
 
   // Unpack a previously packed offset.
@@ -2435,7 +2435,7 @@ public:
       offset_t period_multiples = ceildiv_safe(offset_bin_size, cov_period);
       offset_bin_size = period_multiples * cov_period;
 
-      packed_offset_bin_size = period_multiples * cover_t::g.sample_size;
+      packed_offset_bin_size = period_multiples * cover_t::sample_size;
 
       if( n > 0 ) {
         bin_idx_t last_bin = (n-1)/offset_bin_size;
@@ -2449,7 +2449,7 @@ public:
     // set sample_n
     {
       // set sample_n to a default so it can be used below
-      sample_n = characters_per_mod * cover_t::g.sample_size;
+      sample_n = characters_per_mod * cover_t::sample_size;
 
       // now compute the proper sample_n by using the maximum value
       // in the sub-problems. We're doing this so that we can avoid
@@ -4024,7 +4024,8 @@ public:
       printf("RUNNING IN MEMORY SUFFIX SORT\n");
 
       // Do it in memory!
-      long nalloc = n + 2*Period;
+      long padding = dcx_inmem_get_padding_chars(Period);
+      long nalloc = n + padding;
       suffix_sorting_problem p;
 
       // First, set up our problem description and try allocating
@@ -4033,6 +4034,7 @@ public:
       p.n = n;
       p.t_size = nalloc * nbytes_character;
       p.s_size = nalloc * nbytes_offset;
+      p.t_padding_size = padding * nbytes_character;
       p.bytes_per_character = nbytes_character;
       p.bytes_per_pointer = nbytes_offset;
       p.T = (unsigned char*) malloc(nalloc * nbytes_character);

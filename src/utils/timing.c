@@ -32,7 +32,7 @@
 
 #include "config.h" // for HAVE_CLOCK_GETTIME
 
-#define MAX_DEPTH 100
+#define MAX_DEPTH 1000
 static int depth;
 static tinfo_t ti[MAX_DEPTH];
 

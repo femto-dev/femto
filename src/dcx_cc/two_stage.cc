@@ -25,6 +25,8 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   sptr_t tlast;
   char sorting_S;
 
+  assert(p->S);
+
   if( max_char <= 0 ) {
     n_buckets = 1 << (8*bytes_per_character);
   } else {

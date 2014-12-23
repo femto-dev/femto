@@ -11,12 +11,13 @@ LDADD = libfemto_dcx_cc.la ../main/libfemto_seq.la ../main/libfemto.la ../main/l
 check_SCRIPTS = suffix_sort_test.sh
 EXTRA_DIST = suffix_sort_test.sh
 
-check_PROGRAMS = dcover_test suffix_sort_test 
+check_PROGRAMS = dcover_test suffix_sort_test suffix_sort_inmem_test
 
 bin_PROGRAMS = femto_suffix_sort femto_index femto_scan femto_size femto_index_fasta femto_scan_fasta femto_size_fasta femto_index_zero femto_index_zero femto_scan_zero femto_size_zero
 
 dcover_test_SOURCES = dcover_test.cc
 suffix_sort_test_SOURCES = suffix_sort_test.cc
+suffix_sort_inmem_test_SOURCES = suffix_sort_inmem_test.cc
 femto_suffix_sort_SOURCES = suffix_sort_tool.cc
 femto_index_SOURCES = index_tool.cc index_tool_support_files.c index_tool_support.h
 femto_scan_SOURCES = scan_tool.cc index_tool_support_files.c index_tool_support.h

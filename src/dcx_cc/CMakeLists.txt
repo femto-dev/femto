@@ -29,7 +29,7 @@ if(HAS_LINUX_LIBAIO)
 endif()
 
 
-set(DCX_TESTS dcover_test suffix_sort_test)
+set(DCX_TESTS dcover_test suffix_sort_test suffix_sort_inmem_test)
 
 foreach(test ${DCX_TESTS})
   add_executable(${test} EXCLUDE_FROM_ALL ${test}.cc)
