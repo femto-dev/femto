@@ -735,9 +735,14 @@ struct BucketSorter {
       }
     }
 
-    if( end_n - start_n <= 1 ||
-        0 == DU::compare(min, max) ) {
+    if( end_n - start_n <= 1 ) {
       // No data? No problem.
+      return;
+    } else if(0 == DU::compare(min, max) ) {
+      // Comparison sort if it was requested.
+      if( settings->compareAfterKey ) {
+        simple_sort(bctx, data + start_n, end_n - start_n);
+      }
       return;
     } else if( will_permute(ctx, min, max, start_n, end_n, settings ) ) {
       permute_inplace(ctx, min, max, data, start_n, end_n);

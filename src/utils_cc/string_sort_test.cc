@@ -61,7 +61,7 @@ void test_sort(string_sort_fun_t sort,
   unsigned char** strings;
   int i, j;
 
-  //printf("test sort(%i %i %i %i)\n", sort, test_number, n_strings, str_len);
+  //printf("test sort(%p %i %i %i)\n", sort, test_number, n_strings, str_len);
   // generate the data.
   strings = (unsigned char**) malloc(n_strings*sizeof(unsigned char*));
   assert(strings);
@@ -175,11 +175,12 @@ int main(int argc, char** argv)
     NULL
   };
   int limits[] = {
-    100, 
-    0x7fffffff,
     0x7fffffff,
     0
   };
+
+  // Tests we're working on.
+  test_sort(bucket_sort, 3, 2, 1);
 
   srand(0);
 
@@ -199,7 +200,7 @@ int main(int argc, char** argv)
 
         for( str_len = 1; str_len < 64; str_len += 15 ) {
           for( j = 0; j < 14; j++ ) {
-            printf(".");
+            printf("."); fflush(stdout);
             test_sort(sorters[i], j, n_keys, str_len);
           }
         }
@@ -211,7 +212,7 @@ int main(int argc, char** argv)
 
         for( str_len = 1; str_len < 64; str_len += 15 ) {
           for( j = 0; j < 14; j++ ) {
-            printf(".");
+            printf("."); fflush(stdout);
             test_sort(sorters[i], j, n_keys, str_len);
           }
         }

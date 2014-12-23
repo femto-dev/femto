@@ -29,11 +29,13 @@ struct SortingProblemFixedLengthStringRecordSortingCriterion {
   typedef return_key_criterion_tag criterion_category;
   typedef SortingProblemStringKey key_t;
 
-  const string_sort_params_t *context;
+  void *context;
   const get_string_fun_t get_str;
   const size_t len;
 
-  SortingProblemFixedLengthStringRecordSortingCriterion( string_sort_params_t *context ) : context(context), get_str(context->get_string), len(context->str_len) { }
+  SortingProblemFixedLengthStringRecordSortingCriterion( string_sort_params_t *params ) : context(params->context), get_str(params->get_string), len(params->str_len) {
+
+  }
 
   key_t get_key(const be_uint<PtrBytes>& r)
   {
@@ -46,12 +48,12 @@ template <int PtrBytes>
 struct SortingProblemCompare {
   typedef compare_criterion_tag criterion_category;
 
-  const string_sort_params_t *context;
+  void *context;
   const compare_fun_t cmp;
 
-  SortingProblemCompare( string_sort_params_t *context ) : context(context), cmp(context->compare) { }
+  SortingProblemCompare( string_sort_params_t *params ) : context(params->context), cmp(params->compare) { }
   int compare(const be_uint<PtrBytes>& a, const be_uint<PtrBytes>& b) {
-    return cmp(context, &a, &b);
+    return (cmp)?(cmp(context, &a, &b)):(0);
   }
 };
 
@@ -98,17 +100,17 @@ void do_sorting_problem(string_sort_params_t *context)
 }
 
 
-error_t bucket_sort(string_sort_params_t* context)
+error_t bucket_sort(string_sort_params_t* params)
 {
-  int ptrbytes = context->memb_size;
-  if( ptrbytes == 1 ) do_sorting_problem<1>(context);
-  else if( ptrbytes == 2 ) do_sorting_problem<2>(context);
-  else if( ptrbytes == 3 ) do_sorting_problem<3>(context);
-  else if( ptrbytes == 4 ) do_sorting_problem<4>(context);
-  else if( ptrbytes == 5 ) do_sorting_problem<5>(context);
-  else if( ptrbytes == 6 ) do_sorting_problem<6>(context);
-  else if( ptrbytes == 7 ) do_sorting_problem<7>(context);
-  else if( ptrbytes == 8 ) do_sorting_problem<8>(context);
+  int ptrbytes = params->memb_size;
+  if( ptrbytes == 1 ) do_sorting_problem<1>(params);
+  else if( ptrbytes == 2 ) do_sorting_problem<2>(params);
+  else if( ptrbytes == 3 ) do_sorting_problem<3>(params);
+  else if( ptrbytes == 4 ) do_sorting_problem<4>(params);
+  else if( ptrbytes == 5 ) do_sorting_problem<5>(params);
+  else if( ptrbytes == 6 ) do_sorting_problem<6>(params);
+  else if( ptrbytes == 7 ) do_sorting_problem<7>(params);
+  else if( ptrbytes == 8 ) do_sorting_problem<8>(params);
   else return ERR_PARAM;
 
   return ERR_NOERR;
