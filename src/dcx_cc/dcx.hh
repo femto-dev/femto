@@ -812,7 +812,8 @@ public:
 
   enum {
     nbytes_character = (nbits_character + 7)/8,
-    nbytes_offset = (nbits_offset + 7)/8
+    nbytes_offset = (nbits_offset + 7)/8,
+    dcx_inmem_period = 8192
   };
 
   // Uses current io stats!
@@ -2280,6 +2281,11 @@ public:
       merge_nonsample_whichfile_splitters(),
       num_splitter_records_per_bin(0)
   {
+
+    // Dcx external memory algorithm relies on the table existing
+    // to compute the sample offsets.
+    assert(cover_t::table_period == cover_t::period);
+
     // Adjust whether or not we will do it in memory.
     inmem = force_inmem;
     if( force_inmem != 0 && force_inmem != 1 ) {
@@ -2611,6 +2617,7 @@ public:
             input_record_t r = *read;
             character_t ch = InputToCharacterTranslator::translate(r);
 
+            printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, byte_offset/nbytes_character, (int) ch);
             set_T(T, nbytes_character, byte_offset, ch);
 
             ++read;
@@ -2622,20 +2629,30 @@ public:
         }
       }
       
+      start_clock();
+
       // Then, suffix sort in memory.
-      error_t err = dcx_inmem_ssort(p, Period); // TODO DC>3
+      error_t err = dcx_inmem_ssort(p, dcx_inmem_period, DCX_FLAG_USE_TWO_STAGE);
       die_if_err(err);
+
+      stop_clock();
+      if( PRINT_TIMING_DCX > 0 && n >= PRINT_TIMING_DCX ) {
+        print_timings("suffix sort in memory", n);
+      }
+
 
       assert(p->S);
 
       sptr_t s_byte_offset = 0;
       unsigned char* S = p->S;
       for( offset_t i = 0; i < n; i++ ) {
-        offset_rank_record_t r;
+        offset_rank_record_t out;
         sptr_t t_byte_offset = get_S(nbytes_offset, S, s_byte_offset);
-        r.offset = t_byte_offset / nbytes_character;
-        r.rank = i;
-        output->push_back(r);
+        out.offset = t_byte_offset / nbytes_character;
+        out.rank = i;
+        //TODO -- seing duplicate offsets here.... including more than one 233
+        printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
+        output->push_back(out);
         s_byte_offset += nbytes_offset;
       }
 
@@ -2716,6 +2733,7 @@ public:
       for( offset_t i = 0;
           i < input_by_offset->num_records &&
           (max_records == 0 || i < max_records); i++) {
+
         /*if( DEBUG_DCX > 10 ) {
           for( size_t d = 0; d < read.size(); d++ ) {
             std::cout << "node " << iproc << " in " << d << ": " << read[d].to_string() << std::endl;
@@ -2743,6 +2761,9 @@ public:
           }
           tuple.characters.set_characters(chars);
         }
+
+        // TODO
+        printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, tuple.offset, tuple.characters.get_character(0));
 
         if( DEBUG_DCX > 10 ) {
           printf("node %i out: %s\n", dcx->iproc, tuple.to_string().c_str());
@@ -3614,10 +3635,10 @@ public:
               assert(out.offset < dcx->n);
             }
 
-            if( DEBUG_DCX > 10 ) {
-              printf("node %i in_unique: %s\n", (int) dcx->iproc, (*read_unique).to_string().c_str());
+            //if( DEBUG_DCX > 10 ) { TODO
+              //printf("node %i in_unique: %s\n", (int) dcx->iproc, (*read_unique).to_string().c_str());
               printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
-            }
+            //}
             output->push_back(out);
             // Move on to the next unique.
             ++read_unique;
@@ -3630,10 +3651,10 @@ public:
             }
 
 
-            if( DEBUG_DCX > 10 ) {
-              printf("node %i in_merged: %s\n", (int) dcx->iproc, (*read_merged).to_string().c_str());
+            //if( DEBUG_DCX > 10 ) { TODO
+              //printf("node %i in_merged: %s\n", (int) dcx->iproc, (*read_merged).to_string().c_str());
               printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
-            }
+            //}
             output->push_back(out);
             rank++;
             // Move on to the next merged.
@@ -3654,10 +3675,10 @@ public:
             assert(out.offset < dcx->n);
           }
 
-          if( DEBUG_DCX > 10 ) {
-            printf("node %i in_unique: %s\n", (int) dcx->iproc, (*read_unique).to_string().c_str());
+          //if( DEBUG_DCX > 10 ) { TODO
+            //printf("node %i in_unique: %s\n", (int) dcx->iproc, (*read_unique).to_string().c_str());
             printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
-          }
+          //}
           output->push_back(out);
           // Move on to the next unique.
           ++read_unique;
@@ -3670,10 +3691,10 @@ public:
           if( EXTRA_CHECKS ) {
             assert(out.offset < dcx->n);
           }
-          if( DEBUG_DCX > 10 ) {
-            printf("node %i in_merged: %s\n", (int) dcx->iproc, (*read_merged).to_string().c_str());
+          //if( DEBUG_DCX > 10 ) { TODO
+            //printf("node %i in_merged: %s\n", (int) dcx->iproc, (*read_merged).to_string().c_str());
             printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
-          }
+          //}
           output->push_back(out);
           rank++;
           // Move on to the next merged.
@@ -4021,10 +4042,10 @@ public:
     barrier(); // we should all be here!
 
     if( inmem == 1 && n > 0 ) {
-      printf("RUNNING IN MEMORY SUFFIX SORT\n");
+      printf("RUNNING IN MEMORY DC%i\n", dcx_inmem_period);
 
       // Do it in memory!
-      long padding = dcx_inmem_get_padding_chars(Period);
+      long padding = dcx_inmem_get_padding_chars(dcx_inmem_period);
       long nalloc = n + padding;
       suffix_sorting_problem p;
 
@@ -4034,6 +4055,7 @@ public:
       p.n = n;
       p.t_size = nalloc * nbytes_character;
       p.s_size = nalloc * nbytes_offset;
+      p.max_char = ALPHA_SIZE;
       p.t_padding_size = padding * nbytes_character;
       p.bytes_per_character = nbytes_character;
       p.bytes_per_pointer = nbytes_offset;
@@ -5996,7 +6018,7 @@ public:
 };
 
 template<typename InCharacter, typename OutOffset, int nbits_char, int nbits_offset>
-void suffix_sort(OutOffset len, InCharacter max_char, read_pipe* input_pipe, std::vector<std::string>* output_filenames, std::string tmp_dir)
+void suffix_sort(OutOffset len, InCharacter max_char, read_pipe* input_pipe, std::vector<std::string>* output_filenames, std::string tmp_dir, int force_inmem = -1)
 {
   int started_io_measurement = 0;
   if( REPORT_DISK_USAGE ) {
@@ -6010,7 +6032,7 @@ void suffix_sort(OutOffset len, InCharacter max_char, read_pipe* input_pipe, std
       nbits_offset,
       nbits_offset,
       DEFAULT_PERIOD> dcx(tmp_dir, len, output_filenames->size(),
-                          DEFAULT_COMM, -1/*force_inmem*/, 0, NULL);
+                          DEFAULT_COMM, force_inmem, 0, NULL);
 
   // We should have at least enough bins for all processors..
   assert( output_filenames->size() >= (size_t) dcx.nproc );
@@ -6059,7 +6081,8 @@ void do_bwt(int n_bins,
             std::string info_filename,
             index_block_param_t* params,
             std::string tmp_dir,
-            std::string index_path)
+            std::string index_path,
+            int force_inmem = -1)
 {
   int started_io_measurement = 0;
   if( REPORT_DISK_USAGE ) {
@@ -6078,7 +6101,7 @@ void do_bwt(int n_bins,
   Dcx<ALPHA_SIZE_BITS,
       nbits_offset,
       nbits_document,
-      DEFAULT_PERIOD> dcx(tmp_dir, len, n_bins, DEFAULT_COMM, -1/*force_inmem*/, 0, NULL);
+      DEFAULT_PERIOD> dcx(tmp_dir, len, n_bins, DEFAULT_COMM, force_inmem, 0, NULL);
 
   dcx.bwt(min_char, max_char, doc_end_char, prepared_input,
           info_filename, params, 

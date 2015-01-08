@@ -26,7 +26,34 @@ extern "C" {
   #include "suffix_sort.h"
 }
 
-#define DEBUG 0
+#include "dcx_inmem.hh"
+
+#define DEBUG 1
+
+/*
+  Important terminology (we follow Ko-Aluru terminology):
+   T[i..] is a TYPE L suffix if T[i..] > T[i+1..]
+   T[i..] is a TYPE S suffix if T[i..] < T[i+1..]
+    (they cannot be equal since we are comparing suffixes)
+    Yuta Mori uses TYPE A and TYPE B for this.
+  The TYPE S suffixes can be further subdivided.
+   T[i..] is a TYPE SL suffix if T[i..] < T[i+1..] and T[i+1..] > T[i+2..]
+   T[i..] is a TYPE SS suffix if T[i..] < T[i+1..] and T[i+1..] < T[i+2..]
+    Yuta Mori calls TYPE SL   TYPE B*
+  Note that for a TYPE SL suffix, T[i] < T[i+1].
+  Note that a TYPE S suffix is "greater" than a TYPE L suffix if they start with the same character.
+*/
+
+void print_bucket(const char* name, int j, int k, unsigned char* base, unsigned char* end, int bytes_per_pointer)
+{
+  if( base >= end ) return;
+  printf("%s[%i,%i] : \n", name, j, k);
+  while( base != end ) {
+    sptr_t v = get_S_with_ptr(bytes_per_pointer, base);
+    printf("  %li\n", v);
+    base += bytes_per_pointer;
+  }
+}
 
 /* First of all, let's get a basic implementation of two-stage going. */
 static inline
@@ -34,7 +61,6 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
                               suffix_context_t* context,
                               size_t str_len,
                               compare_fun_t compare,
-                              sptr_t max_char, // the maximum character value..
                               // These args are here just for optimizing.
                               int bytes_per_character,
                               int bytes_per_pointer)
@@ -45,14 +71,16 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   error_t err;
   sptr_t tlast;
   char sorting_S;
+  sptr_t max_char = p->max_char+1;
+  unsigned char* p_T = p->T;
+  unsigned char* p_S = p->S;
+  sptr_t p_t_size = p->t_size;
+  sptr_t p_s_size = p->s_size;
 
-  assert(p->S);
+  assert(max_char>0 && max_char <= 256*256*256);
+  assert(p_S);
 
-  if( max_char <= 0 ) {
-    n_buckets = 1 << (8*bytes_per_character);
-  } else {
-    n_buckets = max_char;
-  }
+  n_buckets = max_char;
 
   L_buckets = (unsigned char**) calloc(n_buckets, sizeof(unsigned char*));
   if( ! L_buckets ) return ERR_MEM;
@@ -66,18 +94,18 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
 { \
   sptr_t ti, tend; \
   /* tend starts out as the first character. */ \
-  tend = get_T(p->T, bytes_per_character, 0); \
+  tend = get_T(p_T, bytes_per_character, 0); \
   for( sptr_t end, to = 0; \
-       to < p->t_size; ) { \
+       to < p_t_size; ) { \
     ti = tend; \
     /* find the smallest end>to such that ti_end!=ti_to. */ \
     for( end = to+bytes_per_character; \
-         end < p->t_size; \
+         end < p_t_size; \
          end += bytes_per_character ) { \
-      tend = get_T(p->T, bytes_per_character, end); \
+      tend = get_T(p_T, bytes_per_character, end); \
       if( ti != tend ) break; \
     } \
-    if( end == p->t_size ) { \
+    if( end == p_t_size ) { \
       /* The end of the string is smaller than any other. */ \
       tend = -1; /* a character that won't actually occur..*/ \
     } \
@@ -85,7 +113,7 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
       /* suffixes to...end are type S */ \
       for( ; to < end; to += bytes_per_character ) { \
         if( DEBUG > 10 ) { \
-          ti = get_T(p->T, bytes_per_character, to); \
+          ti = get_T(p_T, bytes_per_character, to); \
           assert(0 <= ti && ti < n_buckets); \
         } \
         S_todo; \
@@ -94,7 +122,7 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
       /* suffixes to...end are type L */ \
       for( ; to < end; to += bytes_per_character ) { \
         if( DEBUG > 10 ) { \
-          ti = get_T(p->T, bytes_per_character, to); \
+          ti = get_T(p_T, bytes_per_character, to); \
           assert(0 <= ti && ti < n_buckets); \
         } \
         L_todo; \
@@ -126,7 +154,7 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   // Make L_bucket and S_bucket point to the *end* of each bucket
   // and the L buckets appear before the S buckets.
   {
-    unsigned char* next = p->S;
+    unsigned char* next = p_S;
     sptr_t count;
     for( int j = 0; j < n_buckets; j++ ) {
       count = (sptr_t) L_buckets[j];
@@ -142,19 +170,19 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   // note that the buckets are now pointing at the ends of the buckets..
   {
     char mark_next = 0;
-    // store the bit-complement on the next bucket if this 
-    // bucket is of the sorting type.
+    // store the bit-complement on the next stored suffix if this 
+    // suffix is of the sorting type.
     CLASSIFY_SL({
                   sptr_t store;
                   store = (mark_next)?(~to):(to);
                   mark_next = !sorting_S;
                   S_buckets[ti] -= bytes_per_pointer;
                   if( DEBUG > 10 ) {
-                    if(p->S <= S_buckets[ti] &&
-                               S_buckets[ti] <= p->S + p->s_size ) {
+                    if(p_S <= S_buckets[ti] &&
+                               S_buckets[ti] <= p_S + p_s_size ) {
                     } else {
-                      assert(p->S <= S_buckets[ti] &&
-                                     S_buckets[ti] <= p->S + p->s_size );
+                      assert(p_S <= S_buckets[ti] &&
+                                     S_buckets[ti] <= p_S + p_s_size );
                     }
                   }
                   set_S_with_ptr(bytes_per_pointer, S_buckets[ti], store);
@@ -165,11 +193,11 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
                   mark_next = sorting_S;
                   L_buckets[ti] -= bytes_per_pointer;
                   if( DEBUG > 10 ) {
-                    if(p->S <= L_buckets[ti] &&
-                               L_buckets[ti] <= p->S + p->s_size ) {
+                    if(p_S <= L_buckets[ti] &&
+                               L_buckets[ti] <= p_S + p_s_size ) {
                     } else {
-                      assert(p->S <= L_buckets[ti] &&
-                                     L_buckets[ti] <= p->S + p->s_size );
+                      assert(p_S <= L_buckets[ti] &&
+                                     L_buckets[ti] <= p_S + p_s_size );
                     }
                   }
                   set_S_with_ptr(bytes_per_pointer, L_buckets[ti], store);
@@ -180,7 +208,7 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   // just save the last character - we'll need it in a minute.
   // Note that since CLASSIFY_SL goes forward, the last suffix
   // should be at the top of its L bucket, which is the correct position.
-  tlast = get_T(p->T, bytes_per_character, p->t_size - bytes_per_character);
+  tlast = get_T(p_T, bytes_per_character, p_t_size - bytes_per_character);
 
   // Now sort all of the b-buckets.
   // L_buckets are currently pointing to the start of the L_bucket.
@@ -206,7 +234,7 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
           end = L_buckets[j+1];
         } else {
           // the last bucket ends at the end of p->S
-          end = p->S+p->s_size;
+          end = p_S+p_s_size;
         }
 
         // sort from S_buckets[j] to end
@@ -245,7 +273,7 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
           end = L_buckets[j+1];
         } else {
           // the last bucket ends at the end of p->S
-          end = p->S+p->s_size;
+          end = p_S+p_s_size;
         }
         S_buckets[j] = end;
       }
@@ -262,20 +290,20 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
     // We need to keep the last suffix at the top of it's L bucket.
     L_buckets[tlast] += bytes_per_pointer;
 
-    for( sptr_t so = 0; so < p->s_size; so += bytes_per_pointer ) {
+    for( sptr_t so = 0; so < p_s_size; so += bytes_per_pointer ) {
       // is S[i]-1 an L-type suffix?
       sptr_t to, tprev, ti;
-      to = get_S(bytes_per_pointer, p->S, so);
+      to = get_S(bytes_per_pointer, p_S, so);
       if( to >= 0 ) continue;
       // then it's a marked suffix. Note that suffix 0 is never marked.
       // marked means that S[i]-1 is an L-type suffix.
       to = ~ to;
-      //tnext = get_T(p->T, bytes_per_character, to);
+      //tnext = get_T(p_T, bytes_per_character, to);
       to -= bytes_per_character;
-      ti = get_T(p->T, bytes_per_character, to);
+      ti = get_T(p_T, bytes_per_character, to);
       // mark it if it's preceeded by a type L suffix.
       if( to > 0 ) {
-        tprev = get_T(p->T, bytes_per_character, to - bytes_per_character);
+        tprev = get_T(p_T, bytes_per_character, to - bytes_per_character);
         if( tprev >= ti ) to = ~ to;
       }
       // copy to the start of the appropriate L-bucket,
@@ -286,22 +314,22 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
     // sorting L
     // we must scan the suffixes from right to left and append to the ends
     // of the S-buckets.
-    for( sptr_t so = p->s_size - bytes_per_pointer;
+    for( sptr_t so = p_s_size - bytes_per_pointer;
          so >= 0;
          so -= bytes_per_pointer) {
       // is S[i]-1 an S-type suffix?
       sptr_t to, tprev, ti;
-      to = get_S(bytes_per_pointer, p->S, so);
+      to = get_S(bytes_per_pointer, p_S, so);
       if( to >= 0 ) continue;
       // then it's a marked suffix. Note that suffix 0 is never marked.
       // marked means that S[i]-1 is an S-type suffix.
       to = ~ to;
-      //tnext = get_T(p->T, bytes_per_character, to);
+      //tnext = get_T(p_T, bytes_per_character, to);
       to -= bytes_per_character;
-      ti = get_T(p->T, bytes_per_character, to);
+      ti = get_T(p_T, bytes_per_character, to);
       // mark it if it's preceeded by a type S suffix.
       if( to > 0 ) {
-        tprev = get_T(p->T, bytes_per_character, to - bytes_per_character);
+        tprev = get_T(p_T, bytes_per_character, to - bytes_per_character);
         if( tprev <= ti ) to = ~ to;
       }
       // copy to the end of the appropriate S-bucket.
@@ -311,12 +339,12 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   }
 
   // unmark any marked suffixes.
-  for( sptr_t so = 0; so < p->s_size; so += bytes_per_pointer ) {
+  for( sptr_t so = 0; so < p_s_size; so += bytes_per_pointer ) {
     sptr_t to;
-    to = get_S(bytes_per_pointer, p->S, so);
+    to = get_S(bytes_per_pointer, p_S, so);
     if( to >= 0 ) continue;
     to = ~to;
-    set_S(bytes_per_pointer, p->S, so, to);
+    set_S(bytes_per_pointer, p_S, so, to);
   }
 
   free(S_buckets);
@@ -329,9 +357,9 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
 // There's really only a handful of bytes-per-pointer that could 
 // reasonably be used. This is just is an attempt to get optimized code for each.
 error_t two_stage_single(suffix_sorting_problem_t* p,
-                         suffix_context_t* context, size_t str_len, compare_fun_t compare, sptr_t max_char)
+                         suffix_context_t* context, size_t str_len, compare_fun_t compare)
 {
-#define TSS(b_per_c, b_per_p) if( p->bytes_per_character == b_per_c && p->bytes_per_pointer == b_per_p ) return two_stage_single_impl(p, context, str_len, compare, max_char, b_per_c, b_per_p);
+#define TSS(b_per_c, b_per_p) if( p->bytes_per_character == b_per_c && p->bytes_per_pointer == b_per_p ) return two_stage_single_impl(p, context, str_len, compare, b_per_c, b_per_p);
 
   TSS(1,1);
   TSS(1,2);
@@ -358,17 +386,22 @@ error_t two_stage_single(suffix_sorting_problem_t* p,
   TSS(5,3);
   TSS(5,4);
   TSS(5,5);
+
+  printf("Perf Note: two_stage_single_%i_%i not inlined\n",
+      (int) p->bytes_per_character,
+      (int) p->bytes_per_pointer);
+
   TSS(p->bytes_per_character, p->bytes_per_pointer);
 #undef TSS
 }
 
 /* two-stage double-implementation... ala Yuta Mori */
+/* see http://homepage3.nifty.com/wpage/software/itssort.txt */
 static inline
 error_t two_stage_double_impl(suffix_sorting_problem_t* p,
                               suffix_context_t* context,
                               size_t str_len,
                               compare_fun_t compare,
-                              sptr_t max_char, // the maximum character value..
                               // These args are here just for optimizing.
                               int bytes_per_character,
                               int bytes_per_pointer)
@@ -379,13 +412,15 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
   int n_buckets, n_buckets2;
   sptr_t tlast;
   error_t err;
+  sptr_t max_char = p->max_char+1;
+  unsigned char* p_T = p->T;
+  unsigned char* p_S = p->S;
+  sptr_t p_t_size = p->t_size;
+  sptr_t p_s_size = p->s_size;
 
-  if( max_char <= 0 ) {
-    n_buckets = 1 << (8*bytes_per_character);
-  } else {
-    n_buckets = max_char;
-  }
+  assert(max_char>0 && max_char <= 1000);
 
+  n_buckets = max_char;
   n_buckets2 = n_buckets * n_buckets;
 
   L_buckets = (unsigned char**) calloc(n_buckets, sizeof(unsigned char*));
@@ -394,8 +429,10 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
   if( ! L_bucket_starts ) return ERR_MEM;
   S_buckets = (unsigned char**) calloc(n_buckets2, sizeof(unsigned char*));
   if( ! S_buckets ) return ERR_MEM;
+  // to be an SL bucket, c0<c1
 #define SL_BUCKET(c0, c1) (S_buckets[n_buckets * (c0) + (c1)])
-  // if c0==c1 it must be an SS bucket (or a L bucket)
+  // to be an SS bucket, c0<=c1, so we can store these in the
+  // other half of the S_buckets by swapping indices.
 #define SS_BUCKET(c0, c1) (S_buckets[n_buckets * (c1) + (c0)]) 
 #define L_BUCKET(c0) (L_buckets[(c0)]) 
 
@@ -405,44 +442,52 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
 { \
   sptr_t ti, tnext, tmid, tend, end; \
   /* tmid starts out as the first character. */ \
-  tmid = get_T(p->T, bytes_per_character, 0); \
+  tmid = get_T(p_T, bytes_per_character, 0); \
   /* find the smallest end>to such that ti_end!=ti_to. */ \
-  /* Value in case we run out... end of the string is smaller than any other. */ \
-  tend = -1; /* a character that won't actually occur..*/ \
   for( end = bytes_per_character; \
-       end < p->t_size; \
+       end < p_t_size; \
        end += bytes_per_character ) { \
-    tend = get_T(p->T, bytes_per_character, end); \
+    tend = get_T(p_T, bytes_per_character, end); \
     if( tmid != tend ) break; \
   } \
+  if( end == p_t_size ) { \
+    /* The end of the string is smaller than any other. */ \
+    tend = -1; /* a character that won't actually occur..*/ \
+  } \
   for( sptr_t mid, to = 0; \
-       to < p->t_size; ) { \
+       to < p_t_size; ) { \
     ti = tmid; \
     mid = end; \
     tmid = tend; \
-    /* find the smallest end>mid such that t_end!+t_mid */ \
-    /* Value in case we run out... end of the string is smaller than any other. */ \
-    tend = -1; /* a character that won't actually occur..*/ \
+    /* find the smallest end>mid such that t_end!=t_mid */ \
     for( end = mid+bytes_per_character; \
-         end < p->t_size; \
+         end < p_t_size; \
          end += bytes_per_character ) { \
-      tend = get_T(p->T, bytes_per_character, end); \
+      tend = get_T(p_T, bytes_per_character, end); \
       if( tmid != tend ) break; \
+    } \
+    if( end == p_t_size ) { \
+      /* The end of the string is smaller than any other. */ \
+      tend = -1; /* a character that won't actually occur..*/ \
     } \
     if( ti < tmid ) { \
       /* suffixes to...mid are SX */ \
       if( tmid < tend ) { \
-        /* suffixes to...mid are type SS */ \
+        /* suffixes to...mid are type SSSSSS */ \
         for( ; to < mid; to += bytes_per_character ) { \
           tnext = (to==mid-bytes_per_character)?(tmid):(ti); \
           SS_todo; \
         } \
       } else { \
-        /* suffixes to...mid are type SL */ \
-        for( ; to < mid; to += bytes_per_character ) { \
-          tnext = (to==mid-bytes_per_character)?(tmid):(ti); \
-          SL_todo; \
+        /* suffixes to...mid are type SSSSSL */ \
+        for( ; to < mid-bytes_per_character; to += bytes_per_character ) { \
+          tnext = ti; \
+          SS_todo; \
         } \
+        if( DEBUG ) assert( to==mid-bytes_per_character ); \
+        tnext = tmid; \
+        SL_todo; \
+        to += bytes_per_character; \
       } \
     } else  { /* ti > tmid */ \
       /* suffixes to...mid are type L */ \
@@ -453,24 +498,45 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
     } \
   } \
 }
+
   // Partition into buckets.
   // First, count the number of bytes in each type
   CLASSIFY_SSL({
                  SS_BUCKET(ti,tnext) += bytes_per_pointer;
+                 if( DEBUG ) printf("T[% 4li] = % 4li % 4li is SS\n", to/bytes_per_character, ti, tnext);
                },
                {
                  SL_BUCKET(ti,tnext) += bytes_per_pointer;
+                 if( DEBUG ) printf("T[% 4li] = % 4li % 4li is SL\n", to/bytes_per_character, ti, tnext);
                },
                {
                  L_BUCKET(ti) += bytes_per_pointer;
+                 if( DEBUG ) printf("T[% 4li] = % 4li % 4li is L \n", to/bytes_per_character, ti, tnext);
                });
 
+  for( int i = 0; i < n_buckets; i++ ) {
+    if( L_BUCKET(i) > 0 ) {
+      printf("L[%i] = %li\n", i, (long) L_BUCKET(i));
+    }
+    for( int j = 0; j < n_buckets; j++ ) {
+      if( i < j ) {
+        if( SL_BUCKET(i, j) > 0 ) {
+          printf("SL[%i,%i] = %li\n", i, j, (long) SL_BUCKET(i,j));
+        }
+      }
+      if( i <= j ) {
+        if( SS_BUCKET(i, j) > 0 ) {
+          printf("SS[%i,%i] = %li\n", i, j, (long) SS_BUCKET(i,j));
+        }
+      }
+    }
+  }
   // Next, turn the buckets into offsets in the input.
   // L_buckets point to the *end* of each bucket
   // SL_buckets point to the *end* of each bucket
   // SS_buckets point to the *end* of each bucket
   {
-    unsigned char* next = p->S;
+    unsigned char* next = p_S;
     sptr_t count;
     for( int j = 0; j < n_buckets; j++ ) {
       // first come the L-buckets.
@@ -510,10 +576,40 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
                  L_BUCKET(ti) -= bytes_per_pointer;
                  set_S_with_ptr(bytes_per_pointer, L_BUCKET(ti), to);
                });
+  
+  if( DEBUG ) {
+    unsigned char* start = p_S;
+    unsigned char* end = p_S;
+    unsigned char* next_L = p_S;
+    for( int j = 0; j < n_buckets; j++ ) {
+      start = L_BUCKET(j);
+      end = SS_BUCKET(j, j);
+      next_L = start;
+      if( j+1 < n_buckets ) next_L = L_BUCKET(j+1);
 
+      //printf(" L[%i] = %p\n", j, L_BUCKET(j));
+      print_bucket(" L", j, 0, start, end, bytes_per_pointer);
+      for( int k = 0; k < n_buckets; k++ ) {
+        if( j < k ) {
+          start = SL_BUCKET(j,k);
+          end = SS_BUCKET(j,k);
+          //printf("SL[%i,%i] = %p\n", j, k, SL_BUCKET(j,k));
+          print_bucket("SL", j, k, start, end, bytes_per_pointer);
+        }
+        if( j <= k ) {
+          start = SS_BUCKET(j,k);
+          end = next_L;
+          if( k+1 < n_buckets ) end = SL_BUCKET(j, k+1);
+          //printf("SS[%i,%i] = %p\n", j, k, SS_BUCKET(j,k));
+          print_bucket("SS", j, k, start, end, bytes_per_pointer);
+        }
+      }
+    }
+  }
+   
   // Note that since CLASSIFY_SL goes forward, the last suffix
   // should be at the top of its L bucket, which is the correct position.
-  tlast = get_T(p->T, bytes_per_character, p->t_size - bytes_per_character);
+  tlast = get_T(p_T, bytes_per_character, p_t_size - bytes_per_character);
 
   // Now sort all of the SL-buckets.
   // buckets are currently pointing to the starts
@@ -526,7 +622,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
     local.memb_size = bytes_per_pointer;
     local.str_len = str_len;
     local.same_depth = bytes_per_character+bytes_per_character; // we've already sorted two chars.
-    local.get_string = get_string_getter(context);
+    local.get_string = get_string_getter_comp(context);
     local.compare = compare;
 
     // Go through the SL-buckets sorting them...
@@ -561,10 +657,6 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
     SS_BUCKET(j,n_buckets-1) = L_BUCKET(j+1);
   }
 
-  // Also change the L-bucket for tlast to contain already the final
-  // suffix as it's in the proper position.
-  L_BUCKET(tlast) += bytes_per_pointer;
-
   // Now compute the proper ordering of the type SS buckets.
   // Scan SA from right to left and append to the ends of the SS-bucket
   // if SA[i]-1 is a SS suffix.
@@ -573,7 +665,8 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
   // Again, there can be no S suffixes starting with the maximal character.
   for( int j = n_buckets-2; j >= 0; j-- ) {
     unsigned char* start = SL_BUCKET(j, j+1);
-    unsigned char* end = L_bucket_starts[j+1];
+    unsigned char* end = L_BUCKET(j+1);
+    if( DEBUG ) assert(L_bucket_starts[j+1]== L_BUCKET(j+1));
     for( unsigned char* sp = end-bytes_per_pointer;
          sp >= start;
          sp -= bytes_per_pointer ) {
@@ -581,18 +674,24 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
       to = get_S_with_ptr(bytes_per_pointer, sp);
       if( to == 0 ) continue; // text at 0 doesn't have a previous...
       tnext = j; // we're in S suffixes starting with j
+      if( DEBUG ) {
+        tnext = get_T(p_T, bytes_per_character, to);
+        assert( tnext == j );
+      }
       to -= bytes_per_character; // move to previous
-      ti = get_T(p->T, bytes_per_character, to);
+      ti = get_T(p_T, bytes_per_character, to);
       // now, if ti <= tnext, SA[i]-1 is type SS.
       if( ti <= tnext ) {
-        // to is a type S suffix and sp
-        // it must be a type SS suffix.
         // copy to it to the END of the SS bucket.
         SS_BUCKET(ti, tnext) -= bytes_per_pointer;
         set_S_with_ptr(bytes_per_pointer, SS_BUCKET(ti, tnext), to);
       }
     }
   }
+
+  // Also change the L-bucket for tlast to contain already the final
+  // suffix as it's in the proper position.
+  L_BUCKET(tlast) += bytes_per_pointer;
 
 
   // Now compute the proper ordering of the type L buckets
@@ -603,8 +702,8 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
     // go through the type-S suffixes with this start.
     sptr_t to, ti, tnext;
     unsigned char* l_start = L_bucket_starts[j]; // need 2nd start array because we're moving L buckets.
-    unsigned char* l_end = (j==n_buckets-1)?(p->S+p->s_size):(SL_BUCKET(j, j+1));
-    unsigned char* s_end = (j==n_buckets-1)?(p->S+p->s_size):(L_bucket_starts[j+1]);
+    unsigned char* l_end = (j==n_buckets-1)?(p_S+p_s_size):(SL_BUCKET(j, j+1));
+    unsigned char* s_end = (j==n_buckets-1)?(p_S+p_s_size):(L_bucket_starts[j+1]);
     unsigned char* sp;
 
     for( sp = l_start; sp < l_end; sp += bytes_per_pointer ) {
@@ -614,7 +713,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
       if( to == 0 ) continue;
       tnext = j;
       to -= bytes_per_character;
-      ti = get_T(p->T, bytes_per_character, to);
+      ti = get_T(p_T, bytes_per_character, to);
       if( tnext <= ti ) {
         // SA[i]-1 is a type L suffix.
         // copy it to the top of the L-suffixes bin.
@@ -629,7 +728,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
       if( to == 0 ) continue;
       tnext = j;
       to -= bytes_per_character;
-      ti = get_T(p->T, bytes_per_character, to);
+      ti = get_T(p_T, bytes_per_character, to);
       if( tnext < ti ) {
         // SA[i]-1 is a type L suffix.
         // copy it to the top of the L-suffixes bin.
@@ -646,38 +745,29 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
 }
 
 error_t two_stage_double(suffix_sorting_problem_t* p,
-                         suffix_context_t* context, size_t str_len, compare_fun_t compare, sptr_t max_char)
+                         suffix_context_t* context, size_t str_len, compare_fun_t compare)
 {
-#define TSD(b_per_c, b_per_p, mc) if( p->bytes_per_character == b_per_c && p->bytes_per_pointer == b_per_p && max_char <= mc ) return two_stage_double_impl(p, context, str_len, compare, mc, b_per_c, b_per_p);
+#define TSD(b_per_c, b_per_p) if( p->bytes_per_character == b_per_c && p->bytes_per_pointer == b_per_p ) return two_stage_double_impl(p, context, str_len, compare, b_per_c, b_per_p);
 
   if( p->bytes_per_character == 1 ) {
-    // For 1 character, just always use 256 as max_char
-    if( max_char <= 0 ) {
-      TSD(1,1,256);
-      TSD(1,2,256);
-      TSD(1,3,256);
-      TSD(1,4,256);
-      TSD(1,5,256);
-    }
-    TSD(1,1,7); // to check boundary conditions on unit tests.
-    TSD(1,1,128);
-    TSD(1,1,256);
-    TSD(1,2,128);
-    TSD(1,2,256);
-    TSD(1,3,128);
-    TSD(1,3,256);
-    TSD(1,4,128);
-    TSD(1,4,256);
-    TSD(1,5,128);
-    TSD(1,5,256);
+    TSD(1,1);
+    TSD(1,2);
+    TSD(1,3);
+    TSD(1,4);
+    TSD(1,5);
   } else {
-    // two-byte characters means we actually 
-    // have to use max_char...
-    TSD(2,1,512);
-    TSD(2,1,max_char);
+    TSD(2,1);
+    TSD(2,2);
+    TSD(2,3);
+    TSD(2,4);
+    TSD(2,5);
   }
 
-  TSD(p->bytes_per_character, p->bytes_per_pointer, max_char);
+  printf("Perf Note: two_stage_double%i_%i not inlined\n",
+      (int) p->bytes_per_character,
+      (int) p->bytes_per_pointer);
+
+  TSD(p->bytes_per_character, p->bytes_per_pointer);
 #undef TSD
 }
 
@@ -686,12 +776,16 @@ and then do comparisons using the compare function.
 str_len must be at least 3.
    */
 error_t two_stage_ssort(suffix_sorting_problem_t* p,
-                        suffix_context_t* context, size_t str_len, compare_fun_t compare, sptr_t max_char)
+                        suffix_context_t* context, size_t str_len,
+                        compare_fun_t compare,
+                        int flags)
 {
   error_t err;
+  int use_double = 0;
 
   if( str_len < 3 ) return ERR_PARAM;
   if( p->bytes_per_character > 3 ) return ERR_PARAM;
+  if( p->max_char > 256*256*256 ) return ERR_PARAM;
 
   err = prepare_problem(p);
   if( err ) return err;
@@ -699,13 +793,28 @@ error_t two_stage_ssort(suffix_sorting_problem_t* p,
   // Allocate S.
   p->S = (unsigned char*) malloc(p->bytes_per_pointer*p->n);
 
-  if( p->bytes_per_character >= 2 ) {
-    // do the two-stage with single-characters
-    return two_stage_single(p, context, str_len, compare, max_char);
-  } else if( p->bytes_per_character == 1 ) {
+  use_double = ( p->max_char < 800 );
+
+  if( (flags & DCX_FLAG_USE_TWO_STAGE_SINGLE) != 0 ) use_double = 0;
+  if( (flags & DCX_FLAG_USE_TWO_STAGE_DOUBLE) != 0 ) use_double = 1;
+
+  if( DEBUG ) {
+    sptr_t ti, to, t;
+    printf("in two-stage\n");
+    for( ti = 0, to = 0; to < p->t_size; to += p->bytes_per_character, ti += 1 ) {
+      t = get_T(p->T, p->bytes_per_character, to);
+      printf("T[% 4li] = % 4li\n", ti, t);
+    }
+  }
+
+  if( use_double ) {
+    printf("Running two-stage double\n");
     // do the improved two-stage with multiple characters
-    return two_stage_double(p, context, str_len, compare, max_char);
-    //return two_stage_double(p, context, str_len, compare, max_char);
+    return two_stage_double(p, context, str_len, compare);
+  } else if( p->max_char <= 256*256*256 ) {
+    printf("Running two-stage single\n");
+    // do the two-stage with single-characters
+    return two_stage_single(p, context, str_len, compare);
   } else {
     // this should never be reached...
     return ERR_PARAM;

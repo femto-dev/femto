@@ -190,6 +190,9 @@ void unit_test_dcx(void)
                      "aaaaaaaaaa" "aaaaaaaaaa" "aaaaaaaaaa" "aaaaaaaaaa" "aaaaaaaaaa"
                      "aaaaaaaaaa" "aaaaaaaaaa" "aaaaaaaaaa" "aaaaaaaaaa" "aaaaaaaaaa"
                      PAD_ZEROS,
+    (unsigned char*) "edabdccdeedab$" PAD_ZEROS, // example from Yuta Mori
+    (unsigned char*) "eeddaabbddccccddeeeeddaabb$" PAD_ZEROS, // doubled example from Yuta Mori
+    (unsigned char*) "DyzxAAAAAAAACyxBAAAAAAAACAAAAAAAJwyyyyqtzsDAAAAAAACyyEAAAAAAAGxyyxuqFAAAAAAADywyGAAAAAAAAHAAAAAAAGzy!!" PAD_ZEROS,
     NULL
   };
   int expects[][150] = {
@@ -215,18 +218,35 @@ void unit_test_dcx(void)
       39,  38,  37,  36,  35,  34,  33,  32,  31,  30,
       29,  28,  27,  26,  25,  24,  23,  22,  21,  20,
       19,  18,  17,  16,  15,  14,  13,  12,  11,  10,
-       9,   8,   7,   6,   5,   4,   3,   2,   1,   0}
+       9,   8,   7,   6,   5,   4,   3,   2,   1,   0},
+    {13, 11, 2, 12, 3, 5, 6, 10, 1, 4, 7, 9, 0, 8},
+    {26, 22, 4, 23, 5, 25, 24, 6, 7, 10, 11, 12, 13,
+     21, 3, 9, 20, 2, 8, 14, 15, 19, 1, 18, 0, 17, 16 },
+    {101, 100,  16,   4,  81,  17,   5,  43,  69,  54,
+      90,  82,  25,  18,  6,   44,  70,  55,  91,  83,
+      26,  19,   7,  45,  71,  56,  92,  84,  27,  20,
+       8,  46,  72,  57,  93,  85,  28,  21,   9,  47,
+       73, 58,  94,  86,  29,  22,  10,  48,  74,  59,
+       95, 87,  30,  23,  11,  49,  75,  60,  96,  88,
+       31, 15,  24,  12,  50,  42,  76,   0,  53,  68,
+       80, 61,  97,  89,  32,  67,  38,  41,  39,  66,
+       78, 33,   3,  14,  65,  62,  99,  52,  79,  37,
+       77, 13,  64,  51,  36,  63,  35,  34,   1,  40,
+        2, 98,
+    },
+    {0}
   };
   int flags[] = {
     0,
-    DCX_FLAG_USE_TWO_STAGE,
-    DCX_FLAG_SOMETIMES_NAME,
-    DCX_FLAG_USE_TWO_STAGE|DCX_FLAG_SOMETIMES_NAME
+    DCX_FLAG_USE_TWO_STAGE|DCX_FLAG_USE_TWO_STAGE_SINGLE,
+    DCX_FLAG_USE_TWO_STAGE|DCX_FLAG_USE_TWO_STAGE_DOUBLE,
+    DCX_FLAG_SOMETIMES_NAME, // possible optimization
+    DCX_FLAG_USE_TWO_STAGE, // normal configuration
   };
   int nflags = sizeof(flags) / sizeof(int);
-
-  for( int i = 0; texts[i]; i++ ) {
-    for( int period = 3; period < 200; period++ ) {
+ // TODO i = 0
+  for( int i = 10; texts[i]; i++ ) {
+    for( int period = 3; period < 9000; period++ ) {
       error_t err;
 
       if( ! dcx_inmem_supports_period(period) ) continue;
@@ -266,12 +286,14 @@ void unit_test_dcx(void)
             // copy the characters into T.
             for( int j = 0; j < p.n; j++ ) {
               set_T(T, csize, j*csize, texts[i][j]);
+              printf(" T[%i] = %i\n", j, (int) texts[i][j]); // TODO
               assert(texts[i][j] ==
                      get_T(T, csize, j*csize));
             }
 
             p.bytes_per_character = csize;
             p.bytes_per_pointer = psize;
+            p.max_char = (csize==1)?256:300;
             p.T = T;
             p.S = NULL;
             err = dcx_inmem_ssort(&p, period, flag);
@@ -281,7 +303,13 @@ void unit_test_dcx(void)
             for( int j = 0; j < p.n; j++ ) {
               sptr_t v = get_S(p.bytes_per_pointer, p.S, j*p.bytes_per_pointer);
               v /= p.bytes_per_character;
-              //printf("S[%i] = %i\n", j, (int) v);
+              if( v == expects[i][j] ) printf(" ");
+              else printf("x");
+              printf(" S[%i] = %i\n", j, (int) v); // TODO
+            }
+            for( int j = 0; j < p.n; j++ ) {
+              sptr_t v = get_S(p.bytes_per_pointer, p.S, j*p.bytes_per_pointer);
+              v /= p.bytes_per_character;
               assert( v == expects[i][j] );
             }
 

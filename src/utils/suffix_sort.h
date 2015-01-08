@@ -37,6 +37,7 @@ typedef struct suffix_sorting_problem {
   sptr_t n; // the number of characters in T and suffixes in S
   sptr_t t_size; // the number of bytes in T
   sptr_t s_size; // the number of bytes in S
+  sptr_t max_char; // the maximum attainable character (set to 1<<8*bytes_per_character - 1 if 0)
   sptr_t t_padding_size; // the number of bytes of 0 padding after T
   int bytes_per_character; // # of bytes per character in T
   int bytes_per_pointer; // # of bytes per pointer in S

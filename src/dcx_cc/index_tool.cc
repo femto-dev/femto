@@ -146,6 +146,7 @@ void index_tool_usage(void)
   printf(" chunk_size -- the number of rows in the Burrows-Wheeler transform to group together and save a list of matching documents. Larger chunks mean that queries for very common terms will report faster and the index will be smaller. Smaller chunks allow the chunks to be used for less common terms. 4096 is a reasonable value here, and is the default.\n");
   printf(" block_size -- size of each index data block\n");
   printf(" --sort-memory -- amount of memory to use when sorting, in MB\n");
+  printf(" --inmem or --no-inmem -- use (don't use) in memory suffix sorter\n");
   printf("\n");
 }
 
@@ -168,6 +169,7 @@ int main( int argc, char** argv )
   int nocore = 0;
   int rc;
   long sort_memory = 0;
+  int force_inmem = -1;
 
   int iproc = 0;
   int nproc = 1;
@@ -206,10 +208,22 @@ int main( int argc, char** argv )
     } else if( 0 == strcmp(argv[i], "--sort-memory") ) {
       i++;
       sort_memory = atol(argv[i]) * 1024*1024;
+    } else if( 0 == strcmp(argv[i], "--inmem") ) {
+      force_inmem = 1;
+    } else if( 0 == strcmp(argv[i], "--no-inmem") ) {
+      force_inmem = 0;
+    } else if( 0 == strcmp(argv[i], "-h") ||
+               0 == strcmp(argv[i], "--help") ) {
+      usage(argc, argv);
     } else {
       printf("adding input %s\n", argv[i]);
       input_paths.push_back(argv[i]);
     }
+  }
+
+  if( input_paths.size() == 0 ) {
+    printf("Missing input\n");
+    usage(argc, argv);
   }
 
   // Set file ulimit to 10,000 or fail horribly.
@@ -536,7 +550,7 @@ int main( int argc, char** argv )
          n_int, min_char, max_char, doc_end_char,
          to_ssort, info_output, 
          &params,
-         tmpdir, index_path);
+         tmpdir, index_path, force_inmem);
 
   if( iproc == 0 ) {
     reader->finish();

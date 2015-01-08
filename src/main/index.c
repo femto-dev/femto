@@ -566,7 +566,7 @@ error_t compress_bucket( // output areas
     save_int(dst, bucket_base, BUCKET_OFFSET_MAP, dst->len - bucket_base);
     { 
       Bool inUse16[ALPHA_SIZE_DIV16];
-      int nBytes;
+      //int nBytes;
 
       bsInitWrite ( dst );
 
@@ -575,23 +575,24 @@ error_t compress_bucket( // output areas
       for (int i = 0; i < ALPHA_SIZE_DIV16; i++) {
           inUse16[i] = False;
           for (int j = 0; j < 16; j++)
-             if (b->inUse[i * 16 + j]) inUse16[i] = True;
+             if (i*16+j < ALPHA_SIZE && b->inUse[i * 16 + j]) inUse16[i] = True;
       }
      
-      nBytes = dst->len;
+      //nBytes = dst->len;
       for (int i = 0; i < ALPHA_SIZE_DIV16; i++)
          if (inUse16[i]) bsW24(dst,1,1); else bsW24(dst,1,0);
 
       for (int i = 0; i < ALPHA_SIZE_DIV16; i++)
          if (inUse16[i])
             for (int j = 0; j < 16; j++) {
-               if (b->inUse[i * 16 + j]) bsW24(dst,1,1); else bsW24(dst,1,0);
+               if (i*16+j < ALPHA_SIZE && b->inUse[i * 16 + j]) bsW24(dst,1,1);
+               else bsW24(dst,1,0);
             }
 
       //VPrintf1( "      bytes: mapping %d, ", dst->len-nBytes );
 
       // send the coding table
-      nBytes = b->len;
+      //nBytes = b->len;
 
       // -------------- Huffman coding table
       {
@@ -1275,7 +1276,7 @@ error_t b_fault(cache_id_t cid, int data_size, void* data, void* context)
      if (inUse16[i]) {
         for (j = 0; j < 16; j++) {
            uc = bsR24( &b, 1 );
-           if (uc == 1) ent->inUse[i * 16 + j] = 1;
+           if (uc == 1 && i*16+j < ALPHA_SIZE) ent->inUse[i * 16 + j] = 1;
         }
      }
   }

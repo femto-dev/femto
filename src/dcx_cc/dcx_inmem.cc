@@ -40,7 +40,7 @@ extern "C" {
 
 //#define DEBUG 10
 #define DEBUG 0
-#define TIMING 0
+#define TIMING 1
 
 static inline
 error_t subproblem_sort(string_sort_params_t* params)
@@ -54,16 +54,18 @@ error_t suffix_sort_to_depth(suffix_sorting_problem_t* p,
                              int p_bytes_per_pointer,
                              suffix_context_t* context, size_t str_len, 
                              compare_fun_t compare,
-                             sptr_t max_char,
-                             int USE_TWO_STAGE)
+                             int flags)
 {
+  // use the S/L two-stage suffix sorter to do the whole subproblem
+  // sort (if it can - depending on the character size).
+  int USE_TWO_STAGE = (flags & DCX_FLAG_USE_TWO_STAGE) > 0;
   { // check that the context is O.K.
     assert(context);
     assert(context->T == p->T);
     assert(context->bytes_per_pointer == p_bytes_per_pointer);
   }
   if( USE_TWO_STAGE && p->bytes_per_character <= 3 && str_len >= 3) {
-    return two_stage_ssort(p, context, str_len, compare, max_char);
+    return two_stage_ssort(p, context, str_len, compare, flags);
   } else {
     // just do the sorting directly with our favorite string sorter
     string_sort_params_t params;
@@ -221,11 +223,16 @@ int compare_with_sample_ranks_core(int p_bytes_per_pointer,
   sa /= p_bytes_per_character;
   sb /= p_bytes_per_character;
 
-  cover_t::g.which_offsets_to_use(sa % cover_t::period,
-                                  sb % cover_t::period,
+  cover_t::g.which_offsets_to_use(sa % Period,
+                                  sb % Period,
                                   &a_amt, &b_amt);
 
   // return the comparison of S[sa+a_amt] vs S[sb+b_amt].
+
+  if( EXTRA_CHECKS ) {
+    assert(cover_t::g.in_cover((sa+a_amt) % Period));
+    assert(cover_t::g.in_cover((sb+b_amt) % Period));
+  }
 
   // now get the ranks for each suffix from the sample.
   sptr_t ranka = rank_of_sample_suffix<Period>( state->sampleR,
@@ -260,6 +267,12 @@ int compare_with_sample_ranks_ ## a ## _ ## b ## _ ## c (const void* context, co
     return & NAME_CWSR(a, b, c)<Period>; \
   }
 
+DECLARE_CWSR(5, 1, 5);
+DECLARE_CWSR(5, 2, 5);
+DECLARE_CWSR(5, 2, 3);
+DECLARE_CWSR(5, 3, 5);
+DECLARE_CWSR(5, 4, 5);
+DECLARE_CWSR(5, 5, 5);
 DECLARE_CWSR(4, 4, 4);
 DECLARE_CWSR(4, 3, 4);
 DECLARE_CWSR(4, 1, 4);
@@ -280,6 +293,12 @@ template<int Period>
 static
 compare_fun_t get_compare_with_sample_ranks(sorting_state_t* state)
 {
+  GET_CWSR(5, 1, 5, Period);
+  GET_CWSR(5, 2, 5, Period);
+  GET_CWSR(5, 2, 3, Period);
+  GET_CWSR(5, 3, 5, Period);
+  GET_CWSR(5, 4, 5, Period);
+  GET_CWSR(5, 5, 5, Period);
   GET_CWSR(4, 4, 4, Period);
   GET_CWSR(4, 3, 4, Period);
   GET_CWSR(4, 1, 4, Period);
@@ -301,7 +320,7 @@ compare_fun_t get_compare_with_sample_ranks(sorting_state_t* state)
 // (e.g 256 for bytes) or <=0 if it should be based on the # of bytes only.
 // Output: p->S (allocated by this routine)
 template<int Period>
-error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
+error_t dcx_ssort_core(suffix_sorting_problem_t* p,
                        int flags)
 {
   typedef Dcover<Period> cover_t;
@@ -318,13 +337,12 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
   size_t p_bytes_per_character;
   int cover_period;
 
-  // use the S/L two-stage suffix sorter to do the whole subproblem
-  // sort (if it can - depending on the character size).
-  int USE_TWO_STAGE = (flags & DCX_FLAG_USE_TWO_STAGE) > 0;
   // sometimes name improvement - we can just copy text 
   // instead of renaming if we don't expect any savings
   // (e.g. we're creating 3-byte 'characters' and pointers are 4 bytes)
   int SOMETIMES_NAME = (flags & DCX_FLAG_SOMETIMES_NAME) > 0;
+
+  int DO_TIMING = TIMING && p->n > 10000;
 
   if( DEBUG > 3 ) printf("dcx_ssort\n");
 
@@ -342,6 +360,9 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
   // at the end of the input string; and we also add a character to make
   // sure that we have a 0 character between each subproblem in recursion.
   characters_per_mod = 1 + ceildiv(p->n, cover_period);
+
+  // Start filling in the sample suffix sort subproblem
+  memset(&sample, 0, sizeof(sample));
 
   sample.n = cover_t::sample_size * characters_per_mod;
 
@@ -366,42 +387,13 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
     context.bytes_per_pointer = p_bytes_per_pointer;
     // sort all of the suffixes in S.
     return suffix_sort_to_depth(p, p_bytes_per_pointer,
-                                &context, str_len, NULL, max_char, USE_TWO_STAGE);
+                                &context, str_len, NULL, flags);
   }
 
-  if( TIMING ) {
+  if( DO_TIMING ) {
     printf("Starting dcx_ssort for %li characters\n", p->n);
     start_clock();
   }
-
-/*
-  // refine sample_n
-  {
-    // now compute the proper sample_n by using the maximum value
-    // in the sub-problems. We're doing this so that we can avoid
-    // having zeros padding the end of the string, since repeated
-    // zeros at the end become nonunique and then the algorithm
-    // doesn't terminate.
-    //printf("sample_n %i\n", (int) sample_n);
-    sptr_t biggest_sub = 0;
-    sptr_t start = 0;
-    if( p->n > cover_t::period ) start = p->n - cover_t::period;
-
-    for( sptr_t i = start; i < p->n; i++ ) {
-      if( cover_t::g.in_cover(i % cover_t::period) ) {
-        sptr_t sub_offset = sample_suffix_to_sample_offset<Period>(characters_per_mod,i);
-        if( sub_offset > biggest_sub ) biggest_sub = sub_offset;
-      }
-    }
-
-    //printf("biggest_sub %i\n", (int) biggest_sub);
-    // this should just be making a tighter bound.
-    assert( biggest_sub < sample.n );
-    sample.n = biggest_sub + 1;
-
-    if( p->n == 0 ) sample.n = 0;
-  }
-*/
 
   // step 0: construct a sample
   sample.bytes_per_character = 0;
@@ -453,11 +445,13 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
       params.same_depth = 0;
       params.get_string = get_string_getter(&context);
       params.compare = NULL;
-      if( TIMING ) start_clock();
+      if( DO_TIMING ) start_clock();
       err = subproblem_sort(&params);
       if( err ) return err;
-      if( TIMING ) stop_clock();
-      if( TIMING ) print_timings("first subproblem sort", p->n);
+      if( DO_TIMING ) {
+        stop_clock();
+        print_timings("first subproblem sort", p->n);
+      }
 
       if( DEBUG > 10 ) {
         printf("After first subproblem sort:\n");
@@ -576,6 +570,11 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
     num_ranks = -1;
   }
 
+  if( DO_TIMING ) {
+    stop_clock();
+    print_timings("dcx_ssort pre recursion", p->n);
+  }
+
   if( num_ranks == sample.n ) {
     // all the ranks are different -
     // we don't need to recurse.
@@ -584,15 +583,22 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
     if( sampleR != sample.T ) free(sample.T);
     sample.T = NULL;
   } else {
+    sptr_t R_pad;
     // free up the sample.R we allocated.
     if( sampleR != sample.T ) free(sampleR);
     sampleR = NULL;
 
+    sample.max_char = num_ranks;
+
     // step 1: sort sample suffixes
     // make the recursive call.
-    err = dcx_ssort_core<Period>(&sample, num_ranks, flags);
+    err = dcx_ssort_core<Period>(&sample, flags);
     if( err ) {
       goto error;
+    }
+
+    if( DO_TIMING ) {
+      start_clock();
     }
 
     // we don't need the sample text anymore - just the suffix array...
@@ -601,8 +607,10 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
 
     sampleR_bytes_per_rank = sample.bytes_per_pointer;
 
+    R_pad = dcx_inmem_get_padding_chars(Period)*sampleR_bytes_per_rank;
+
     // allocate new ranks for the sample.
-    sampleR = (unsigned char*) malloc(sample.n * sampleR_bytes_per_rank);
+    sampleR = (unsigned char*) calloc(sample.n+R_pad, sampleR_bytes_per_rank);
     if( ! sampleR ) {
       err = ERR_MEM;
       goto error;
@@ -630,10 +638,13 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
     // we no longer need the sample S array.
     free(sample.S);
     sample.S = NULL;
+  
+    if( DO_TIMING ) {
+      stop_clock();
+      print_timings("dcx_ssort compute ranks", p->n);
+    }
   }
 
-  if( TIMING ) stop_clock();
-  if( TIMING ) print_timings("dcx_ssort create sample", p->n);
 
 
   // step 2: sort all suffixes in S.
@@ -649,16 +660,18 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
     state.sampleR_bytes_per_rank = sampleR_bytes_per_rank;
     state.characters_per_mod = characters_per_mod;
 
-    if( TIMING ) start_clock();
+    if( DO_TIMING ) start_clock();
     err = suffix_sort_to_depth(p, p_bytes_per_pointer,
                                (suffix_context_t*) &state,
                                p->bytes_per_character * cover_period,
                                get_compare_with_sample_ranks<Period>(&state),
-                               max_char, USE_TWO_STAGE);
+                               flags);
 
     if( err ) return err;
-    if( TIMING ) stop_clock();
-    if( TIMING ) print_timings("second subproblem sort", p->n);
+    if( DO_TIMING ) {
+      stop_clock();
+      print_timings("second subproblem sort", p->n);
+    }
     if( DEBUG > 10 ) {
       printf("After second subproblem sort:\n");
       print_suffixes(p, Period);
@@ -687,20 +700,23 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p, sptr_t max_char,
 error_t dcx_inmem_ssort(suffix_sorting_problem_t* p, int period, int flags)
 {
   if( period == 3 ) {
-    return dcx_ssort_core<3>(p, 0, flags);
+    return dcx_ssort_core<3>(p, flags);
   } else if( period == 7 ) {
-    return dcx_ssort_core<7>(p, 0, flags);
+    return dcx_ssort_core<7>(p, flags);
   } else if( period == 13 ) {
-    return dcx_ssort_core<13>(p, 0, flags);
+    return dcx_ssort_core<13>(p, flags);
   } else if( period == 95 ) {
-    return dcx_ssort_core<95>(p, 0, flags);
+    return dcx_ssort_core<95>(p, flags);
   } else if( period == 133 ) {
-    return dcx_ssort_core<133>(p, 0, flags);
-/*  } else if( period == 4096 ) {
-    return dcx_ssort_core<4096>(p, 0, flags);
+    return dcx_ssort_core<133>(p, flags);
+  } else if( period == 1024 ) {
+    return dcx_ssort_core<1024>(p, flags);
+  } else if( period == 2048 ) {
+    return dcx_ssort_core<2048>(p, flags);
+  } else if( period == 4096 ) {
+    return dcx_ssort_core<4096>(p, flags);
   } else if( period == 8192 ) {
-    return dcx_ssort_core<8192>(p, 0, flags);
-    */
+    return dcx_ssort_core<8192>(p, flags);
   } else {
     assert(0 && "dcx_ssort cover period not supported");
     return ERR_PARAM;
@@ -714,6 +730,10 @@ int dcx_inmem_supports_period(int period)
   else if( period == 13 ) return 1;
   else if( period == 95 ) return 1;
   else if( period == 133 ) return 1;
+  else if( period == 1024 ) return 1;
+  else if( period == 2048 ) return 1;
+  else if( period == 4096 ) return 1;
+  else if( period == 8192 ) return 1;
   return 0;
 }
 
@@ -721,11 +741,13 @@ sptr_t dcx_inmem_get_padding_chars(int period)
 {
   // This must return at least 12 for DC3
   // the formula is
-  // 2vp/(p-v) >= required padding; where v is the sample size and p is the period.
+  // 2vp/(p-v) >= maximum sample suffix offset; where v is the sample size and p is the period.
   // For everything beyond DC3, v <= p/2,
   // and so the formula simplifies to 2p >= padding
-  if( period == 3 ) return 12;
-  else return 2*period;
+  // Also leave room for period bytes read after the maximum sample suffix
+  // Also leave room for round-off in reading...
+  if( period == 3 ) return 12+3+8;
+  else return 2*period+period+8;
 }
 
 

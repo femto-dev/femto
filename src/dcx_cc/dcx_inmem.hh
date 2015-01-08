@@ -29,10 +29,12 @@ extern "C" {
   #include "suffix_sort.h"
 }
 
+static const int DCX_FLAG_SOMETIMES_NAME = 1;
 static const int DCX_FLAG_USE_TWO_STAGE = 2;
-static const int DCX_FLAG_SOMETIMES_NAME = 4;
+static const int DCX_FLAG_USE_TWO_STAGE_SINGLE = 4;
+static const int DCX_FLAG_USE_TWO_STAGE_DOUBLE = 8;
 
-error_t dcx_inmem_ssort(suffix_sorting_problem_t* p, int period, int flags=0);
+error_t dcx_inmem_ssort(suffix_sorting_problem_t* p, int period, int flags=DCX_FLAG_USE_TWO_STAGE);
 
 int dcx_inmem_supports_period(int period);
 
@@ -40,6 +42,8 @@ int dcx_inmem_supports_period(int period);
 // multiply by bytes per characters) required for guaranteed
 // sucessfull completion.
 sptr_t dcx_inmem_get_padding_chars(int period);
+
+#include "two_stage.hh"
 
 #endif
 

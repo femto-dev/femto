@@ -24,28 +24,44 @@
 
 extern "C" {
   #include "string_sort.h"
+  #include "bswap.h"
+  #include "bit_funcs.h"
 }
 #include "varint.hh"
 #include "bucket_sort.hh"
 
 struct SortingProblemStringKey {
-  typedef unsigned char character_t;
-
   unsigned char* str;
   size_t len;
 
   SortingProblemStringKey() : str(NULL), len(0) { }
   SortingProblemStringKey(unsigned char* data, size_t len) : str(data), len(len) { }
 
-  typedef character_t key_part_t;
+  // We could use any number of bytes as a key-part
+  // Tests indicate it's slightly faster to use 8bytes,
+  // which is probably because of the large records
+  // in suffix sorting and the comparison going on
+  // in the radix sort.
+
+  //typedef uint8_t key_part_t;
+  //typedef uint16_t key_part_t;
+  //typedef uint32_t key_part_t;
+  typedef uint64_t key_part_t;
   key_part_t get_key_part(size_t i) const
   {
-    return str[i];
+    key_part_t tmp;
+    memcpy(&tmp, str+i*sizeof(key_part_t), sizeof(key_part_t));
+    if( sizeof(key_part_t) == 1 ) return tmp;
+    if( sizeof(key_part_t) == 2 ) return ntoh_16(tmp);
+    if( sizeof(key_part_t) == 4 ) return ntoh_32(tmp);
+    if( sizeof(key_part_t) == 8 ) return ntoh_64(tmp);
   }
+
   size_t get_num_key_parts() const
   {
-    return len;
+    return ceildiv(len,sizeof(key_part_t));
   }
+
 };
 
 template <int PtrBytes>
@@ -108,10 +124,12 @@ void do_sorting_problem(string_sort_params_t *context)
   SortingProblemCompare<PtrBytes> cmp2(context);
 
   size_t len = context->str_len;
-  unsigned char* minbuf = (unsigned char*) malloc(len);
-  unsigned char* maxbuf = (unsigned char*) malloc(len);
-  memset(minbuf, 0, len);
-  memset(maxbuf, 0xff, len);
+  // allocate extra space for 8-byte loads
+  size_t alloc_len = len + 8;
+  unsigned char* minbuf = (unsigned char*) malloc(alloc_len);
+  unsigned char* maxbuf = (unsigned char*) malloc(alloc_len);
+  memset(minbuf, 0, alloc_len);
+  memset(maxbuf, 0xff, alloc_len);
 
   SortingProblemStringKey min(minbuf, len);
   SortingProblemStringKey max(maxbuf, len);

@@ -209,6 +209,12 @@ error_t prepare_problem(suffix_sorting_problem_t* p)
   // set s_size
   p->s_size = p->n*p->bytes_per_pointer;
 
+  if( p->max_char == 0 ) {
+    uint64_t tmp = 1;
+    tmp <<= 8*p->bytes_per_character - 1;
+    tmp += tmp - 1;
+    p->max_char = tmp;
+  }
   return ERR_NOERR;
 }
 

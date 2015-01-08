@@ -90,7 +90,8 @@ class Dcover
   enum {
     period = cover_table_t::period,
     sample_size = cover_table_t::sample_size,
-    nonsample_size = cover_table_t::nonsample_size 
+    nonsample_size = cover_table_t::nonsample_size,
+    table_period = (cover_table_t::period<32)?(cover_table_t::period):(1)
   };
 
   static const int num_bytes_period_t = CompileTimeNumBytes<period>::num_bytes;
@@ -103,7 +104,7 @@ class Dcover
 
   int sample[period];    // sample[i mod v]=index s.t. cover[index]=i, else -1
   int nonsample[period]; // nonsample[i mod v]=number of nonsample < i.
-  int table[period][period];
+  int table[table_period][table_period];
                           // table[i][j] == i_amt
                           // where i_amt is the number of sample
                           //   suffixes to skip of those immediately after i
@@ -127,9 +128,13 @@ class Dcover
     }
    
     // make useful look-up tables
+      //printf("make sample %i\n", period);
     dc_make_sample();
+     // printf("make nonsample %i\n", period);
     dc_make_nonsample();
+     // printf("make table %i\n", period);
     dc_make_table();
+     // printf("done generating cover\n");
   }
 
 
@@ -147,6 +152,7 @@ class Dcover
 
   void which_samples_to_use(int i, int j, int* i_off, int* j_off) const
   {
+    assert(table_period == period);
     if( EXTRA_CHECKS ) {
       assert( i>=0 && i< period );
       assert( j>=0 && j< period );
@@ -225,6 +231,22 @@ class Dcover
   {
     int i,j,l;
 
+    // we're computing best_iprime and best_l
+    for( int ip = 0; ip < sample_size; ip++ ) {
+      for( int jp = 0; jp < sample_size; jp++ ) {
+        int iprime = cover[ip];
+        int jprime = cover[jp];
+        int diff;
+        // now i' and j' are in the difference cover.
+        // i'-j' == d mod v
+        diff = iprime - jprime;
+        if( diff < 0 ) diff += period;
+        l_table[diff] = iprime;
+      }
+    }
+
+    if( table_period != period ) return;
+
     assert(sample); // sample is used below.
 
     for( i = 0; i < period; i++ ) {
@@ -248,21 +270,6 @@ class Dcover
       int amt = table[i][i];
       assert( amt == 0 ); // it's always just the next sample!
     }
-
-    // we're computing best_iprime and best_l
-    for( int ip = 0; ip < sample_size; ip++ ) {
-      for( int jp = 0; jp < sample_size; jp++ ) {
-        int iprime = cover[ip];
-        int jprime = cover[jp];
-        int diff;
-        // now i' and j' are in the difference cover.
-        // i'-j' == d mod v
-        diff = iprime - jprime;
-        if( diff < 0 ) diff += period;
-        l_table[diff] = iprime;
-      }
-    }
-
   }
 
   void dc_make_sample()

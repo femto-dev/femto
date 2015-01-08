@@ -411,7 +411,10 @@ int main(int argc, char** argv)
     MPI_Bcast( tmpdir, len, MPI_BYTE, 0, MPI_COMM_WORLD );
 #endif 
   }
- 
+  
+  test_repeats('a', 1024);
+  return 0;
+
   {
     const char* input = "ba";
     int output[] = {1,0};
