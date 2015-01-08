@@ -2617,7 +2617,7 @@ public:
             input_record_t r = *read;
             character_t ch = InputToCharacterTranslator::translate(r);
 
-            printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, byte_offset/nbytes_character, (int) ch);
+            printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, (int) byte_offset/nbytes_character, (int) ch);
             set_T(T, nbytes_character, byte_offset, ch);
 
             ++read;
@@ -2763,10 +2763,10 @@ public:
         }
 
         // TODO
-        printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, tuple.offset, tuple.characters.get_character(0));
+        printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, (int) tuple.offset, (int) tuple.characters.get_character(0));
 
         if( DEBUG_DCX > 10 ) {
-          printf("node %i out: %s\n", dcx->iproc, tuple.to_string().c_str());
+          printf("node %i out: %s\n", (int) dcx->iproc, tuple.to_string().c_str());
         }
 
         // Output the record we made.

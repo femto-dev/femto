@@ -28,7 +28,7 @@ extern "C" {
 
 #include "dcx_inmem.hh"
 
-#define DEBUG 1
+#define DEBUG 0
 
 /*
   Important terminology (we follow Ko-Aluru terminology):
@@ -170,8 +170,10 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   // note that the buckets are now pointing at the ends of the buckets..
   {
     char mark_next = 0;
-    // store the bit-complement on the next stored suffix if this 
-    // suffix is of the sorting type.
+    // store the bit-complement on a stored suffix to 'mark' it.
+    // mark suffixes that are preceeded by a suffix with that
+    // we are not sorting - ie that are preceeded by a suffix
+    // we need to put in proper position.
     CLASSIFY_SL({
                   sptr_t store;
                   store = (mark_next)?(~to):(to);
@@ -408,6 +410,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
 {
   unsigned char** L_buckets; // these are pointers into S.
   unsigned char** L_bucket_starts; // these are pointers into S.
+  unsigned char** S_bucket_starts; // these are pointers into S.
   unsigned char** S_buckets;
   int n_buckets, n_buckets2;
   sptr_t tlast;
@@ -427,6 +430,8 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
   if( ! L_buckets ) return ERR_MEM;
   L_bucket_starts = (unsigned char**) calloc(n_buckets, sizeof(unsigned char*));
   if( ! L_bucket_starts ) return ERR_MEM;
+  S_bucket_starts = (unsigned char**) calloc(n_buckets, sizeof(unsigned char*));
+  if( ! S_bucket_starts ) return ERR_MEM;
   S_buckets = (unsigned char**) calloc(n_buckets2, sizeof(unsigned char*));
   if( ! S_buckets ) return ERR_MEM;
   // to be an SL bucket, c0<c1
@@ -514,23 +519,26 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
                  if( DEBUG ) printf("T[% 4li] = % 4li % 4li is L \n", to/bytes_per_character, ti, tnext);
                });
 
-  for( int i = 0; i < n_buckets; i++ ) {
-    if( L_BUCKET(i) > 0 ) {
-      printf("L[%i] = %li\n", i, (long) L_BUCKET(i));
-    }
-    for( int j = 0; j < n_buckets; j++ ) {
-      if( i < j ) {
-        if( SL_BUCKET(i, j) > 0 ) {
-          printf("SL[%i,%i] = %li\n", i, j, (long) SL_BUCKET(i,j));
-        }
+  if( DEBUG ) {
+    for( int i = 0; i < n_buckets; i++ ) {
+      if( L_BUCKET(i) > 0 ) {
+        printf("L[%i] = %li\n", i, (long) L_BUCKET(i));
       }
-      if( i <= j ) {
-        if( SS_BUCKET(i, j) > 0 ) {
-          printf("SS[%i,%i] = %li\n", i, j, (long) SS_BUCKET(i,j));
+      for( int j = 0; j < n_buckets; j++ ) {
+        if( i < j ) {
+          if( SL_BUCKET(i, j) > 0 ) {
+            printf("SL[%i,%i] = %li\n", i, j, (long) SL_BUCKET(i,j));
+          }
+        }
+        if( i <= j ) {
+          if( SS_BUCKET(i, j) > 0 ) {
+            printf("SS[%i,%i] = %li\n", i, j, (long) SS_BUCKET(i,j));
+          }
         }
       }
     }
   }
+
   // Next, turn the buckets into offsets in the input.
   // L_buckets point to the *end* of each bucket
   // SL_buckets point to the *end* of each bucket
@@ -544,6 +552,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
       count = (sptr_t) L_BUCKET(j);
       next += count;
       L_BUCKET(j) = next;
+      S_bucket_starts[j] = next;
       // now do all of the S-buckets...
       // if k == j it's an SS bucket or an L bucket.
       // because if k==j, k and j have the same type.
@@ -582,10 +591,10 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
     unsigned char* end = p_S;
     unsigned char* next_L = p_S;
     for( int j = 0; j < n_buckets; j++ ) {
-      start = L_BUCKET(j);
-      end = SS_BUCKET(j, j);
+      start = L_bucket_starts[j];
+      end = S_bucket_starts[j];
       next_L = start;
-      if( j+1 < n_buckets ) next_L = L_BUCKET(j+1);
+      if( j+1 < n_buckets ) next_L = L_bucket_starts[j+1];
 
       //printf(" L[%i] = %p\n", j, L_BUCKET(j));
       print_bucket(" L", j, 0, start, end, bytes_per_pointer);
@@ -664,9 +673,8 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
   // Go through only the type S suffixes.
   // Again, there can be no S suffixes starting with the maximal character.
   for( int j = n_buckets-2; j >= 0; j-- ) {
-    unsigned char* start = SL_BUCKET(j, j+1);
-    unsigned char* end = L_BUCKET(j+1);
-    if( DEBUG ) assert(L_bucket_starts[j+1]== L_BUCKET(j+1));
+    unsigned char* start = S_bucket_starts[j];
+    unsigned char* end = L_bucket_starts[j+1];
     for( unsigned char* sp = end-bytes_per_pointer;
          sp >= start;
          sp -= bytes_per_pointer ) {
@@ -680,7 +688,10 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
       }
       to -= bytes_per_character; // move to previous
       ti = get_T(p_T, bytes_per_character, to);
-      // now, if ti <= tnext, SA[i]-1 is type SS.
+      // we know that the suffix at i is of type S
+      // so it follows that T[i-1] <= T[i], then
+      // the suffix at T[i-1] is of type SS.
+      // if ti <= tnext, SA[i]-1 is type SS.
       if( ti <= tnext ) {
         // copy to it to the END of the SS bucket.
         SS_BUCKET(ti, tnext) -= bytes_per_pointer;
@@ -689,6 +700,28 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
     }
   }
 
+  if( DEBUG ) {
+    unsigned char* start = p_S;
+    unsigned char* end = p_S;
+    unsigned char* next_L = p_S;
+    printf("After sorting type S suffixes\n");
+    for( int j = 0; j < n_buckets; j++ ) {
+      start = L_bucket_starts[j];
+      end = S_bucket_starts[j];
+      next_L = p_S + p_s_size;
+      if( j+1 < n_buckets ) next_L = L_bucket_starts[j+1];
+
+      //printf(" L[%i] = %p\n", j, L_BUCKET(j));
+      print_bucket(" L", j, 0, start, end, bytes_per_pointer);
+
+      start = S_bucket_starts[j];
+      end = next_L;
+
+      //printf("S[%i] = %p\n", j, k, SL_BUCKET(j,k));
+      print_bucket(" S", j, 0, start, end, bytes_per_pointer);
+    }
+  }
+ 
   // Also change the L-bucket for tlast to contain already the final
   // suffix as it's in the proper position.
   L_BUCKET(tlast) += bytes_per_pointer;
@@ -738,8 +771,10 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
     }
   }
 
-  free(S_buckets);
   free(L_buckets);
+  free(L_bucket_starts);
+  free(S_bucket_starts);
+  free(S_buckets);
 
   return ERR_NOERR;
 }

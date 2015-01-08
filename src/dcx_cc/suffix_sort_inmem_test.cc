@@ -32,6 +32,7 @@ extern "C" {
 
 #include "dcx_inmem.hh"
 
+#define DEBUG 0
 
 int int_shift_cmp(const void* av, const void* bv, const void* usr)
 {
@@ -183,7 +184,9 @@ void unit_test_dcx(void)
     (unsigned char*) "yabbadabbadoo" PAD_ZEROS,
     (unsigned char*) "yabbadabba" PAD_ZEROS,
     (unsigned char*) "abcdefghijklmnopqrstuvwxyz" PAD_ZEROS,
+    (unsigned char*) "aaabbbcccdddeeefffggghhhii" PAD_ZEROS,
     (unsigned char*) "zyxwvutsrqponmlkjihgfedcba" PAD_ZEROS,
+    (unsigned char*) "zzzyyyxxxwwwvvvuuutttsssrr" PAD_ZEROS,
     (unsigned char*) "\x0\xFF\x0\x1\x2\xA9\xFF\xA9" PAD_ZEROS,
     (unsigned char*) "seeresses.seeresses" PAD_ZEROS,
     (unsigned char*) "aaaaaaaaaa" "aaaaaaaaaa" "aaaaaaaaaa" "aaaaaaaaaa" "aaaaaaaaaa"
@@ -201,6 +204,8 @@ void unit_test_dcx(void)
     {1, 6, 4, 9, 3, 8, 2, 7, 5, 10, 12, 11, 0},
     {9, 6, 1, 4, 8, 3, 7, 2, 5, 0},
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25},
+    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 24},
+    {25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
     {25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
     {2, 0, 3, 4, 7, 5, 1, 6},
     {9, 11, 1, 12, 2, 17, 7, 14, 4, 13, 3, 18, 8, 10, 0, 16, 6, 15, 5},
@@ -244,8 +249,7 @@ void unit_test_dcx(void)
     DCX_FLAG_USE_TWO_STAGE, // normal configuration
   };
   int nflags = sizeof(flags) / sizeof(int);
- // TODO i = 0
-  for( int i = 10; texts[i]; i++ ) {
+  for( int i = 0; texts[i]; i++ ) {
     for( int period = 3; period < 9000; period++ ) {
       error_t err;
 
@@ -286,7 +290,7 @@ void unit_test_dcx(void)
             // copy the characters into T.
             for( int j = 0; j < p.n; j++ ) {
               set_T(T, csize, j*csize, texts[i][j]);
-              printf(" T[%i] = %i\n", j, (int) texts[i][j]); // TODO
+              if( DEBUG ) printf(" T[%i] = %i\n", j, (int) texts[i][j]);
               assert(texts[i][j] ==
                      get_T(T, csize, j*csize));
             }
@@ -300,12 +304,14 @@ void unit_test_dcx(void)
             die_if_err(err);
 
             // now we should have, in p.S, the result of the suffix sorting.
-            for( int j = 0; j < p.n; j++ ) {
-              sptr_t v = get_S(p.bytes_per_pointer, p.S, j*p.bytes_per_pointer);
-              v /= p.bytes_per_character;
-              if( v == expects[i][j] ) printf(" ");
-              else printf("x");
-              printf(" S[%i] = %i\n", j, (int) v); // TODO
+            if( DEBUG ) {
+              for( int j = 0; j < p.n; j++ ) {
+                sptr_t v = get_S(p.bytes_per_pointer, p.S, j*p.bytes_per_pointer);
+                v /= p.bytes_per_character;
+                if( v == expects[i][j] ) printf(" ");
+                else printf("x");
+                printf(" S[%i] = %i\n", j, (int) v);
+              }
             }
             for( int j = 0; j < p.n; j++ ) {
               sptr_t v = get_S(p.bytes_per_pointer, p.S, j*p.bytes_per_pointer);
