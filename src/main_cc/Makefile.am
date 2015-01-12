@@ -11,4 +11,4 @@ femto_search_CPPFLAGS = -I $(srcdir)/../re2/re2 $(AM_CPPFLAGS)
 
 TESTS = $(check_PROGRAMS) $(check_SCRIPTS)
 
-EXTRA_DISTS = CMakeLists.txt
+EXTRA_DIST = CMakeLists.txt

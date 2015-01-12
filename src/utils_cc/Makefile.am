@@ -32,4 +32,4 @@ string_sort_test_SOURCES = string_sort_test.cc
 
 TESTS = $(check_PROGRAMS) $(check_SCRIPTS)
 
-EXTRA_DISTS = CMakeLists.txt
+EXTRA_DIST = CMakeLists.txt

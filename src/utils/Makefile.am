@@ -14,4 +14,4 @@ check_PROGRAMS = bit_funcs_test bit_array_test buffer_test cache_test hashmap_te
 
 #bin_PROGRAMS = random_read_test find_util stats_util dorband_sort_test is_netfs
 
-EXTRA_DISTS = CMakeLists.txt
+EXTRA_DIST = CMakeLists.txt
