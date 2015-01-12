@@ -27,8 +27,6 @@
 #include "sort_tests.hh"
 #include "bucket_sort.hh"
 
-#define NUM_BINS MAXBINS_DEFAULT
-
 // num bits for packed record tests.
 #define NUM_BITS 17
 
@@ -58,7 +56,7 @@ void test_permute(size_t num, BucketSorterSettings in_settings)
   settings.Permute = true;
 
   {
-    typedef BucketSorter<Record<ExtraBytes>,Criterion<ExtraBytes>,size_t,NUM_BINS> EzBucketSorter;
+    typedef BucketSorter<Record<ExtraBytes>,Criterion<ExtraBytes> > EzBucketSorter;
 
 
     std::vector<Record<ExtraBytes> > arr;
@@ -141,7 +139,7 @@ void test_permute(size_t num, BucketSorterSettings in_settings)
     // Try it with packed records.
     typedef PackedRecord<NUM_BITS> record_t;
     typedef RecordTraits<record_t> record_traits_t;
-    typedef BucketSorter<record_t,PackedRecordCriterion<NUM_BITS>,size_t,NUM_BINS> EzBucketSorter;
+    typedef BucketSorter<record_t,PackedRecordCriterion<NUM_BITS> > EzBucketSorter;
 
     std::vector<char> arr;
     PackedRecordCriterion<NUM_BITS>::key_t min_k;
@@ -196,8 +194,8 @@ void test_permute(size_t num, BucketSorterSettings in_settings)
 template<int ExtraBytes, int MaxBins>
 void test_bucket_sort_simple_impl(size_t num, BucketSorterSettings in_settings)
 {
-  typedef BucketSorter<Record<ExtraBytes>,Criterion<ExtraBytes>,size_t,MaxBins> EzBucketSorter;
-  typedef BucketSorter<Record<ExtraBytes>,PartCriterion<ExtraBytes>,size_t,MaxBins> EzPartBucketSorter;
+  typedef BucketSorter<Record<ExtraBytes>,Criterion<ExtraBytes>,CompareSameCriterion,size_t,MaxBins> EzBucketSorter;
+  typedef BucketSorter<Record<ExtraBytes>,PartCriterion<ExtraBytes>,CompareSameCriterion,size_t,MaxBins> EzPartBucketSorter;
   Criterion<ExtraBytes> ctx;
   PartCriterion<ExtraBytes> part_ctx;
   std::vector<Record<ExtraBytes> > arr;
@@ -455,7 +453,7 @@ void test_bucket_sort_simple_impl(size_t num, BucketSorterSettings in_settings)
 template <int ExtraBytes, int MaxBins>
 void test_bucket_sort_random_impl(size_t num, BucketSorterSettings in_settings)
 {
-  typedef BucketSorter<Record<ExtraBytes>,Criterion<ExtraBytes>,size_t,MaxBins> EzBucketSorter;
+  typedef BucketSorter<Record<ExtraBytes>,Criterion<ExtraBytes>,CompareSameCriterion,size_t,MaxBins> EzBucketSorter;
   Criterion<ExtraBytes> ctx;
   RecordSortingCriterion<Record<ExtraBytes> ,Criterion<ExtraBytes> > criterion(ctx);
   std::vector<Record<ExtraBytes> > values;

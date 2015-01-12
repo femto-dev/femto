@@ -14,9 +14,9 @@ set(FEMTO_DCX_CC_SRCS
     dcx.cc
     dcover.hh
     dcover.cc
-    dcover_internal.h
-    dcover_internal.c
+    dcx_inmem.hh
     dcx_inmem.cc
+    two_stage.hh
     two_stage.cc
     )
 
