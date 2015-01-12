@@ -71,7 +71,8 @@ int main(int argc, char** argv)
   if( other_arg != num_other_args ) {
     fprintf(stderr, "Not enough arguments\n");
     usage(argv[0]);
-    return -1;
+    rc = -1;
+    goto done;
   }
 
   j = 0;
@@ -91,5 +92,5 @@ done:
 
   MPI_handler::finalize_MPI();
 
-  return 0;
+  return rc;
 }

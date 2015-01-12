@@ -6,6 +6,13 @@ add_custom_target(
 )
 
 
+add_test(
+   NAME test_re2
+   COMMAND make test
+   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/re2/re2
+)
+
+
 add_library(re2 STATIC IMPORTED)
 #set(RE2_LIB_DIR ${CMAKE_SOURCE_DIR}/src/re2/re2/obj/ PARENT_SCOPE)
 #set(RE2_LIB ${CMAKE_SOURCE_DIR}/src/re2/re2/obj/libre2.a PARENT_SCOPE)
