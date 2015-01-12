@@ -56,7 +56,7 @@ void test_regexp_search(void)
   {
     get_doc_info_query_t q;
     for( int i = 0; i < ndocs; i++ ) {
-      err = setup_get_doc_info_query(&q, NULL, loc, i);
+      err = setup_get_doc_info_query(&q, NULL, loc, i, 0);
       die_if_err(err);
 
       err = femto_run_query(&srv, (query_entry_t*) &q);

@@ -22,12 +22,17 @@
 #include "sort_tests.hh"
 #include "sort.hh"
 
+#include <cstring>
+#include <cstdlib>
+extern "C" {
+#include <unistd.h>
+}
+
 #define VERBOSE 0
 #define PROGRESS 0
 #define EXTRATESTS 0
  
-
-#define TMP_FILE "/tmp/sort_test"
+char* TMP_FILE;
 
 void progress(const char* s)
 {
@@ -172,6 +177,11 @@ int main(int argc, char** argv)
   int n[] = {1, 2, 4, 15, 25, 45, 100, 1000, 10*1024, 20*1024, 30*1024, 1024*1024};
   int n_n = sizeof(n)/sizeof(int);
 
+  char* fname = strdup("/tmp/sort_test_XXXXXX");
+
+  int fd = mkstemp(fname);
+  TMP_FILE =  fname;
+
   for( int i = 0; i < n_n; i++ ) {
     std::cout << "Test of size " << n[i] << std::endl;
     for( int t = 0; t < NUM_TESTS; t++ ) {
@@ -180,5 +190,11 @@ int main(int argc, char** argv)
       }
     }
   }
+
+  std::cout << "PASS" << std::endl;
+
+  close(fd);
+  unlink(fname);
+  free(fname);
 }
 
