@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8)
 project(FEMTO C CXX)
 
-set(FEMTO_VERSION "femto 1.2.9.2 from http://github.com/femto-dev/femto")
+set(FEMTO_VERSION "femto 1.3.0 from http://github.com/femto-dev/femto")
 
 # Find FindAPR and FindAPXS
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")

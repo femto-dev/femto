@@ -1,3 +1,7 @@
+1.3.0 - includes in-memory suffix sorting/indexing
+
+1.2.9.2 - build with CMake
+
 1.2.9.1 - don't require core2
 
 1.2.9 - Bug fixes, deduplication, grep-like output in femto_search
