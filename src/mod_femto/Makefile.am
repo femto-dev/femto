@@ -1,3 +1,4 @@
+EXTRA_DIST = README femto-js CMakeLists.txt
 
 if HAS_APXS
 
@@ -7,8 +8,6 @@ pkglib_LTLIBRARIES = libmod_femto.la
 libmod_femto_la_SOURCES = mod_femto.c
 libmod_femto_la_LIBADD = ../main/libfemto.la ../utils/libfemto_util.la
 libmod_femto_la_LDFLAGS = -module
-
-EXTRA_DIST = README femto-js
 
 apxs-install:
 	${APXS} -i -a -n femto libmod_femto.la

@@ -9,7 +9,7 @@ libfemto_dcx_cc_la_SOURCES = dcx.hh dcx.cc dcover.hh dcover.cc dcx_inmem.hh dcx_
 LDADD = libfemto_dcx_cc.la ../main/libfemto_seq.la ../main/libfemto.la ../main/libfemto_bwt.la ../mpi/libfemto_mpi_cc.la ../utils_cc/libfemto_util_cc.la ../utils/libfemto_util.la -lssl -lcrypto
 
 check_SCRIPTS = suffix_sort_test.sh
-EXTRA_DIST = suffix_sort_test.sh
+EXTRA_DIST = suffix_sort_test.sh CMakeLists.txt
 
 check_PROGRAMS = dcover_test suffix_sort_test suffix_sort_inmem_test
 

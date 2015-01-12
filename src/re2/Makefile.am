@@ -14,5 +14,5 @@ clean-local:
 #	cd re2 && $(MAKE) $(AM_MAKEFLAGS) uninstall
 
 # Distribute files from here.
-EXTRA_DIST = re2
+EXTRA_DIST = re2 CMakeLists.txt
 
