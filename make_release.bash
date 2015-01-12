@@ -14,7 +14,7 @@ cd femto
 #make dist
 VERSION=`head -n 1 ChangeLog | cut -d ' ' -f 1`
 ARCHIVE_NAME="femto-$VERSION"
-git archive --prefix=$ARCHIVE_NAME HEAD | gzip > $ARCHIVE_NAME.tar.gz
+git archive --prefix=$ARCHIVE_NAME/ -o $ARCHIVE_NAME.tar.gz HEAD
 mkdir dist-build
 cd dist-build
 tar xvzf ../femto*.tar.gz
