@@ -273,6 +273,7 @@ void check_ssort(size_t len, const char* input, const int* expected_output)
                   << " Running tiny suffix sort test with (" << len << ") \'" << take_prefix(input,len,20) << "\'" << std::endl;
       }
     }
+    fflush(stdout); fflush(stderr);
 
     check_ssort_tiny(len, input, expected_output, inmem);
 
@@ -282,6 +283,7 @@ void check_ssort(size_t len, const char* input, const int* expected_output)
                   << " Running normal suffix sort test with (" << len << ") \'" << take_prefix(input,len,20) << "\'" << std::endl;
       }
     }
+    fflush(stdout); fflush(stderr);
 
     check_ssort_normal(len, input, expected_output, inmem);
 
@@ -291,6 +293,7 @@ void check_ssort(size_t len, const char* input, const int* expected_output)
                   << " Running wide suffix sort test with (" << len << ") \'" << take_prefix(input,len,20) << "\'" << std::endl;
       }
     }
+    fflush(stdout); fflush(stderr);
 
     check_ssort_wide(len, input, expected_output, inmem);
   }
@@ -412,9 +415,6 @@ int main(int argc, char** argv)
 #endif 
   }
   
-  test_repeats('a', 1024);
-  return 0;
-
   {
     const char* input = "ba";
     int output[] = {1,0};

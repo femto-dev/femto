@@ -813,7 +813,12 @@ public:
   enum {
     nbytes_character = (nbits_character + 7)/8,
     nbytes_offset = (nbits_offset + 7)/8,
-    dcx_inmem_period = 8192
+
+    // DCX period for in-memory suffix sorter.
+    // 8192 is probably faster but exhausts stack memory
+    // in the bucket sorting routines (because they are
+    // recursive).
+    dcx_inmem_period = 133
   };
 
   // Uses current io stats!
@@ -2617,7 +2622,7 @@ public:
             input_record_t r = *read;
             character_t ch = InputToCharacterTranslator::translate(r);
 
-            printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, (int) byte_offset/nbytes_character, (int) ch);
+            //printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, (int) byte_offset/nbytes_character, (int) ch);
             set_T(T, nbytes_character, byte_offset, ch);
 
             ++read;
@@ -2650,8 +2655,7 @@ public:
         sptr_t t_byte_offset = get_S(nbytes_offset, S, s_byte_offset);
         out.offset = t_byte_offset / nbytes_character;
         out.rank = i;
-        //TODO -- seing duplicate offsets here.... including more than one 233
-        printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
+        //printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
         output->push_back(out);
         s_byte_offset += nbytes_offset;
       }
@@ -2762,11 +2766,10 @@ public:
           tuple.characters.set_characters(chars);
         }
 
-        // TODO
-        printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, (int) tuple.offset, (int) tuple.characters.get_character(0));
+        //printf("node %i in: T[%i]=%i\n", (int) dcx->iproc, (int) tuple.offset, (int) tuple.characters.get_character(0));
 
         if( DEBUG_DCX > 10 ) {
-          printf("node %i out: %s\n", (int) dcx->iproc, tuple.to_string().c_str());
+          //printf("node %i out: %s\n", (int) dcx->iproc, tuple.to_string().c_str());
         }
 
         // Output the record we made.
@@ -3635,10 +3638,10 @@ public:
               assert(out.offset < dcx->n);
             }
 
-            //if( DEBUG_DCX > 10 ) { TODO
-              //printf("node %i in_unique: %s\n", (int) dcx->iproc, (*read_unique).to_string().c_str());
-              printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
-            //}
+            if( DEBUG_DCX > 10 ) {
+              printf("node %i in_unique: %s\n", (int) dcx->iproc, (*read_unique).to_string().c_str());
+              //printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
+            }
             output->push_back(out);
             // Move on to the next unique.
             ++read_unique;
@@ -3651,10 +3654,10 @@ public:
             }
 
 
-            //if( DEBUG_DCX > 10 ) { TODO
-              //printf("node %i in_merged: %s\n", (int) dcx->iproc, (*read_merged).to_string().c_str());
-              printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
-            //}
+            if( DEBUG_DCX > 10 ) {
+              printf("node %i in_merged: %s\n", (int) dcx->iproc, (*read_merged).to_string().c_str());
+              //printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
+            }
             output->push_back(out);
             rank++;
             // Move on to the next merged.
@@ -3675,10 +3678,10 @@ public:
             assert(out.offset < dcx->n);
           }
 
-          //if( DEBUG_DCX > 10 ) { TODO
-            //printf("node %i in_unique: %s\n", (int) dcx->iproc, (*read_unique).to_string().c_str());
-            printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
-          //}
+          if( DEBUG_DCX > 10 ) {
+            printf("node %i in_unique: %s\n", (int) dcx->iproc, (*read_unique).to_string().c_str());
+            //printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
+          }
           output->push_back(out);
           // Move on to the next unique.
           ++read_unique;
@@ -3691,10 +3694,10 @@ public:
           if( EXTRA_CHECKS ) {
             assert(out.offset < dcx->n);
           }
-          //if( DEBUG_DCX > 10 ) { TODO
-            //printf("node %i in_merged: %s\n", (int) dcx->iproc, (*read_merged).to_string().c_str());
-            printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
-          //}
+          if( DEBUG_DCX > 10 ) {
+            printf("node %i in_merged: %s\n", (int) dcx->iproc, (*read_merged).to_string().c_str());
+            //printf("node %i out: %s\n", (int) dcx->iproc, out.to_string().c_str());
+          }
           output->push_back(out);
           rank++;
           // Move on to the next merged.
