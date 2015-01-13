@@ -37,6 +37,7 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 cd ..
+sh autogen.sh
 ./configure
 if [ $? -ne 0 ]; then
   echo "autotools configure failed"
