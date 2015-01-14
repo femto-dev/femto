@@ -2637,7 +2637,11 @@ public:
       start_clock();
 
       // Then, suffix sort in memory.
-      error_t err = dcx_inmem_ssort(p, dcx_inmem_period, DCX_FLAG_USE_TWO_STAGE);
+      // flags note: I observed DCX_FLAG_PARALLEL to add about 20% performance,
+      //  but when DCX_FLAG_PARALLEL is on, using FLAG_USE_TWO_STAGE_SINGLE makes
+      //  it faster again (36%) improvement. So that's why it's configured this way
+      //  now. To do better, we'd have to have a better parallel algorithm...
+      error_t err = dcx_inmem_ssort(p, dcx_inmem_period, DCX_FLAG_USE_TWO_STAGE|DCX_FLAG_PARALLEL |DCX_FLAG_USE_TWO_STAGE_SINGLE);
       die_if_err(err);
 
       stop_clock();

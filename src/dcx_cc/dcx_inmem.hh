@@ -33,6 +33,7 @@ static const int DCX_FLAG_SOMETIMES_NAME = 1;
 static const int DCX_FLAG_USE_TWO_STAGE = 2;
 static const int DCX_FLAG_USE_TWO_STAGE_SINGLE = 4;
 static const int DCX_FLAG_USE_TWO_STAGE_DOUBLE = 8;
+static const int DCX_FLAG_PARALLEL = 16;
 
 error_t dcx_inmem_ssort(suffix_sorting_problem_t* p, int period, int flags=DCX_FLAG_USE_TWO_STAGE);
 

@@ -29,6 +29,8 @@ extern "C" {
 #include "dcx_inmem.hh"
 
 #define DEBUG 0
+#define OMP_MIN_BINS 16
+
 
 /*
   Important terminology (we follow Ko-Aluru terminology):
@@ -61,6 +63,7 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
                               suffix_context_t* context,
                               size_t str_len,
                               compare_fun_t compare,
+                              int parallel,
                               // These args are here just for optimizing.
                               int bytes_per_character,
                               int bytes_per_pointer)
@@ -76,6 +79,7 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   unsigned char* p_S = p->S;
   sptr_t p_t_size = p->t_size;
   sptr_t p_s_size = p->s_size;
+  sptr_t n_used_L_buckets, n_used_S_buckets;
 
   assert(max_char>0 && max_char <= 256*256*256);
   assert(p_S);
@@ -135,11 +139,15 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   {
     sptr_t total_S, total_L;
     total_S = 0;
+    n_used_L_buckets = 0;
+    n_used_S_buckets = 0;
     CLASSIFY_SL({
+                  if( S_buckets[ti] == 0 ) n_used_S_buckets++;
                   S_buckets[ti] += bytes_per_pointer;
                   total_S++;
                 },
                 {
+                  if( L_buckets[ti] == 0 ) n_used_L_buckets++;
                   L_buckets[ti] += bytes_per_pointer;
                 });
     total_L = p->n - total_S;
@@ -216,7 +224,7 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
   // L_buckets are currently pointing to the start of the L_bucket.
   // S_buckets are currently pointing to the start of the S_bucket.
   {
-    string_sort_params_t local;
+    string_sort_params_t local={0};
 
     local.context = context;
     local.base = NULL;
@@ -227,8 +235,12 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
     local.get_string = get_string_getter_comp(context);
     local.compare = compare;
 
+    int parallel = 1;
+    int go_parallel = 0;
+
     if( sorting_S ) {
-      // TODO OMP PARALLEL FOR
+      go_parallel = parallel && ( n_used_S_buckets >= OMP_MIN_BINS );
+      #pragma omp parallel for schedule(dynamic,1) if (go_parallel)
       for( int j = 0; j < n_buckets; j++ ) {
         unsigned char* end;
         string_sort_params_t mylocal = local;
@@ -242,14 +254,21 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
         // sort from S_buckets[j] to end
         mylocal.base = S_buckets[j];
         mylocal.n_memb = (end - mylocal.base)/bytes_per_pointer;
+        mylocal.parallel = parallel && ! go_parallel;
+
         if( mylocal.n_memb > 1 ) {
           // don't bother calling sort for zero-sized or 1-sized buckets.
           err = favorite_string_sort(&mylocal);
+#if defined(_OPENMP)
+          die_if_err(err);
+#else
           if( err ) return err;
+#endif
         }
       }
     } else { // sorting L
-      // TODO OMP PARALLEL FOR
+      go_parallel = parallel && ( n_used_L_buckets >= OMP_MIN_BINS );
+      #pragma omp parallel for schedule(dynamic,1) if (go_parallel)
       for( int j = 0; j < n_buckets; j++ ) {
         unsigned char* end;
         string_sort_params_t mylocal = local;
@@ -260,10 +279,16 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
         // suffix, don't sort the first entry.
         if( j == tlast ) mylocal.base += bytes_per_pointer;
         mylocal.n_memb = (end - mylocal.base)/bytes_per_pointer;
+        mylocal.parallel = parallel && ! go_parallel;
         if( mylocal.n_memb > 1 ) {
           // don't bother calling sort for zero-sized or 1-sized buckets.
           err = favorite_string_sort(&mylocal);
+#if defined(_OPENMP)
+          die_if_err(err);
+#else
           if( err ) return err;
+#endif
+
         }
       }
 
@@ -359,9 +384,9 @@ error_t two_stage_single_impl(const suffix_sorting_problem_t* p,
 // There's really only a handful of bytes-per-pointer that could 
 // reasonably be used. This is just is an attempt to get optimized code for each.
 error_t two_stage_single(suffix_sorting_problem_t* p,
-                         suffix_context_t* context, size_t str_len, compare_fun_t compare)
+                         suffix_context_t* context, size_t str_len, compare_fun_t compare, int parallel)
 {
-#define TSS(b_per_c, b_per_p) if( p->bytes_per_character == b_per_c && p->bytes_per_pointer == b_per_p ) return two_stage_single_impl(p, context, str_len, compare, b_per_c, b_per_p);
+#define TSS(b_per_c, b_per_p) if( p->bytes_per_character == b_per_c && p->bytes_per_pointer == b_per_p ) return two_stage_single_impl(p, context, str_len, compare, parallel, b_per_c, b_per_p);
 
   TSS(1,1);
   TSS(1,2);
@@ -404,6 +429,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
                               suffix_context_t* context,
                               size_t str_len,
                               compare_fun_t compare,
+                              int parallel,
                               // These args are here just for optimizing.
                               int bytes_per_character,
                               int bytes_per_pointer)
@@ -420,6 +446,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
   unsigned char* p_S = p->S;
   sptr_t p_t_size = p->t_size;
   sptr_t p_s_size = p->s_size;
+  int n_used_SL_buckets;
 
   assert(max_char>0 && max_char <= 1000);
 
@@ -448,6 +475,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
   sptr_t ti, tnext, tmid, tend, end; \
   /* tmid starts out as the first character. */ \
   tmid = get_T(p_T, bytes_per_character, 0); \
+  tend = -1; \
   /* find the smallest end>to such that ti_end!=ti_to. */ \
   for( end = bytes_per_character; \
        end < p_t_size; \
@@ -504,6 +532,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
   } \
 }
 
+  n_used_SL_buckets = 0;
   // Partition into buckets.
   // First, count the number of bytes in each type
   CLASSIFY_SSL({
@@ -511,6 +540,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
                  if( DEBUG ) printf("T[% 4li] = % 4li % 4li is SS\n", to/bytes_per_character, ti, tnext);
                },
                {
+                 if( SL_BUCKET(ti,tnext) == 0 ) n_used_SL_buckets++;
                  SL_BUCKET(ti,tnext) += bytes_per_pointer;
                  if( DEBUG ) printf("T[% 4li] = % 4li % 4li is SL\n", to/bytes_per_character, ti, tnext);
                },
@@ -623,7 +653,7 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
   // Now sort all of the SL-buckets.
   // buckets are currently pointing to the starts
   {
-    string_sort_params_t local;
+    string_sort_params_t local={0};
 
     local.context = context;
     local.base = NULL;
@@ -633,21 +663,39 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
     local.same_depth = bytes_per_character+bytes_per_character; // we've already sorted two chars.
     local.get_string = get_string_getter_comp(context);
     local.compare = compare;
+    
+    int parallel = 1;
+    int go_parallel = 0;
 
     // Go through the SL-buckets sorting them...
+    go_parallel = parallel && ( n_used_SL_buckets >= OMP_MIN_BINS );
+    #pragma omp parallel for schedule(dynamic,1) collapse(2) if (go_parallel)
     for( int j = 0; j < n_buckets; j++ ) {
-      for( int k = j+1; k < n_buckets; k++ ) {
+      for( int k = 0; k < n_buckets; k++ ) {
+      //for( k = j+1; k < n_buckets; k++ ) {
         unsigned char* end;
+        string_sort_params_t mylocal = local;
+
+        // we really want the loop bounds to be j 0-n and k j+1 to n
+        // but openmp collapse doesn't do that. We handle it here
+        // instead since we are using dynamic schedule anyway.
+        if( k <= j ) continue;
+
         // the end of the SL-bucket is the SS-bucket following
         end = SS_BUCKET(j,k);
 
         // sort from SL_BUCKET(j,k) to end
-        local.base = SL_BUCKET(j,k);
-        local.n_memb = (end - SL_BUCKET(j,k))/bytes_per_pointer;
-        if( local.n_memb > 1 ) {
+        mylocal.base = SL_BUCKET(j,k);
+        mylocal.n_memb = (end - SL_BUCKET(j,k))/bytes_per_pointer;
+        mylocal.parallel = parallel && ! go_parallel;
+        if( mylocal.n_memb > 1 ) {
           // don't bother calling sort for zero-sized or 1-sized buckets.
-          err = favorite_string_sort(&local);
+          err = favorite_string_sort(&mylocal);
+#if defined(_OPENMP)
+          die_if_err(err);
+#else
           if( err ) return err;
+#endif
         }
       }
     }
@@ -780,9 +828,9 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
 }
 
 error_t two_stage_double(suffix_sorting_problem_t* p,
-                         suffix_context_t* context, size_t str_len, compare_fun_t compare)
+                         suffix_context_t* context, size_t str_len, compare_fun_t compare, int parallel)
 {
-#define TSD(b_per_c, b_per_p) if( p->bytes_per_character == b_per_c && p->bytes_per_pointer == b_per_p ) return two_stage_double_impl(p, context, str_len, compare, b_per_c, b_per_p);
+#define TSD(b_per_c, b_per_p) if( p->bytes_per_character == b_per_c && p->bytes_per_pointer == b_per_p ) return two_stage_double_impl(p, context, str_len, compare, parallel, b_per_c, b_per_p);
 
   if( p->bytes_per_character == 1 ) {
     TSD(1,1);
@@ -817,6 +865,7 @@ error_t two_stage_ssort(suffix_sorting_problem_t* p,
 {
   error_t err;
   int use_double = 0;
+  int parallel = 0;
 
   if( str_len < 3 ) return ERR_PARAM;
   if( p->bytes_per_character > 3 ) return ERR_PARAM;
@@ -832,6 +881,7 @@ error_t two_stage_ssort(suffix_sorting_problem_t* p,
 
   if( (flags & DCX_FLAG_USE_TWO_STAGE_SINGLE) != 0 ) use_double = 0;
   if( (flags & DCX_FLAG_USE_TWO_STAGE_DOUBLE) != 0 ) use_double = 1;
+  if( (flags & DCX_FLAG_PARALLEL) != 0 ) parallel = 1;
 
   if( DEBUG ) {
     sptr_t ti, to, t;
@@ -845,11 +895,11 @@ error_t two_stage_ssort(suffix_sorting_problem_t* p,
   if( use_double ) {
     printf("Running two-stage double\n");
     // do the improved two-stage with multiple characters
-    return two_stage_double(p, context, str_len, compare);
+    return two_stage_double(p, context, str_len, compare, parallel);
   } else if( p->max_char <= 256*256*256 ) {
     printf("Running two-stage single\n");
     // do the two-stage with single-characters
-    return two_stage_single(p, context, str_len, compare);
+    return two_stage_single(p, context, str_len, compare, parallel);
   } else {
     // this should never be reached...
     return ERR_PARAM;

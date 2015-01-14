@@ -900,12 +900,14 @@ struct BucketSorter {
                     /* in and out */ iterator_t data,
                     offset_t start_n,
                     offset_t end_n,
+                    bool parallel,
                     const settings_t* settings )
   {
     both_criterion_t both(ctx, actx);
     BucketSorterSettings use_settings;
     if( settings ) use_settings = *settings;
     use_settings.compareAfterKey = true;
+    use_settings.Parallel = parallel;
     sort_impl(ctx,both,min,max,data,start_n,end_n, true,
               &use_settings);
   }
@@ -1013,7 +1015,7 @@ template<typename Record, // Record type
          typename Criterion, // Comparison criterion
          typename AfterCriterion // Comparison criterion
          >
-void sort_array_compare_after(Criterion ctx, AfterCriterion actx, typename Criterion::key_t min, typename Criterion::key_t max, Record* data, size_t n_records )
+void sort_array_compare_after(Criterion ctx, AfterCriterion actx, typename Criterion::key_t min, typename Criterion::key_t max, Record* data, size_t n_records, bool parallel=false)
 {
   typedef BucketSorter<Record, Criterion, AfterCriterion> MySorter;
   typename MySorter::offset_t start_n, end_n;
@@ -1021,7 +1023,7 @@ void sort_array_compare_after(Criterion ctx, AfterCriterion actx, typename Crite
   start_n = 0;
   end_n = n_records;
 
-  MySorter::sort_compare_after(ctx, actx, min, max, data, start_n, end_n, NULL);
+  MySorter::sort_compare_after(ctx, actx, min, max, data, start_n, end_n, parallel, NULL);
 }
 
 

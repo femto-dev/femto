@@ -45,6 +45,7 @@ typedef struct string_sort_params_s {
                      // going to be equal for all strings
   get_string_fun_t get_string;
   compare_fun_t compare;
+  int parallel;
 } string_sort_params_t;
 
 typedef error_t (*string_sort_fun_t) (string_sort_params_t* params);

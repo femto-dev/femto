@@ -177,7 +177,7 @@ get_string_fun_t get_string_getter_comp(suffix_context_t* p)
 void print_suffixes(suffix_sorting_problem_t* p, int len)
 {
   suffix_context_t ctx;
-  string_sort_params_t params;
+  string_sort_params_t params = {0};
 
   ctx.T = p->T;
   ctx.bytes_per_pointer = p->bytes_per_pointer;

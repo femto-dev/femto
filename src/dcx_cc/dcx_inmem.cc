@@ -59,6 +59,8 @@ error_t suffix_sort_to_depth(suffix_sorting_problem_t* p,
   // use the S/L two-stage suffix sorter to do the whole subproblem
   // sort (if it can - depending on the character size).
   int USE_TWO_STAGE = (flags & DCX_FLAG_USE_TWO_STAGE) > 0;
+  int parallel = (flags & DCX_FLAG_PARALLEL) > 0;
+
   { // check that the context is O.K.
     assert(context);
     assert(context->T == p->T);
@@ -68,7 +70,7 @@ error_t suffix_sort_to_depth(suffix_sorting_problem_t* p,
     return two_stage_ssort(p, context, str_len, compare, flags);
   } else {
     // just do the sorting directly with our favorite string sorter
-    string_sort_params_t params;
+    string_sort_params_t params = {0};
     int p_bytes_per_character = p->bytes_per_character;
     int p_n = p->n;
     unsigned char* p_S;
@@ -93,6 +95,7 @@ error_t suffix_sort_to_depth(suffix_sorting_problem_t* p,
     params.same_depth = 0;
     params.get_string = get_string_getter(context);
     params.compare = compare;
+    params.parallel = parallel;
     return subproblem_sort(&params);
   }
 }
@@ -343,6 +346,7 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p,
   int SOMETIMES_NAME = (flags & DCX_FLAG_SOMETIMES_NAME) > 0;
 
   int DO_TIMING = TIMING && p->n > 10000;
+  int parallel = (flags & DCX_FLAG_PARALLEL) > 0;
 
   if( DEBUG > 3 ) printf("dcx_ssort\n");
 
@@ -431,7 +435,7 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p,
 
     // sort the sample by the first cover->period characters
     {
-      string_sort_params_t params;
+      string_sort_params_t params = {0};
       suffix_context_t context;
 
       context.T = p->T;
@@ -445,6 +449,7 @@ error_t dcx_ssort_core(suffix_sorting_problem_t* p,
       params.same_depth = 0;
       params.get_string = get_string_getter(&context);
       params.compare = NULL;
+      params.parallel = parallel;
       if( DO_TIMING ) start_clock();
       err = subproblem_sort(&params);
       if( err ) return err;

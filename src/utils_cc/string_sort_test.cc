@@ -278,7 +278,7 @@ int main(int argc, char** argv)
 
     // now run the sorters.
     for( i = 0; sorters[i]; i++ ) {
-      string_sort_params_t params;
+      string_sort_params_t params = {0};
       error_t err;
       if( nlines > limits[i] ) {
         printf("Skipping sorter %s from limit %i\n", names[i], limits[i]);
@@ -297,6 +297,7 @@ int main(int argc, char** argv)
       params.str_len = len;
       params.get_string = test_two_get_string;
       params.compare = NULL;
+      params.parallel = 0;
 
       start_clock();
       err = sorters[i](&params);

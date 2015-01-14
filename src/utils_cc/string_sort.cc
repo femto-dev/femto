@@ -135,7 +135,7 @@ void do_sorting_problem(string_sort_params_t *context)
   SortingProblemStringKey max(maxbuf, len);
 
   be_uint<PtrBytes>* records = (be_uint<PtrBytes>*) context->base;
-  sort_array_compare_after(cmp1, cmp2, min, max, records, context->n_memb);
+  sort_array_compare_after(cmp1, cmp2, min, max, records, context->n_memb, context->parallel != 0);
 
   free(minbuf);
   free(maxbuf);

@@ -246,7 +246,9 @@ void unit_test_dcx(void)
     DCX_FLAG_USE_TWO_STAGE|DCX_FLAG_USE_TWO_STAGE_SINGLE,
     DCX_FLAG_USE_TWO_STAGE|DCX_FLAG_USE_TWO_STAGE_DOUBLE,
     DCX_FLAG_SOMETIMES_NAME, // possible optimization
-    DCX_FLAG_USE_TWO_STAGE, // normal configuration
+    DCX_FLAG_USE_TWO_STAGE,
+    DCX_FLAG_USE_TWO_STAGE|DCX_FLAG_PARALLEL, // normal configuration
+    DCX_FLAG_USE_TWO_STAGE|DCX_FLAG_PARALLEL|DCX_FLAG_USE_TWO_STAGE_SINGLE, // normal configuration
   };
   int nflags = sizeof(flags) / sizeof(int);
   for( int i = 0; texts[i]; i++ ) {
