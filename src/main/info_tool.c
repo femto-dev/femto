@@ -21,6 +21,7 @@
 */
 #include "index.h"
 #include "femto_internal.h"
+#include "json.h"
 
 void usage(char* cmd)
 {
@@ -33,10 +34,15 @@ int main ( int argc, char** argv )
 {
   char* index_path = NULL;
   int summary = 0;
+  int json = 0;
   
   for( int i = 1; i < argc; i++ ) {
     if( 0 == strcmp(argv[i], "-s") ||
         0 == strcmp(argv[i], "--summary" ) ) {
+      summary = 1;
+    } else if( 0 == strcmp(argv[i], "-j") ||
+        0 == strcmp(argv[i], "--json" ) ) {
+      json = 1;
       summary = 1;
     } else if( argv[i][0] == '-' ) {
       usage(argv[0]);
@@ -46,7 +52,6 @@ int main ( int argc, char** argv )
   }
 
   if( !index_path ) usage(argv[0]);
-
 
   path_translator_t trans;
 
@@ -97,7 +102,9 @@ int main ( int argc, char** argv )
   // chunk information
   int64_t num_bytes_chunk = -1;
 
-  printf("   * Note a value of -1 means invalid \n");
+  if( ! json ) {
+    printf("   * Note a value of -1 means invalid \n");
+  }
 
   err = path_translator_init(&trans);
   die_if_err(err);
@@ -114,33 +121,54 @@ int main ( int argc, char** argv )
   h_text_size = h_block.hdr.total_length;
   h_block_size = h_block.zbits.len;
 
-  printf(" * INDEX INFORMATION\n"
-	 "+-------------------------------\n"
-	 "| Block Size:       %" PRIi64 "\n"
-	 "| Bucket Size:      %" PRIi64"\n"
-	 "| Mark Period:      %" PRIi64"\n"
-	 "| Chunk Size:       %" PRIi64"\n"
-	 "|\n"
-	 "| Text Size:        %" PRIi64"\n"
-	 "| Number of Docs:   %" PRIi64"\n"
-	 "|\n"
-	 "+-------------------------------\n\n\n",
-         (int64_t) h_block.hdr.param.block_size,
-         (int64_t) h_block.hdr.param.b_size,
-         (int64_t) h_block.hdr.param.mark_period,
-         (int64_t) h_block.hdr.param.chunk_size,
-         h_text_size,
-         h_block.hdr.number_of_documents );
-	
-  //Print the Information About the Header Block
-  printf(" * HEADER BLOCK INFORMATION\n"
-	 "+-------------------------------\n"
-	 "| # of Data Blocks: %" PRIi64 "\n"
-	 "|\n"
-	 "| Header Block Size:%" PRIi64"\n"
-	 "+-------------------------------\n\n\n",
-	 h_number_of_blocks,
-         (int64_t) h_block.zbits.len);
+  if( json ) {
+    printf("{\n");
+    printf(" \"block_size\":%" PRIi64 ",\n"
+           " \"bucket_size\":%" PRIi64 ",\n"
+           " \"mark_period\":%" PRIi64 ",\n"
+           " \"chunk_size\":%" PRIi64 ",\n"
+           "\n"
+           " \"text_size\":%" PRIi64 ",\n"
+           " \"number_of_docs\":%" PRIi64 ",\n\n",
+           (int64_t) h_block.hdr.param.block_size,
+           (int64_t) h_block.hdr.param.b_size,
+           (int64_t) h_block.hdr.param.mark_period,
+           (int64_t) h_block.hdr.param.chunk_size,
+           h_text_size,
+           h_block.hdr.number_of_documents);
+    printf(" \"num_data_blocks\":%" PRIi64 ",\n"
+           " \"header_block_size\":%" PRIi64 ",\n\n\n",
+           h_number_of_blocks,
+           (int64_t) h_block.zbits.len);
+  } else {
+    printf(" * INDEX INFORMATION\n"
+           "+-------------------------------\n"
+           "| Block Size:       %" PRIi64 "\n"
+           "| Bucket Size:      %" PRIi64"\n"
+           "| Mark Period:      %" PRIi64"\n"
+           "| Chunk Size:       %" PRIi64"\n"
+           "|\n"
+           "| Text Size:        %" PRIi64"\n"
+           "| Number of Docs:   %" PRIi64"\n"
+           "|\n"
+           "+-------------------------------\n\n\n",
+           (int64_t) h_block.hdr.param.block_size,
+           (int64_t) h_block.hdr.param.b_size,
+           (int64_t) h_block.hdr.param.mark_period,
+           (int64_t) h_block.hdr.param.chunk_size,
+           h_text_size,
+           h_block.hdr.number_of_documents );
+          
+    //Print the Information About the Header Block
+    printf(" * HEADER BLOCK INFORMATION\n"
+           "+-------------------------------\n"
+           "| # of Data Blocks: %" PRIi64 "\n"
+           "|\n"
+           "| Header Block Size:%" PRIi64"\n"
+           "+-------------------------------\n\n\n",
+           h_number_of_blocks,
+           (int64_t) h_block.zbits.len);
+  }
 
   err = close_header_block( &h_block);
   die_if_err(err);
@@ -233,28 +261,49 @@ int main ( int argc, char** argv )
   chunk_per = (chunk_totals / blocks_total) * 100;
 
   // print the summary
-  printf("  || SIZE TOTALS\n"
-	 "  ||===================================\n"
-	 "  || Total Size:  %20" PRIi64"\n"
-	 "  ||\n"
-	 "  || Wavelets:    %20" PRIi64"\n"
-	 "  || Occurences:  %20" PRIi64"\n"
-	 "  || Mark Tables: %20" PRIi64"\n"
-	 "  || Mark Arrays: %20" PRIi64"\n"
-	 "  || Doc Chunks:  %20" PRIi64"\n"
-	 "  ||===================================\n\n",
-	 block_totals, wavelet_totals, occurence_totals,
-	 mark_table_totals, mark_array_totals, chunk_totals);
+  if( json ) {
+    printf(" \"total_size_bytes\":%" PRIi64 ",\n"
+           " \"wavelets_bytes\":%" PRIi64 ",\n"
+           "\n"
+           " \"occurences_bytes\":%" PRIi64 ",\n"
+           " \"mark_tables_bytes\":%" PRIi64 ",\n"
+           " \"mark_arrays_bytes\":%" PRIi64 ",\n"
+           " \"doc_chunks_bytes\":%" PRIi64 ",\n\n\n",
+           block_totals, wavelet_totals, occurence_totals,
+           mark_table_totals, mark_array_totals, chunk_totals);
 
-  printf("  || SIZE PERCENTAGES \n"
-	 "  ||===============================\n"
-	 "  || Wavelets:    %14.10f %%\n"
-	 "  || Occurences:  %14.10f %%\n"
-	 "  || Mark Tables: %14.10f %%\n"
-	 "  || Mark Arrays: %14.10f %%\n"
-	 "  || Doc Chunks:  %14.10f %%\n"
-	 "  ||===============================\n\n\n",
-	 wavelet_per, occurence_per, mark_table_per, mark_array_per, chunk_per);
+    printf(" \"wavelets_percent\"   :%14.10f,\n"
+           " \"occurences_percent\" :%14.10f,\n"
+           " \"mark_tables_percent\":%14.10f,\n"
+           " \"mark_arrays_percent\":%14.10f,\n"
+           " \"doc_chunks_percent\" :%14.10f\n",
+           wavelet_per, occurence_per, mark_table_per, mark_array_per, chunk_per);
+
+    printf("}\n");
+  } else {
+    printf("  || SIZE TOTALS\n"
+           "  ||===================================\n"
+           "  || Total Size:  %20" PRIi64"\n"
+           "  ||\n"
+           "  || Wavelets:    %20" PRIi64"\n"
+           "  || Occurences:  %20" PRIi64"\n"
+           "  || Mark Tables: %20" PRIi64"\n"
+           "  || Mark Arrays: %20" PRIi64"\n"
+           "  || Doc Chunks:  %20" PRIi64"\n"
+           "  ||===================================\n\n",
+           block_totals, wavelet_totals, occurence_totals,
+           mark_table_totals, mark_array_totals, chunk_totals);
+
+    printf("  || SIZE PERCENTAGES \n"
+           "  ||===============================\n"
+           "  || Wavelets:    %14.10f %%\n"
+           "  || Occurences:  %14.10f %%\n"
+           "  || Mark Tables: %14.10f %%\n"
+           "  || Mark Arrays: %14.10f %%\n"
+           "  || Doc Chunks:  %14.10f %%\n"
+           "  ||===============================\n\n\n",
+           wavelet_per, occurence_per, mark_table_per, mark_array_per, chunk_per);
+  }
 
   path_translator_destroy(&trans);
 
