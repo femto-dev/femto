@@ -4928,11 +4928,13 @@ public:
     const std::vector< std::vector< int64_t > >* bins_to_blocks;
     // OUTPUT index constructor (created but we call output funs on it).
     index_constructor_t* cstr;
+    construct_statistics_t stats;
 
     write_index_files_node(const Dcx* dcx, bwt_by_rank_t* bwt_bins, alpha_t doc_end_char, const std::vector< std::vector< int64_t > >* bins_to_blocks, index_constructor_t* cstr)
       : pipeline_node(dcx, "write_index_files d="+dcx->depth_string, dcx->should_print_timing()),
         dcx(dcx), bwt_bins(bwt_bins), doc_end_char(doc_end_char), bins_to_blocks(bins_to_blocks), cstr(cstr)
     {
+        memset(&stats, 0, sizeof(construct_statistics_t));
     }
 
     virtual void run()
@@ -4946,6 +4948,9 @@ public:
           }
         }
       }
+#ifdef TRACK_DENSITY_DIST
+      constructor_print_statistics(&stats);
+#endif
     }
 
     struct bucket_compress_job : public pipeline_node {
@@ -4960,15 +4965,17 @@ public:
       buffer_t zdata;
       int occs_in_bucket[ALPHA_SIZE];
       error_t err;
+      construct_statistics_t *stats;
 
-      bucket_compress_job(write_index_files_node* parent, int max_bucket_size, int max_chunk_size, int bucket_number, int bucket_size)
+      bucket_compress_job(write_index_files_node* parent, int max_bucket_size, int max_chunk_size, int bucket_number, int bucket_size, construct_statistics_t *stats)
         : pipeline_node(parent, "bucket_compress_job", parent->dcx->should_print_timing()),
           cstr(parent->cstr),
           max_bucket_size(max_bucket_size),
           max_chunk_size(max_chunk_size),
           bucket_number(bucket_number),
           bucket_size(bucket_size),
-          L(NULL), offsets(NULL), docs(NULL), zdata(build_buffer(0,NULL))
+          L(NULL), offsets(NULL), docs(NULL), zdata(build_buffer(0,NULL)),
+          stats(stats)
       {
         L = (alpha_t*) malloc(sizeof(alpha_t)*max_bucket_size);
         offsets = (int64_t*) malloc(sizeof(int64_t)*max_bucket_size);
@@ -5031,7 +5038,7 @@ public:
           err = constructor_compress_bucket(cstr,
                                             // output
                                             &zdata, occs_in_bucket,
-                                            NULL, /* stats */
+                                            stats, /* stats */
                                             bucket_size,
                                             L,
                                             offsets,
@@ -5111,7 +5118,13 @@ public:
                    (long long int) cur_bucket);
           }
 
-          bucket_compress_job* job = new bucket_compress_job(this, bucket_size, chunk_size, cur_bucket, cur_bucket_sz);
+          bucket_compress_job* job = new bucket_compress_job(this, bucket_size, chunk_size, cur_bucket, cur_bucket_sz,
+#ifdef TRACK_DENSITY_DIST
+              stats
+#else
+              NULL
+#endif
+              );
 
           // Fill in bucket_L and bucket_offsets and bucket_docs.
           for( int64_t bucket_row = 0; bucket_row < cur_bucket_sz; bucket_row++ ) {

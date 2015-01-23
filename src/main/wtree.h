@@ -28,6 +28,8 @@
 
 // Track runs up to this size for statistics..
 #define TRACK_RUNS_DIST 15
+//#define TRACK_DENSITY_BITS 63
+//#define TRACK_DENSITY_DIST (TRACK_DENSITY_BITS+1)
 
 typedef struct {
   long segments;
@@ -38,12 +40,17 @@ typedef struct {
   long group_ones;
   long group_ptrs;
   long num_runs;
-  int run_count[TRACK_RUNS_DIST];
+  long run_count[TRACK_RUNS_DIST];
   int max_run;
   long segment_bits;
   long segment_bits_used;
   long rle_segment_bits_used;
   long unc_segment_bits_used;
+#ifdef TRACK_DENSITY_DIST
+  long density_count64[TRACK_DENSITY_DIST];
+  long density_count64_zero_run[TRACK_RUNS_DIST];
+  long density_count64_one_run[TRACK_RUNS_DIST];
+#endif
 } bseq_stats_t;
 
 typedef struct {

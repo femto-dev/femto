@@ -115,5 +115,7 @@ error_t constructor_end_data_block(index_constructor_t* cstr);
 
 error_t constructor_construct_header(index_constructor_t* cstr);
 
+error_t constructor_print_statistics(construct_statistics_t* stats);
+
 #endif
 

@@ -36,6 +36,7 @@
 #include "results.h"
 #include "construct.h"
 #include "config.h"
+#include "density.h"
 
 error_t constructor_create(index_constructor_t* cstr, const index_block_param_t* params, const char* index_path, int64_t number_of_blocks, bwt_document_info_reader_t* info)
 {
@@ -304,7 +305,7 @@ error_t constructor_construct_header(index_constructor_t* cstr)
   int64_t block_number;
   int64_t row, doc;
   int32_t block_row;
-  int64_t block_start, block_end;
+  //int64_t block_start, block_end;
   path_translator_t pt;
   index_locator_t loc;
 
@@ -494,8 +495,8 @@ error_t constructor_construct_header(index_constructor_t* cstr)
     if( err ) goto error;
     data_block_open++;
 
-    block_start = row;
-    block_end = row + block.hdr.size;
+    //block_start = row;
+    //block_end = row + block.hdr.size;
 
     err = update_header_block(&header_block_writer, block_number, cstr->occs->occs_total);
     if( err ) goto error;
@@ -733,4 +734,63 @@ error:
   return err;
 }
 
+
+error_t constructor_print_statistics(construct_statistics_t* stats)
+{
+  wtree_stats_t* wstats = &stats->wtree_stats;
+  bseq_stats_t* bstats = &wstats->bseq_stats;
+  long sum = 0;
+  long total_count = 0;
+  long zero_one_part = 0;
+  long density_bits = 0;
+
+  printf("STATS HERE\n");
+  printf("RUN HISTOGRAM\n");
+  for( int i = 0; i < TRACK_RUNS_DIST; i++ ) {
+    printf("%i bit runs: %li\n", i, bstats->run_count[i]);
+  }
+  printf("%li segment bits\n", bstats->segment_bits);
+  printf("%li segment bytes\n", bstats->segments);
+  printf("%li segment sums bytes\n", bstats->segment_sums);
+  printf("%li segments+sums bytes\n",  bstats->segments+bstats->segment_sums);
+
+#ifdef TRACK_DENSITY_DIST
+  density_bits = num_bits64(TRACK_DENSITY_BITS);
+
+  for( int i = 0; i < TRACK_DENSITY_DIST; i++ ) {
+    long count = bstats->density_count64[i];
+    long bits;
+    long contrib;
+    uint64_t ch = density_choose(TRACK_DENSITY_BITS, i);
+    bits = num_bits64(ch);
+    if( bits < 0 ) bits = 0;
+    //printf("64 choose %i : %" PRIu64 "\n", i, ch);
+    //printf("%i bits : %li\n", i, bits);
+    total_count += count;
+    contrib = count * (density_bits+bits);
+    sum += contrib;
+    if( i == 0 || i == TRACK_DENSITY_BITS ) {
+      zero_one_part += contrib;
+    }
+    printf("%i dense words: %li\n", i, bstats->density_count64[i]);
+  }
+  printf("%li dense words+densities\n", sum/8);
+  printf("%li words\n", total_count);
+  printf("%li words*8\n", total_count*8);
+  for( int i = 0; i < TRACK_RUNS_DIST; i++ ) {
+    printf("%i long 0-64 runs: %li\n", i, bstats->density_count64_zero_run[i]);
+    printf("%i long 1-64 runs: %li\n", i, bstats->density_count64_one_run[i]);
+  }
+  sum -= zero_one_part;
+  for( int i = 0; i < TRACK_RUNS_DIST-1; i++ ) {
+    long bits = ((2*num_bits64(i)+density_bits-1)/density_bits)*density_bits;
+    long count = bstats->density_count64_zero_run[i] + bstats->density_count64_one_run[i];
+    long contrib = count / (i+1) * bits;
+    sum += contrib;
+  }
+  printf("%li dense words+densities+rle\n", sum/8);
+#endif
+
+  return ERR_NOERR;
+}
 

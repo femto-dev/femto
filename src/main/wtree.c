@@ -408,6 +408,88 @@ error_t bseq_construct_forcetype(int* zlen, uchar** zdata, int bitlen, uchar* da
       }
     }
   }
+#ifdef TRACK_DENSITY_DIST
+  {
+    int density64 = 0;
+    int density64zero_run = 0;
+    int density64one_run = 0;
+    int clear_zero = 0;
+    int clear_one = 0;
+    for( int i = 0; i < len; i++ ) {
+      unsigned char byte = data[i];
+      for( int j = 0; j < 8 && 8*i + j < bitlen ; j++ ) {
+        unsigned char bit;
+        bit = (byte & 0x80) >> 7;
+        if( bit ) density64++;
+        byte <<= 1;
+        if( i > 0 && (8*i+j) % (TRACK_DENSITY_BITS) == 0 ) {
+          clear_zero = 1;
+          clear_one = 1;
+          if( density64 == 0 ) {
+            clear_zero = 0;
+            density64zero_run++;
+          }
+          if( density64 == 64 ) {
+            clear_one = 0;
+            density64one_run++;
+          }
+          if( stats ) {
+            if( density64 < TRACK_DENSITY_DIST ) {
+              stats->density_count64[density64]++;
+            }
+            if( clear_zero && density64zero_run > 0 ) {
+              if( density64zero_run < TRACK_RUNS_DIST ) {
+                stats->density_count64_zero_run[density64zero_run] += 1+density64zero_run;
+              } else {
+                stats->density_count64_zero_run[TRACK_RUNS_DIST-1] += 1+density64zero_run;
+              }
+            }
+            if( clear_one && density64one_run > 0 ) {
+              if( density64one_run < TRACK_RUNS_DIST ) {
+                stats->density_count64_one_run[density64one_run] += 1+density64one_run;
+              } else {
+                stats->density_count64_one_run[TRACK_RUNS_DIST-1] += 1+density64one_run;
+              }
+            }
+          }
+          if( clear_zero ) {
+            density64zero_run = 0;
+          }
+          if( clear_one ) {
+            density64one_run = 0;
+          }
+          density64 = 0;
+        }
+      }
+    }
+    if( stats ) {
+      if( density64 == 0 ) {
+        density64zero_run++;
+      }
+      if( density64 == TRACK_DENSITY_BITS ) {
+        density64one_run++;
+      }
+      if( density64 < TRACK_DENSITY_DIST ) {
+        stats->density_count64[density64]++;
+      }
+      if( clear_zero && density64zero_run > 0 ) {
+        if( density64zero_run < TRACK_RUNS_DIST ) {
+          stats->density_count64_zero_run[density64zero_run]++;
+        } else {
+          stats->density_count64_zero_run[TRACK_RUNS_DIST-1] += density64zero_run;
+        }
+      }
+      if( clear_one && density64one_run > 0 ) {
+        if( density64one_run < TRACK_RUNS_DIST ) {
+          stats->density_count64_one_run[density64one_run]++;
+        } else {
+          stats->density_count64_one_run[TRACK_RUNS_DIST-1] += density64one_run;
+        }
+      }
+    }
+  }
+#endif
+ 
 
   // run is on lastbit; if run!=0, bit == lastbit.
   s.bit = ! s.lastbit;
