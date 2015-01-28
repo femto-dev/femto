@@ -32,7 +32,7 @@ index_test_SOURCES = index_test.c bwt_creator.h bwt_creator.c bwt_qsufsort.c
 query_test_SOURCES = query_test.c bwt_creator.h bwt_creator.c bwt_qsufsort.c
 regexp_test_SOURCES = regexp_test.c bwt_creator.h bwt_creator.c bwt_qsufsort.c
 
-bin_PROGRAMS = femto_flatten femto_handle_request femto_info femto_flatten femto_common
+bin_PROGRAMS = femto_flatten femto_handle_request femto_info femto_flatten femto_common femto_similar
 noinst_PROGRAMS = femto_multiquery
 
 femto_multiquery_SOURCES = query_tool.c
@@ -40,6 +40,7 @@ femto_flatten_SOURCES = flatten_tool.c
 femto_handle_request_SOURCES = handle_request.c
 femto_info_SOURCES = info_tool.c
 femto_common_SOURCES = common_tool.c
+femto_similar_SOURCES = similar_tool.c
 
 EXTRA_DIST = block_format.txt update_format.txt bwt_format.txt compile_regexp_test.c flex_bison_parser.h flex_bison_parser.c index_test_funcs.c nfa_approx_tool.h nfa_approx_tool.c nfa_tool.c parse_regexp.c qsufsort.c QUERY_FORMAT.txt CMakeLists.txt
 
