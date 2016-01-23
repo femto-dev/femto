@@ -8,6 +8,9 @@ searching large indexes with a multithreaded server.
 FEMTO requires a 64-bit machine to build and test. 32-bit machines are
 supported for search only. FEMTO is known to build with GCC for Linux/x86-64.
 
+To build FEMTO, you will need a C++ compiler, flex and bison. It has worked
+with GNU bison 2.5 and 2.4.1.
+
 MPI is required for parallel index construction. Note that MPI runs across
 machines of different endianness are not supported.
 
