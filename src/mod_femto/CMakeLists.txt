@@ -20,27 +20,33 @@ if(APXS_FOUND)
 else(APXS_FOUND)
   message(WARNING "APXS not found, skipping mod_femto build")
 endif(APXS_FOUND)
+if(MOD_FEMTO)
+else(MOD_FEMTO)
+  message(WARNING "set -DMOD_FEMTO=true to build mod_femto")
+endif(MOD_FEMTO)
 
-if(APR_FOUND)
-  if(APXS_FOUND)
-    #apxs-install:
-    #	${APXS} -i -a -n femto libmod_femto.la
-    #
-    #    execute_process(COMMAND ${APXS} -q INCLUDEDIR OUTPUT_VARIABLE APXS_INCLUDE)
-    #include_directories(${APXS_INCLUDE})
+if(MOD_FEMTO)
+  if(APR_FOUND)
+    if(APXS_FOUND)
+      #apxs-install:
+      #	${APXS} -i -a -n femto libmod_femto.la
+      #
+      #    execute_process(COMMAND ${APXS} -q INCLUDEDIR OUTPUT_VARIABLE APXS_INCLUDE)
+      #include_directories(${APXS_INCLUDE})
 
-    add_library(libmod_femto mod_femto.c)
-    target_link_libraries(libmod_femto ${APR_LIBRARY} ${APU_LIBRARY})
-    include_directories(${APXS_INCLUDE_DIR} ${APR_INCLUDE_DIR} ${APU_INCLUDE_DIR})
-    if(APR_CPPFLAGS)
-      add_definitions("${APR_CPPFLAGS}")
-    endif(APR_CPPFLAGS)
+      add_library(libmod_femto mod_femto.c)
+      target_link_libraries(libmod_femto ${APR_LIBRARY} ${APU_LIBRARY})
+      include_directories(${APXS_INCLUDE_DIR} ${APR_INCLUDE_DIR} ${APU_INCLUDE_DIR})
+      if(APR_CPPFLAGS)
+        add_definitions("${APR_CPPFLAGS}")
+      endif(APR_CPPFLAGS)
 
-    add_definitions(-D_LARGEFILE64_SOURCE -D_GNU_SOURCE)
-    #building just a library. 
-    target_link_libraries(libmod_femto libfemto libfemto_util -module)
-  endif(APXS_FOUND)
-endif(APR_FOUND)
+      add_definitions(-D_LARGEFILE64_SOURCE -D_GNU_SOURCE)
+      #building just a library. 
+      target_link_libraries(libmod_femto libfemto libfemto_util -module)
+    endif(APXS_FOUND)
+  endif(APR_FOUND)
+endif(MOD_FEMTO)
 
 #APXS_BIN is path to APXS
 #add_custom_command(TARGET target

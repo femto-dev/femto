@@ -8,8 +8,10 @@ searching large indexes with a multithreaded server.
 FEMTO requires a 64-bit machine to build and test. 32-bit machines are
 supported for search only. FEMTO is known to build with GCC for Linux/x86-64.
 
-To build FEMTO, you will need a C++ compiler, flex and bison. It has worked
-with GNU bison 2.5 and 2.4.1.
+To build FEMTO from a release tarball, you will need a C++ compiler,
+libssl-dev, and optionally MPI. When building from source, you will also
+need flex, bison, autotools, and libtool. It has worked with GNU bison
+2.5 and 2.4.1.
 
 MPI is required for parallel index construction. Note that MPI runs across
 machines of different endianness are not supported.
@@ -26,15 +28,15 @@ OpenMPI 1.4.2, configured in the following way:
  export LD_LIBRARY_PATH=/opt/openmpi1.4.2/lib
 }}}
 
-You'll need libssl-dev whether you use source checkout or a release.
-
-If you're using a source checkout (vs a release), you will need GNU Autotools and Libtool.
-
 == COMPILATION ==
 
 Make sure you have met the requirements first!
 
-If you're starting with a FEMTO release tarball, skip down to the step to build FEMTO.
+We recommend starting with a FEMTO release tarball from
+https://github.com/femto-dev/femto/releases .
+
+If you prefer to use a source checkout, there are additional build
+dependencies.
 
 If you're starting out with a source checkout as with
 {{{
@@ -45,6 +47,7 @@ you will need to also generate the configure script:
 {{{
  sh autogen.sh
 }}}
+
 
 To build FEMTO, issue the following commands:
 {{{
