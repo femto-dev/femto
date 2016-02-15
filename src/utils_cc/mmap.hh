@@ -25,6 +25,7 @@
 extern "C" {
   #include <sys/mman.h>
   #include <errno.h>
+  #include <unistd.h>
   #include "page_utils.h"
   #include "bit_funcs.h"
 }

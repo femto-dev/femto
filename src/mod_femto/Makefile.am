@@ -1,5 +1,6 @@
 EXTRA_DIST = README femto-js CMakeLists.txt
 
+if MOD_FEMTO
 if HAS_APXS
 
 AM_CPPFLAGS = -I/usr/include/apr-1 -I/usr/include/apr-1.0 -I$(srcdir)/../main -I`${APXS} -q INCLUDEDIR` -D_LARGEFILE64_SOURCE -D_GNU_SOURCE
@@ -23,4 +24,4 @@ install-js:
 	rsync -av femto-js/ /usr/local/apache2/htdocs/femto-js/
 
 endif
-
+endif

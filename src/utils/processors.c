@@ -21,6 +21,7 @@
 */
 
 #define _BSD_SOURCE
+#define _DARWIN_C_SOURCE
 
 #include <stdlib.h>
 #include <stdio.h>

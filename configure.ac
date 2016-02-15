@@ -31,6 +31,13 @@ PROFILE=yes
 PROFILE=""
 ])
 
+AC_ARG_ENABLE([mod_femto], AS_HELP_STRING([--enable-mod_femto], [build Apache module]),
+[case "${enableval}" in
+  yes) mod_femto=true ;;
+  no)  mod_femto=false ;;
+  *) AC_MSG_ERROR([bad value ${enableval} for --enable-mod_femto]) ;;
+esac],[mod_femto=false])
+AM_CONDITIONAL([MOD_FEMTO], [test x$mod_femto = xtrue])
 
 AC_ARG_WITH([mpi], AS_HELP_STRING([--with-mpi], [build with MPI ie mpicc and mpic++]),
 [],

@@ -16,6 +16,14 @@ have been some problems where the mod_femto finds the wrong apr
 headers; we reccomend on Fedora systems to remove the apr-devel
 package before installing apache httpd from source.
 
+If using configure, pass --enable-mod_femto as in:
+ ./configure --enable-mod_femto
+ 
+If using cmake, pass -DMOD_FEMTO=true as in:
+ mkdir build
+ cd build
+ cmake .. -DMOD_FEMTO=true
+
 == INSTALLING ==
 As root (or someone who can write to your Apache http directories)
 run:
