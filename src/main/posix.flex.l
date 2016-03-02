@@ -267,25 +267,26 @@ int handle_hex_escape(char* str)
                     if( LEX_DEBUG ) printf("T_REPEAT_RANGE\n");
                     return T_REPEAT_RANGE; }
 
-("AND"|"and")	  { if( LEX_DEBUG ) printf("T_BOOL_AND\n");
+("AND"|"and")/[[:space:]]  { if( LEX_DEBUG ) printf("T_BOOL_AND\n");
                     yylval->node = NULL;
                     return T_BOOL_AND; }
-("OR"|"or")	  { if( LEX_DEBUG ) printf("T_BOOL_OR\n");
+("OR"|"or")/[[:space:]]	  { if( LEX_DEBUG ) printf("T_BOOL_OR\n");
                     yylval->node = NULL;
                     return T_BOOL_OR; }
-("NOT"|"not")	  { if( LEX_DEBUG ) printf("T_BOOL_NOT\n");
+("NOT"|"not")/[[:space:]]	  { if( LEX_DEBUG ) printf("T_BOOL_NOT\n");
                     yylval->node = NULL;
                     return T_BOOL_NOT; }
-("THEN"|"then")[[:space:]]+[[:digit:]]*	{ if( LEX_DEBUG ) printf("T_BOOL_THEN\n");
+("THEN"|"then")[[:space:]]+[[:digit:]]*/[[:space:]] |
+("THEN"|"then")/[[:space:]] { if( LEX_DEBUG ) printf("T_BOOL_THEN\n");
 				  int x = read_int_part(yytext, INT_MAX);
 				  yylval->range = range_node_new(x,x);
 				  return T_BOOL_THEN; }
-("WITHIN"|"within")[[:space:]]+[[:digit:]]+	{ if( LEX_DEBUG ) printf("T_BOOL_WITHIN\n");
+("WITHIN"|"within")[[:space:]]+[[:digit:]]+/[[:space:]]	{ if( LEX_DEBUG ) printf("T_BOOL_WITHIN\n");
 				  int x = read_int_part(yytext, INT_MAX);
 				  yylval->range = range_node_new(x,x);
 				  return T_BOOL_WITHIN; }
   
-("APPROX"|"approx")[[:space:]]+([[:digit:]]+(:[[:digit:]]+){0,3})?	  { if( LEX_DEBUG ) printf("T_APPROX\n");
+("APPROX"|"approx")[[:space:]]+([[:digit:]]+(:[[:digit:]]+){0,3})?/[[:space:]]	  { if( LEX_DEBUG ) printf("T_APPROX\n");
                     yylval->approx = approx_node_new(yytext);
 
                     return T_APPROX; }
