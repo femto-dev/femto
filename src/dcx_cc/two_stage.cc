@@ -420,6 +420,8 @@ error_t two_stage_single(suffix_sorting_problem_t* p,
 
   TSS(p->bytes_per_character, p->bytes_per_pointer);
 #undef TSS
+
+  return ERR_INVALID;
 }
 
 /* two-stage double-implementation... ala Yuta Mori */
@@ -852,6 +854,8 @@ error_t two_stage_double(suffix_sorting_problem_t* p,
 
   TSD(p->bytes_per_character, p->bytes_per_pointer);
 #undef TSD
+
+  return ERR_INVALID;
 }
 
 /* Use two-stage to sort to the first str_len characters
