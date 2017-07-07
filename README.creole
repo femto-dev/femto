@@ -18,14 +18,14 @@ machines of different endianness are not supported.
 
 If you'd like to use MPI-parallel index construction, you'll need to
 install a version of MPI which supports threads. We have used
-OpenMPI 1.4.2, configured in the following way:
+OpenMPI 1.8.8, configured in the following way:
 {{{
- ./configure --prefix=/opt/openmpi1.4.2 --enable-mpirun-prefix-by-default --enable-mpi-threads --with-threads
+ ./configure --prefix=/opt/openmpi1.8.8 --enable-mpirun-prefix-by-default --enable-mpi-thread-multiple --with-threads
  make
  make install # on all compute nodes
  # To make sure mpirun and mpicc are in the path for use with FEMTO
- export PATH=$PATH:/opt/openmpi1.4.2/bin
- export LD_LIBRARY_PATH=/opt/openmpi1.4.2/lib
+ export PATH=$PATH:/opt/openmpi1.8.8/bin
+ export LD_LIBRARY_PATH=/opt/openmpi1.8.8/lib
 }}}
 
 == COMPILATION ==
