@@ -1,4 +1,5 @@
 test
+another test
 
 == ABOUT ==
 FEMTO is an indexing and search system for queries on sequences of bytes.
