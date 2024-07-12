@@ -52,6 +52,10 @@ void usage(char* name)
   printf("               (default 0)\n");
   printf(" --min_occurences <percent>%% set minimum number of occurences for returned pattern as a percentage of the number of matches to the suffix\n");
   printf("               (default 0)\n");
+  printf(" --max_occurences <number> set maximum number of occurences for returned pattern\n");
+  printf("               (default of -1 means no limit)\n");
+  printf(" --max_occurences <percent>%% set maximum number of occurences for returned pattern as a percentage of the number of matches to the suffix\n");
+  printf("               (default -1)\n");
   exit(-1);
 }
 
