@@ -553,17 +553,17 @@ error_t two_stage_double_impl(suffix_sorting_problem_t* p,
 
   if( DEBUG ) {
     for( int i = 0; i < n_buckets; i++ ) {
-      if( L_BUCKET(i) > 0 ) {
+      if( (intptr_t) L_BUCKET(i) > 0 ) {
         printf("L[%i] = %li\n", i, (long) L_BUCKET(i));
       }
       for( int j = 0; j < n_buckets; j++ ) {
         if( i < j ) {
-          if( SL_BUCKET(i, j) > 0 ) {
+          if( (intptr_t) SL_BUCKET(i, j) > 0 ) {
             printf("SL[%i,%i] = %li\n", i, j, (long) SL_BUCKET(i,j));
           }
         }
         if( i <= j ) {
-          if( SS_BUCKET(i, j) > 0 ) {
+          if( (intptr_t) SS_BUCKET(i, j) > 0 ) {
             printf("SS[%i,%i] = %li\n", i, j, (long) SS_BUCKET(i,j));
           }
         }
