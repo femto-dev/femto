@@ -28,7 +28,6 @@
 #include <unistd.h> // for sysconf
 #include <sys/types.h>
 #include <sys/param.h>
-#include <sys/sysctl.h>
 
 #include "processors.h"
 #include "bswap.h" // get right __LINUX__
