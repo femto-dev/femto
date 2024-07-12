@@ -26,11 +26,39 @@ use IO;
 use Sort;
 
 config param DEFAULT_PERIOD = 133;
+config param ENABLE_CACHED_TEXT = true;
 config param EXTRA_CHECKS = false;
 config param TRACE = false;
 
 // how much padding does the algorithm need at the end of the input?
 param INPUT_PADDING = 8;
+
+/**
+ This record contains the configuration for the suffix sorting
+ problem or subproblem. It's just a record to bundle up the generic
+ information.
+
+ It doesn't contain the 'text' input array because Chapel currently
+ doesn't support reference fields.
+ */
+record ssortConfig {
+  // these should all be integral types:
+
+  type idxType;        // for accessing 'text'; should be text.domain.idxType
+  type characterType;  // text.domain.eltType
+
+  type offsetType;     // type for storing offsets
+  type cachedDataType; // cache this much text data along with offsets
+                       // (no caching if this is 'nothing')
+  proc wordType type {
+    return if cachedDataType != nothing
+           then cachedDataType
+           else characterType;
+  }
+
+  const cover: differenceCover(?);
+  const n: offsetType;
+}
 
 /**
   This record helps to avoid indirect access at the expense of using
@@ -49,7 +77,7 @@ record offsetAndCached {
   Read a "word" of data from 'text' index 'i'.
   Assumes that there are 8 bytes of padding past the real data.
   */
-proc loadWord(const text, const n: integral, i: integral, type wordType) {
+inline proc loadWord(const text, n: integral, i: integral, type wordType) {
   // handle some simple cases first
   if wordType == nothing then return none;
   if wordType == text.eltType then return text[i];
@@ -78,37 +106,135 @@ proc loadWord(const text, const n: integral, i: integral, type wordType) {
 }
 
 /**
-  Construct an array of suffixes (not yet sorted)
-  for all of the offsets in 0..<n.
+ Construct an offsetAndCached for offset 'i' in the input.
  */
-proc buildAllOffsets(const text, const n: int,
-                     type offsetType, type cachedDataType) {
-  const Dom = {0..<n}; 
-  var SA:[Dom] offsetAndCached(offsetType, cachedDataType) =
-    forall i in Dom do
-      new offsetAndCached(offsetType=offsetType,
-                          cacheType=cachedDataType,
-                          offset=i:offsetType,
-                          cached=loadWord(text, n, i, cachedDataType));
-  return SA;
+proc makeOffsetAndCached(type offsetType, type cachedDataType,
+                         i: offsetType,
+                         const text, n: offsetType) {
+  return new offsetAndCached(offsetType=offsetType,
+                             cacheType=cachedDataType,
+                             offset=i,
+                             cached=loadWord(text, n, i, cachedDataType));
 }
 
 /**
   Construct an array of suffixes (not yet sorted)
-  for only those offsets in 0..<n that are also in the difference cover.
+  for all of the offsets in 0..<n.
  */
-proc buildSampleOffsets(const text, const n: int,
-                        const sampleN: int, const charsPerMod: int,
-                        type offsetType, type dataType)
-{
-  const Dom = {0..<sampleN}; 
-  var SA:[Dom] offsetAndCached(offsetType, dataType) =
-    // TODO TODO TODO
+proc buildAllOffsets(type offsetType, type cachedDataType,
+                     const text, n: offsetType) {
+  const Dom = {0..<n};
+  var SA:[Dom] offsetAndCached(offsetType, cachedDataType) =
     forall i in Dom do
-      new offsetAndCached(i, loadWord(text, n, i, dataType));
+      makeOffsetAndCached(offsetType=offsetType, cachedDataType=cachedDataType,
+                          i, text, n);
   return SA;
 }
 
+// can be called from keyPart(offsetAndCached, i)
+inline proc getKeyPart(const a: offsetAndCached(?), i: integral,
+                       const cfg:ssortConfig(?), const text,
+                       n: cfg.offsetType,
+                       maxPrefix: cfg.offsetType) {
+  type idxType = cfg.idxType;
+  type characterType = cfg.characterType;
+  type offsetType = cfg.offsetType;
+  type cachedDataType = cfg.cachedDataType;
+  type wordType = if cachedDataType != nothing
+                  then cachedDataType
+                  else characterType;
+
+  param sectionReturned = 0:int(8);
+  param sectionEnd = -1:int(8);
+  if a.cacheType != nothing && i == 0 {
+    // return the cached data
+    return (sectionReturned, a.cached);
+  }
+
+  param eltsPerWord = numBytes(wordType) / numBytes(characterType);
+  const iOff = i:offsetType;
+  const nCharsIn:offsetType = iOff*eltsPerWord;
+  const startIdx:offsetType = a.offset + nCharsIn;
+  const startIdxCast = startIdx: idxType;
+  if nCharsIn < maxPrefix && startIdxCast < n:idxType {
+    // return further data by loading from the text array
+    return (sectionReturned, loadWord(text, n, startIdxCast, wordType));
+  }
+
+  // otherwise, return that we reached the end
+  return (sectionEnd, 0:wordType);
+}
+
+proc comparePrefixes(const a: offsetAndCached(?), const b: offsetAndCached(?),
+                     const cfg:ssortConfig(?), const text, n: cfg.offsetType,
+                     maxPrefix: cfg.offsetType): int {
+  var curPart = 0;
+  while true {
+    var (aSection, aPart) = getKeyPart(a, curPart, cfg, text, n, maxPrefix);
+    var (bSection, bPart) = getKeyPart(b, curPart, cfg, text, n, maxPrefix);
+    if aSection != 0 || bSection != 0 {
+      return aSection - bSection;
+    }
+    if aPart < bPart {
+      return -1;
+    }
+    if aPart > bPart {
+      return 1;
+    }
+
+    curPart += 1;
+  }
+
+  // This is never reached, but the return below keeps the compiler happy.
+  return 1;
+}
+
+/* This is helpful for computing ranks based on first v characters. */
+private
+proc prefixDiffersFromPrevious(i: int,
+                               const Sample: [] offsetAndCached(?),
+                               const cfg:ssortConfig(?), const text,
+                               n: cfg.offsetType,
+                               maxPrefix: cfg.offsetType): cfg.offsetType {
+  type offsetType = cfg.offsetType;
+
+  // handle base case, where i-1 does not exist
+  if i == 0 {
+    return 1:offsetType; // assign a new rank
+  }
+
+  // otherwise, compare this element and the previous
+  const cmp = comparePrefixes(Sample[i], Sample[i-1],
+                              cfg, text, n=n, maxPrefix=maxPrefix);
+  if cmp == 0 {
+    return 0:offsetType; // same prefix, so don't assign a new rank
+  }
+
+  return 1:offsetType; // not equal, so assign a new rank
+}
+
+/** Sort suffixes that we have already computed in A
+    by the first maxPrefix character values.
+ */
+proc sortSuffixes(const cfg:ssortConfig(?), const thetext,
+                  ref A: [] offsetAndCached(?),
+                  maxPrefix: A.eltType.offsetType) {
+  type idxType = cfg.idxType;
+  type characterType = cfg.characterType;
+  type offsetType = cfg.offsetType;
+  type cachedDataType = cfg.cachedDataType;
+  type wordType = cfg.wordType;
+  const n = cfg.n;
+  // Define a comparator to support radix sorting by the first maxPrefix
+  // character values.
+  record myPrefixComparator {
+    proc keyPart(a: offsetAndCached(?), i: int):(int(8), wordType) {
+      return getKeyPart(a, i=i, cfg, thetext, n=n, maxPrefix=maxPrefix);
+    }
+  }
+
+  sort(A, new myPrefixComparator());
+}
 
 /**
   Create a suffix array for the suffixes 0..<n for 'text'
@@ -119,57 +245,77 @@ proc buildSampleOffsets(const text, const n: int,
 
   Return an array representing this suffix array.
   */
-proc sortSuffixesDirectly(const text, const n:int,
-                          type characterType, type offsetType,
-                          type cachedDataType) {
+proc computeSuffixArrayDirectly(const text, n:integral,
+                                type characterType, type offsetType,
+                                type cachedDataType) {
+  const useN = n:offsetType;
+  const cfg = new ssortConfig(idxType = text.idxType,
+                              characterType = characterType,
+                              offsetType = offsetType,
+                              cachedDataType = cachedDataType,
+                              cover = new differenceCover(DEFAULT_PERIOD),
+                              n=n:offsetType);
+
   // First, construct the offsetAndCached array that will be sorted.
-  var SA = buildAllOffsets(text, n, offsetType, cachedDataType);
+  var A = buildAllOffsets(offsetType=offsetType, cachedDataType=cachedDataType,
+                          text, useN);
 
-  type wordType = if cachedDataType != nothing
-                  then cachedDataType
-                  else characterType;
+  sortSuffixes(cfg, text, A, maxPrefix=max(offsetType));
 
-  type idxType = text.idxType;
+  return A;
+}
 
-  // Now, sort the offsetAndCached
-  record myPrefixComparator {
-    proc keyPart(a: offsetAndCached(?), i: int):(int(8), wordType) {
-      param sectionReturned = 0:int(8);
-      param sectionEnd = -1:int(8);
-      if a.cacheType != nothing && i == 0 {
-        // return the cached data
-        return (sectionReturned, a.cached);
-      }
+proc makeSampleOffset(type offsetType, type cachedDataType,
+                      i: offsetType,
+                      const text, n: offsetType,
+                      cover: differenceCover(?)) {
+  // i is a packed index into the offsets to sample
+  // we have to unpack it to get the regular offset
+  const whichPeriod = i / cover.sampleSize;
+  const periodStart = whichPeriod * cover.sampleSize;
+  const coverIdx = i - periodStart;
+  const unpackedIdx = whichPeriod * cover.period + cover.cover[coverIdx];
+  return makeOffsetAndCached(offsetType=offsetType,
+                             cachedDataType=cachedDataType,
+                             unpackedIdx, text, n);
+}
 
-      param eltsPerWord = numBytes(wordType) / numBytes(characterType);
-      const iOff = i:offsetType;
-      const startIdx = a.offset + iOff*eltsPerWord;
-      const startIdxCast = startIdx: idxType;
-      if startIdxCast < n:idxType {
-        // return further data by loading from the text array
-        return (sectionReturned, loadWord(text, n, startIdxCast, wordType));
-      }
-
-      // otherwise, return that we reached the end
-      return (sectionEnd, 0:wordType);
-    }
-  }
-
-  sort(SA, new myPrefixComparator());
+/**
+  Construct an array of suffixes (not yet sorted)
+  for only those offsets in 0..<n that are also in the difference cover.
+ */
+proc buildSampleOffsets(type offsetType, type cachedDataType,
+                        const text, n: offsetType,
+                        const cover: differenceCover(?)) {
+  const nPeriods = divCiel(n, cover.period); // nPeriods * period >= n
+  const sampleN = cover.sampleSize * nPeriods;
+  const Dom = {0..<sampleN};
+  var SA:[Dom] offsetAndCached(offsetType, cachedDataType) =
+    forall i in Dom do
+      makeSampleOffset(offsetType=offsetType, cachedDataType=cachedDataType,
+                       i=i, text, n=n, cover);
 
   return SA;
 }
 
+
 /** Create and return a sorted suffix array for the suffixes 0..<n
     referring to 'text'. */
-proc ssortDcx(const text,
-              const n: int,
-              const cover: differenceCover(?),
-              type characterType,
-              type offsetType) {
+proc ssortDcx(const cfg:ssortConfig(?), const text) {
+
   // figure out how big the sample will be, including a 0 after each mod
+  type offsetType = cfg.offsetType;
+  const n = cfg.n;
+  const cover = cfg.cover;
   const charsPerMod = 1 + divCiel(n, cover.period);
   const sampleN = cover.sampleSize * charsPerMod;
+
+  if n + INPUT_PADDING > text.domain.high {
+    halt("sortDcx needs extra space at the end of the array");
+    // expect it to be zero-padded past n.
+  }
+
+  //// Base Case ////
 
   // base case: just sort them if the number of characters is
   // less than the cover period, or sample.n is not less than n
@@ -177,8 +323,110 @@ proc ssortDcx(const text,
     if TRACE {
       writeln("Base case suffix sort for n=", n);
     }
-    return sortSuffixesByPrefix(text, n, characterType, offsetType);
+    return computeSuffixArrayDirectly(text, n,
+                                      characterType=cfg.characterType,
+                                      offsetType=offsetType,
+                                      cachedDataType=cfg.cachedDataType,
+                                      maxPrefix=max(offsetType));
   }
+
+  //// Step 1: Sort Sample Suffixes ////
+
+  // begin by computing the input text for the recursive subproblem
+  var SampleText:[0..<sampleN+INPUT_PADDING] offsetType;
+  var allSamplesHaveUniqueRanks = false;
+  {
+    // create an array storing offsets at sample positions
+    var Sample = buildSampleOffsets(offsetType=offsetType,
+                                    cachedDataType=cfg.cachedDataType,
+                                    text, n, cover);
+    // then sort the these by the first cover.period characters
+    sortSuffixes(cfg, text, Sample, n=n, maxPrefix=cover.period);
+
+    // now, compute the rank of each of these. we need to compare
+    // the first cover.period characters & assign different ranks when these
+    // differ.
+    const Ranks = + scan
+                    [i in Sample.domain]
+                      prefixDiffersFromPrevious(i,
+                                                Sample, cfg,
+                                                maxPrefix=cover.period);
+
+    // TODO: CHECK FOR OFF-BY-ONE HERE
+    allSamplesHaveUniqueRanks = Ranks.last == Sample.size;
+
+    // create the input for the recursive subproblem from the offsets and ranks
+    SampleText = 0; // PERF TODO: noinit it
+                    // and write a loop to zero what is not initalized below
+
+    forall (offset, rank) in zip(Sample, Ranks) {
+      // offset is an unpacked offset, but we need to pack it.
+      // do so in a way that arranges for SampleText to consist of
+      // all sample inputs at a particular modulus, followed by other modulus
+      const whichPeriod = offset.offset / cover.period;
+      const periodStart = whichPeriod * cover.period;
+      const phase = offset.offset - periodStart;
+      const coverIdx = cover.coverIndex(phase);
+      const useIdx = coverIdx * charsPerMod;
+
+      // this is not a data race because Sample.offsets are a permutation
+      // of the offsets.
+      SampleText[useIdx] = rank;
+    }
+  }
+
+  // TODO: no need to recurse if all offsets had unique Ranks
+  // i.e. each character in SampleText occurs only once
+  // i.e. each character in SampleText is the rank
+
+  {
+    // recursively sort the sample suffixes
+    const subCfg = new ssortConfig(idxType=SampleText.idxType,
+                                   characterType=SampleText.eltType,
+                                   offsetType=offsetType,
+                                   cachedDataType=cfg.cachedDataType,
+                                   cover=cover,
+                                   n=sampleN);
+    const SubSA = ssortDcx(subCfg, SampleText);
+    // Replace the values in SampleText with their ranks from the
+    // recursive suffix array.
+    forall (offset,rank) in zip(SubSA, SubSA.domain) {
+      SampleText[offset] = rank;
+    }
+  }
+
+  //// Step 2: Sort everything all together ////
+
+  // TODO: investigate radix sort + comparison on ties
+  // TODO: investigate parallel multi-way merge
+
+  var SA = buildAllOffsets(text, cfg.n, offsetType, cfg.cachedDataType);
+
+  record myComparator {
+    inline proc offsetToSampleOffset(i: offsetType) {
+      const mod = i % cover.period;
+      const whichPeriod = i / cover.period;
+      const sampleIdx = cover.coverIndex(mod);
+      return charsPerMod * sampleIdx + whichPeriod;
+    }
+    proc compare(a: offsetAndCached(?), b: offsetAndCached(?)) {
+      // first, compare the first cover.period characters of text
+      const prefixCmp = comparePrefixes(a, b, cfg, text, cover.period);
+      if prefixCmp != 0 {
+        return prefixCmp;
+      }
+      // if the prefixes are the same, compare the nearby sample
+      // rank from the recursive subproblem.
+      const k = findInCover(a.offset % cover.period, b.offset % cover.period);
+      const aSampleOffset = offsetToSampleOffset(a.offset + k);
+      const bSampleOffset = offsetToSampleOffset(b.offset + k);
+      const rankA = SampleText[aSampleOffset];
+      const rankB = SampleText[bSampleOffset];
+    }
+  }
+  Sort.TwoArraySampleSort.twoArraySampleSort(SA, new myComparator());
+
+  return SA;
 }
 
 proc computeSuffixArray(input: [], const n: input.domain.idxType) {
@@ -189,16 +437,17 @@ proc computeSuffixArray(input: [], const n: input.domain.idxType) {
        input.domain.high <= n) {
     halt("computeSuffixArray requires 1-d array over 0..n");
   }
-  if n + 8 > input.domain.high {
+  if n + INPUT_PADDING > input.domain.high {
     halt("computeSuffixArray needs extra space at the end of the array");
     // expect it to be zero-padded past n.
   }
 
   type offsetType = input.domain.idxType;
   type characterType = input.eltType;
+  type cachedDataType = if ENABLE_CACHED_TEXT then uint(64) else nothing;
 
   return ssortDcx(input, n,
-                  cover=new differenceCover(DEFAULT_PERIOD), 
+                  cover=new differenceCover(DEFAULT_PERIOD),
                   characterType=characterType, offsetType=offsetType);
 }
 
@@ -261,6 +510,29 @@ private proc checkCached(got: [] offsetAndCached, expect: []) {
                 " but expected 0x",
                 "%xu".format(e));
     }
+  }
+}
+
+private proc checkSeeressesCase(type offsetType, type cachedDataType,
+                                inputArr, n:int,
+                                expectOffsets, expectCached:?t = none) {
+  writeln("  ", offsetType:string, " offsets, caching ", cachedDataType:string);
+
+  if expectCached.type != nothing {
+    const A = buildAllOffsets(offsetType=offsetType,
+                              cachedDataType=cachedDataType,
+                              inputArr, n:offsetType);
+    checkCached(A, expectCached);
+  }
+  const SA = computeSuffixArrayDirectly(inputArr, n:offsetType,
+                                        inputArr.eltType,
+                                        offsetType=offsetType,
+                                        cachedDataType=cachedDataType);
+  checkOffsets(SA, expectOffsets);
+  assert(SA.eltType.cacheType == cachedDataType);
+
+  if expectCached.type != nothing {
+    checkCached(SA, expectCached);
   }
 }
 
@@ -330,77 +602,25 @@ private proc testSeeresses() {
                          bytesToUint("es\x00\x00\x00\x00\x00\x00"),
                          bytesToUint("s\x00\x00\x00\x00\x00\x00\x00")];
 
-  {
-    writeln("  uint(8) offsets, caching nothing");
-    const SA = sortSuffixesDirectly(inputArr, n, inputArr.eltType,
-                                    offsetType=uint(8), cachedDataType=nothing);
-    checkOffsets(SA, expectOffsets);
-    assert(SA.eltType.cacheType == nothing);
-  }
-  {
-    writeln("  uint(8) offsets, caching uint(8)");
-    const A = buildAllOffsets(inputArr, n,
-                              offsetType=uint(8), cachedDataType=uint(8));
-    checkCached(A, expectCached1);
-    const SA = sortSuffixesDirectly(inputArr, n, inputArr.eltType,
-                                    offsetType=uint(8), cachedDataType=uint(8));
-    checkCached(SA, expectCached1);
-    checkOffsets(SA, expectOffsets);
-  }
-  {
-    writeln("  uint(8) offsets, caching uint(16)");
-    const A = buildAllOffsets(inputArr, n,
-                              offsetType=uint(8), cachedDataType=uint(16));
-    checkCached(A, expectCached2);
-    const SA = sortSuffixesDirectly(inputArr, n, inputArr.eltType,
-                                    offsetType=uint(8),
-                                    cachedDataType=uint(16));
-    checkCached(SA, expectCached2);
-    checkOffsets(SA, expectOffsets);
-  }
-  {
-    writeln("  uint(8) offsets, caching uint(32)");
-    const A = buildAllOffsets(inputArr, n,
-                              offsetType=uint(8), cachedDataType=uint(32));
-    checkCached(A, expectCached4);
-    const SA = sortSuffixesDirectly(inputArr, n, inputArr.eltType,
-                                    uint(8), uint(32));
-    checkCached(SA, expectCached4);
-    checkOffsets(SA, expectOffsets);
-  }
-  {
-    writeln("  uint(8) offsets, caching uint(64)");
-    const A = buildAllOffsets(inputArr, n,
-                              offsetType=uint(8), cachedDataType=uint(64));
-    checkCached(A, expectCached8);
-    const SA = sortSuffixesDirectly(inputArr, n, inputArr.eltType,
-                                    uint(8), uint(64));
-    checkCached(SA, expectCached8);
-    checkOffsets(SA, expectOffsets);
-  }
+  // check different cached data types
+  checkSeeressesCase(offsetType=uint(8), cachedDataType=nothing,
+                     inputArr, n, expectOffsets);
+  checkSeeressesCase(offsetType=uint(8), cachedDataType=uint(8),
+                     inputArr, n, expectOffsets, expectCached1);
+  checkSeeressesCase(offsetType=uint(8), cachedDataType=uint(16),
+                     inputArr, n, expectOffsets, expectCached2);
+  checkSeeressesCase(offsetType=uint(8), cachedDataType=uint(32),
+                     inputArr, n, expectOffsets, expectCached4);
+  checkSeeressesCase(offsetType=uint(8), cachedDataType=uint(64),
+                     inputArr, n, expectOffsets, expectCached8);
 
   // check some different offset types
-  {
-    writeln("  uint(32) offsets, caching nothing");
-    const SA = sortSuffixesDirectly(inputArr, n, inputArr.eltType,
-                                    offsetType=uint(32),
-                                    cachedDataType=nothing);
-    checkOffsets(SA, expectOffsets);
-  }
-  {
-    writeln("  int offsets, caching nothing");
-    const SA = sortSuffixesDirectly(inputArr, n, inputArr.eltType,
-                                    offsetType=int,
-                                    cachedDataType=nothing);
-    checkOffsets(SA, expectOffsets);
-  }
-  {
-    writeln("  uint offsets, caching nothing");
-    const SA = sortSuffixesDirectly(inputArr, n, inputArr.eltType,
-                                    offsetType=uint,
-                                    cachedDataType=nothing);
-    checkOffsets(SA, expectOffsets);
-  }
+  checkSeeressesCase(offsetType=uint(32), cachedDataType=nothing,
+                     inputArr, n, expectOffsets);
+  checkSeeressesCase(offsetType=int, cachedDataType=nothing,
+                     inputArr, n, expectOffsets);
+  checkSeeressesCase(offsetType=uint, cachedDataType=nothing,
+                     inputArr, n, expectOffsets);
 }
 
 proc main() {

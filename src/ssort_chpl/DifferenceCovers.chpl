@@ -103,15 +103,15 @@ record differenceCover {
   param period;
 
   /** given (i-j)mod v, return i' so that l=(i`-i) mod v
-      and (i+l) mod v and (j+l) mod v are both in 
+      and (i+l) mod v and (j+l) mod v are both in
       the difference cover. */
-  /*private*/ const ellTable: period*int; 
+  /*private*/ const ellTable: period*int;
 
   /** sample[i mod v]=index s.t. cover[index]=i, else -1 */
   /*private*/ const sampleTable: period*int;
 
   /** returns the size of the difference cover, that is, cover.size */
-  proc sampleSize param : int { return coverTuple(period).size; }  
+  proc sampleSize param : int { return coverTuple(period).size; }
   /** returns period - sampleSize */
   proc nonsampleSize param : int { return period - sampleSize; }
   /** returns the cover tuple */
@@ -122,7 +122,7 @@ record differenceCover {
     this.ellTable = makeEllTable(period);
     this.sampleTable = makeSampleTable(period);
   }
-    
+
   /**
     Given offsets i and j, with 0 <= i < period and 0 <= j < period,
     return k such that (i+k) mod period and (j+k) mod period
@@ -176,6 +176,9 @@ record differenceCover {
   }
 }
 
+
+/////////// Begin Testing Code ////////////
+
 proc testCover(param period) {
   writeln("testing difference cover with period ", period);
 
@@ -208,7 +211,7 @@ proc testCover(param period) {
     assert(dc.containedInCover(i) == (found >= 0));
     assert(dc.coverIndex(i) == found);
   }
-  
+
   // check findInCover
   for i in 0..<period {
     for j in 0..<period {
