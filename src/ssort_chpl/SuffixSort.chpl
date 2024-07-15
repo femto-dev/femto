@@ -50,14 +50,14 @@ record ssortConfig {
   type offsetType;     // type for storing offsets
   type cachedDataType; // cache this much text data along with offsets
                        // (no caching if this is 'nothing')
+
+  const cover: differenceCover(?);
+
   proc wordType type {
     return if cachedDataType != nothing
            then cachedDataType
            else characterType;
   }
-
-  const cover: differenceCover(?);
-  const n: offsetType;
 }
 
 /**
@@ -71,6 +71,10 @@ record offsetAndCached {
 
   var offset: offsetType;
   var cached: cacheType;
+}
+
+inline proc myDivCeil(x: integral, param y: integral) {
+  return (x + y - 1) / y;
 }
 
 /**
@@ -191,10 +195,10 @@ proc comparePrefixes(const a: offsetAndCached(?), const b: offsetAndCached(?),
 
 /* This is helpful for computing ranks based on first v characters. */
 private
-proc prefixDiffersFromPrevious(i: int,
+proc prefixDiffersFromPrevious(const cfg:ssortConfig(?),
+                               i: cfg.offsetType,
                                const Sample: [] offsetAndCached(?),
-                               const cfg:ssortConfig(?), const text,
-                               n: cfg.offsetType,
+                               const text, n: cfg.offsetType,
                                maxPrefix: cfg.offsetType): cfg.offsetType {
   type offsetType = cfg.offsetType;
 
@@ -213,18 +217,17 @@ proc prefixDiffersFromPrevious(i: int,
   return 1:offsetType; // not equal, so assign a new rank
 }
 
-/** Sort suffixes that we have already computed in A
+/** Sort suffixes that we have already initialized in A
     by the first maxPrefix character values.
  */
 proc sortSuffixes(const cfg:ssortConfig(?), const thetext,
-                  ref A: [] offsetAndCached(?),
+                  ref A: [] offsetAndCached(?), n: cfg.offsetType,
                   maxPrefix: A.eltType.offsetType) {
   type idxType = cfg.idxType;
   type characterType = cfg.characterType;
   type offsetType = cfg.offsetType;
   type cachedDataType = cfg.cachedDataType;
   type wordType = cfg.wordType;
-  const n = cfg.n;
   // Define a comparator to support radix sorting by the first maxPrefix
   // character values.
   record myPrefixComparator {
@@ -253,14 +256,13 @@ proc computeSuffixArrayDirectly(const text, n:integral,
                               characterType = characterType,
                               offsetType = offsetType,
                               cachedDataType = cachedDataType,
-                              cover = new differenceCover(DEFAULT_PERIOD),
-                              n=n:offsetType);
+                              cover = new differenceCover(DEFAULT_PERIOD));
 
   // First, construct the offsetAndCached array that will be sorted.
   var A = buildAllOffsets(offsetType=offsetType, cachedDataType=cachedDataType,
                           text, useN);
 
-  sortSuffixes(cfg, text, A, maxPrefix=max(offsetType));
+  sortSuffixes(cfg, text, A, n=useN, maxPrefix=max(offsetType));
 
   return A;
 }
@@ -274,10 +276,17 @@ proc makeSampleOffset(type offsetType, type cachedDataType,
   const whichPeriod = i / cover.sampleSize;
   const periodStart = whichPeriod * cover.sampleSize;
   const coverIdx = i - periodStart;
-  const unpackedIdx = whichPeriod * cover.period + cover.cover[coverIdx];
+  const coverVal = cover.cover[coverIdx]:offsetType;
+  const unpackedIdx = whichPeriod * cover.period + coverVal;
   return makeOffsetAndCached(offsetType=offsetType,
                              cachedDataType=cachedDataType,
                              unpackedIdx, text, n);
+}
+
+proc chooseIdxType(type offsetType) {
+  // workaround for Chapel issue #25559 otherwise
+  // we could just use offsetType.
+  return if offsetType == uint then uint else int;
 }
 
 /**
@@ -286,10 +295,11 @@ proc makeSampleOffset(type offsetType, type cachedDataType,
  */
 proc buildSampleOffsets(type offsetType, type cachedDataType,
                         const text, n: offsetType,
-                        const cover: differenceCover(?)) {
-  const nPeriods = divCiel(n, cover.period); // nPeriods * period >= n
-  const sampleN = cover.sampleSize * nPeriods;
-  const Dom = {0..<sampleN};
+                        const cover: differenceCover(?),
+                        out sampleN: offsetType) {
+  const nPeriods = myDivCeil(n, cover.period); // nPeriods * period >= n
+  sampleN = cover.sampleSize * nPeriods;
+  const Dom = {0..<sampleN:offsetType};
   var SA:[Dom] offsetAndCached(offsetType, cachedDataType) =
     forall i in Dom do
       makeSampleOffset(offsetType=offsetType, cachedDataType=cachedDataType,
@@ -301,18 +311,26 @@ proc buildSampleOffsets(type offsetType, type cachedDataType,
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
     referring to 'text'. */
-proc ssortDcx(const cfg:ssortConfig(?), const text) {
+proc ssortDcx(const cfg:ssortConfig(?), const text, n: cfg.offsetType)
+ : [0..<n] offsetAndCached(cfg.offsetType, cfg.cachedDataType) {
 
   // figure out how big the sample will be, including a 0 after each mod
   type offsetType = cfg.offsetType;
-  const n = cfg.n;
   const cover = cfg.cover;
-  const charsPerMod = 1 + divCiel(n, cover.period);
+  const charsPerMod = 1 + myDivCeil(n, cover.period);
   const sampleN = cover.sampleSize * charsPerMod;
 
-  if n + INPUT_PADDING > text.domain.high {
+  if TRACE {
+    writeln("in ssortDcx ", cfg.type:string, " n=", n);
+  }
+
+  if text.domain.low != 0 {
+    halt("sortDcx expects input array to start at 0");
+  }
+  if n + INPUT_PADDING > text.size {
+    // expect it to be zero-padded past n so that
+    // getKeyPart / loadWord does not have to check n
     halt("sortDcx needs extra space at the end of the array");
-    // expect it to be zero-padded past n.
   }
 
   //// Base Case ////
@@ -326,48 +344,67 @@ proc ssortDcx(const cfg:ssortConfig(?), const text) {
     return computeSuffixArrayDirectly(text, n,
                                       characterType=cfg.characterType,
                                       offsetType=offsetType,
-                                      cachedDataType=cfg.cachedDataType,
-                                      maxPrefix=max(offsetType));
+                                      cachedDataType=cfg.cachedDataType);
   }
+
+  // set up information for recursive subproblem
+  type subCached =
+    if (cfg.cachedDataType == nothing ||
+        numBits(cfg.cachedDataType) >= numBits(cfg.offsetType))
+    then cfg.cachedDataType
+    else cfg.offsetType;
+
+  const subCfg = new ssortConfig(idxType=cfg.idxType,
+                                 characterType=offsetType,
+                                 offsetType=offsetType,
+                                 cachedDataType=subCached,
+                                 cover=cover);
 
   //// Step 1: Sort Sample Suffixes ////
 
   // begin by computing the input text for the recursive subproblem
-  var SampleText:[0..<sampleN+INPUT_PADDING] offsetType;
+  var SampleText:[0..<sampleN+INPUT_PADDING] subCfg.characterType;
   var allSamplesHaveUniqueRanks = false;
   {
     // create an array storing offsets at sample positions
+    var mySampleN: offsetType;
     var Sample = buildSampleOffsets(offsetType=offsetType,
                                     cachedDataType=cfg.cachedDataType,
-                                    text, n, cover);
-    // then sort the these by the first cover.period characters
+                                    text, n, cover, /*out*/ mySampleN);
+    // then sort the these by the first cover.period characters;
+    // note that these offsets are in 0..<n not 0..<mySampleN
     sortSuffixes(cfg, text, Sample, n=n, maxPrefix=cover.period);
 
     // now, compute the rank of each of these. we need to compare
     // the first cover.period characters & assign different ranks when these
     // differ.
-    const Ranks = + scan
-                    [i in Sample.domain]
-                      prefixDiffersFromPrevious(i,
-                                                Sample, cfg,
-                                                maxPrefix=cover.period);
+    // TODO: skip the temporary array once Chapel issue #12482 is addressed
+    const Tmp = [i in Sample.domain]
+                  prefixDiffersFromPrevious(cfg,
+                                            i,
+                                            Sample, text, n,
+                                            maxPrefix=cover.period);
 
-    // TODO: CHECK FOR OFF-BY-ONE HERE
-    allSamplesHaveUniqueRanks = Ranks.last == Sample.size;
+    // note: inclusive scan causes Ranks[0] to be 1, so Ranks is 1-based
+    const Ranks = + scan Tmp;
+
+    allSamplesHaveUniqueRanks = Ranks.last == mySampleN + 1;
 
     // create the input for the recursive subproblem from the offsets and ranks
     SampleText = 0; // PERF TODO: noinit it
                     // and write a loop to zero what is not initalized below
 
     forall (offset, rank) in zip(Sample, Ranks) {
-      // offset is an unpacked offset, but we need to pack it.
-      // do so in a way that arranges for SampleText to consist of
-      // all sample inputs at a particular modulus, followed by other modulus
+      // offset is an unpacked offset. find the offset in
+      // the recursive problem input to store the rank into.
+      // Do so in a way that arranges for SampleText to consist of
+      // all sample inputs at a particular mod, followed by other modulus.
+      // We have charsPerMod characters for each mod in the cover.
       const whichPeriod = offset.offset / cover.period;
-      const periodStart = whichPeriod * cover.period;
-      const phase = offset.offset - periodStart;
+      const phase = offset.offset % cover.period;
       const coverIdx = cover.coverIndex(phase);
-      const useIdx = coverIdx * charsPerMod;
+      if EXTRA_CHECKS then assert(0 <= coverIdx && coverIdx < cover.sampleSize);
+      const useIdx = coverIdx * charsPerMod + whichPeriod;
 
       // this is not a data race because Sample.offsets are a permutation
       // of the offsets.
@@ -375,32 +412,38 @@ proc ssortDcx(const cfg:ssortConfig(?), const text) {
     }
   }
 
-  // TODO: no need to recurse if all offsets had unique Ranks
+  // No need to recurse if all offsets had unique Ranks
   // i.e. each character in SampleText occurs only once
-  // i.e. each character in SampleText is the rank
+  // i.e. each character in SampleText is already the rank
 
-  {
+  if !allSamplesHaveUniqueRanks {
     // recursively sort the sample suffixes
-    const subCfg = new ssortConfig(idxType=SampleText.idxType,
-                                   characterType=SampleText.eltType,
-                                   offsetType=offsetType,
-                                   cachedDataType=cfg.cachedDataType,
-                                   cover=cover,
-                                   n=sampleN);
-    const SubSA = ssortDcx(subCfg, SampleText);
-    // Replace the values in SampleText with their ranks from the
-    // recursive suffix array.
+    const SubSA = ssortDcx(subCfg, SampleText, sampleN);
+    // Replace the values in SampleText with
+    // 1-based ranks from the suffix array.
     forall (offset,rank) in zip(SubSA, SubSA.domain) {
-      SampleText[offset] = rank;
+      SampleText[offset.offset] = rank+1;
     }
   }
 
   //// Step 2: Sort everything all together ////
 
+  // TODO: * create splitters to make bins for parallelism
+  //       * count number of suffixes in each bin with a pass over text
+  //       * distributed suffixes to bins with a pass over text
+  //       * forall bins
+  //           consider splitters for min/max so that we can
+  //               skip lookups into text entirely in some cases
+  //           copy to scratch space with lookup next text
+  //           in scratch, sort sample, sort each nonsample independently
+  //           heap-based merge of these sorted lists back to bin
+
   // TODO: investigate radix sort + comparison on ties
   // TODO: investigate parallel multi-way merge
 
-  var SA = buildAllOffsets(text, cfg.n, offsetType, cfg.cachedDataType);
+  var SA = buildAllOffsets(offsetType=offsetType,
+                           cachedDataType=cfg.cachedDataType,
+                           text, n);
 
   record myComparator {
     inline proc offsetToSampleOffset(i: offsetType) {
@@ -411,20 +454,23 @@ proc ssortDcx(const cfg:ssortConfig(?), const text) {
     }
     proc compare(a: offsetAndCached(?), b: offsetAndCached(?)) {
       // first, compare the first cover.period characters of text
-      const prefixCmp = comparePrefixes(a, b, cfg, text, cover.period);
+      const prefixCmp = comparePrefixes(a, b, cfg, text, n, cover.period);
       if prefixCmp != 0 {
         return prefixCmp;
       }
       // if the prefixes are the same, compare the nearby sample
       // rank from the recursive subproblem.
-      const k = findInCover(a.offset % cover.period, b.offset % cover.period);
+      const k = cover.findInCover(a.offset % cover.period,
+                                  b.offset % cover.period);
       const aSampleOffset = offsetToSampleOffset(a.offset + k);
       const bSampleOffset = offsetToSampleOffset(b.offset + k);
       const rankA = SampleText[aSampleOffset];
       const rankB = SampleText[bSampleOffset];
+      return rankA - rankB;
     }
   }
-  Sort.TwoArraySampleSort.twoArraySampleSort(SA, new myComparator());
+
+  sort(SA, new myComparator());
 
   return SA;
 }
@@ -514,7 +560,7 @@ private proc checkCached(got: [] offsetAndCached, expect: []) {
 }
 
 private proc checkSeeressesCase(type offsetType, type cachedDataType,
-                                inputArr, n:int,
+                                inputArr, n:int, param period,
                                 expectOffsets, expectCached:?t = none) {
   writeln("  ", offsetType:string, " offsets, caching ", cachedDataType:string);
 
@@ -534,6 +580,37 @@ private proc checkSeeressesCase(type offsetType, type cachedDataType,
   if expectCached.type != nothing {
     checkCached(SA, expectCached);
   }
+
+  // try ssortDcx
+  const cfg = new ssortConfig(idxType=inputArr.idxType,
+                              characterType=inputArr.eltType,
+                              offsetType=offsetType,
+                              cachedDataType=cachedDataType,
+                              cover=new differenceCover(period));
+  const SA2 = ssortDcx(cfg, inputArr, n:offsetType);
+  checkOffsets(SA2, expectOffsets);
+  assert(SA2.eltType.cacheType == cachedDataType);
+
+  if expectCached.type != nothing {
+    checkCached(SA2, expectCached);
+  }
+}
+
+private proc testMyDivCeil() {
+  assert(myDivCeil(0,2) == 0);
+  assert(myDivCeil(1,2) == 1);
+  assert(myDivCeil(2,2) == 1);
+  assert(myDivCeil(3,2) == 2);
+  assert(myDivCeil(4,2) == 2);
+
+  assert(myDivCeil(0,3) == 0);
+  assert(myDivCeil(1,3) == 1);
+  assert(myDivCeil(2,3) == 1);
+  assert(myDivCeil(3,3) == 1);
+  assert(myDivCeil(4,3) == 2);
+  assert(myDivCeil(5,3) == 2);
+  assert(myDivCeil(6,3) == 2);
+  assert(myDivCeil(7,3) == 3);
 }
 
 // test suffix sorting stuff with "seeresses" as input.
@@ -560,6 +637,38 @@ private proc testSeeresses() {
     seeresses 0
     ses       6
     sses      5
+
+    here are the sampled suffixes for DC3
+
+    seeresses
+    01 34 67  (initial offsets)
+    01 23 45  (sample offsets)
+
+    and their sorted data
+
+              (initial offset)  (sample offset) (rank, 1-based)
+    eer esses  1                 1               1
+    es         7                 5               2
+    ess es     4                 3               3
+    res ses    3                 2               4
+    see resses 0                 0               5
+    ses        6                 4               6
+
+    recursive subproblem input
+      pad out to have same number in each section & always include a 0
+      [rank(i) with i mod 3 == 0] <pad> [rank(j) with j mod 3 == 1] <pad>
+
+                                                (recursive input this column)
+              (initial offset)  (sample offset) (rank, 1-based)
+    see resses 0                 0               5
+    res ses    3                 2               4
+    ses        6                 4               6
+    <padding>                                    0
+
+    eer esses  1                 1               1
+    ess es     4                 3               3
+    es         7                 5               2
+    <padding>                                    0
 
   */
 
@@ -603,29 +712,31 @@ private proc testSeeresses() {
                          bytesToUint("s\x00\x00\x00\x00\x00\x00\x00")];
 
   // check different cached data types
-  checkSeeressesCase(offsetType=uint(8), cachedDataType=nothing,
-                     inputArr, n, expectOffsets);
-  checkSeeressesCase(offsetType=uint(8), cachedDataType=uint(8),
-                     inputArr, n, expectOffsets, expectCached1);
-  checkSeeressesCase(offsetType=uint(8), cachedDataType=uint(16),
-                     inputArr, n, expectOffsets, expectCached2);
-  checkSeeressesCase(offsetType=uint(8), cachedDataType=uint(32),
-                     inputArr, n, expectOffsets, expectCached4);
-  checkSeeressesCase(offsetType=uint(8), cachedDataType=uint(64),
-                     inputArr, n, expectOffsets, expectCached8);
+  checkSeeressesCase(offsetType=int, cachedDataType=nothing,
+                     inputArr, n, 3, expectOffsets);
+  checkSeeressesCase(offsetType=int, cachedDataType=uint(8),
+                     inputArr, n, 7, expectOffsets, expectCached1);
+  checkSeeressesCase(offsetType=int, cachedDataType=uint(16),
+                     inputArr, n, 3, expectOffsets, expectCached2);
+  checkSeeressesCase(offsetType=int, cachedDataType=uint(32),
+                     inputArr, n, 13, expectOffsets, expectCached4);
+  checkSeeressesCase(offsetType=int, cachedDataType=uint(64),
+                     inputArr, n, 3, expectOffsets, expectCached8);
 
   // check some different offset types
-  checkSeeressesCase(offsetType=uint(32), cachedDataType=nothing,
-                     inputArr, n, expectOffsets);
+  // TODO: fix Chapel module errors with these other types
+  //checkSeeressesCase(offsetType=uint(32), cachedDataType=nothing,
+  //                   inputArr, n, 3, expectOffsets);
   checkSeeressesCase(offsetType=int, cachedDataType=nothing,
-                     inputArr, n, expectOffsets);
-  checkSeeressesCase(offsetType=uint, cachedDataType=nothing,
-                     inputArr, n, expectOffsets);
+                     inputArr, n, 3, expectOffsets);
+  //checkSeeressesCase(offsetType=uint, cachedDataType=nothing,
+  //                   inputArr, n, 3, expectOffsets);
 }
 
 proc main() {
   DifferenceCovers.testCovers();
 
+  testMyDivCeil();
   testSeeresses();
 }
 
