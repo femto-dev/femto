@@ -20,7 +20,7 @@
 module DifferenceCovers {
 
 
-config param EXTRA_CHECKS = false;
+import SuffixSort.EXTRA_CHECKS;
 
 const cover3    = (0,1); // alternately, 1,2
 const cover7    = (0,1,3);
@@ -174,75 +174,6 @@ record differenceCover {
     }
     return sampleTable[i] : i.type;
   }
-}
-
-
-/////////// Begin Testing Code ////////////
-
-proc testCover(param period) {
-  writeln("testing difference cover with period ", period);
-
-  const dc = new differenceCover(period);
-  assert(dc.sampleSize == dc.cover.size);
-
-  // print out information about this difference cover
-  var minDist = dc.period;
-  var maxDist = 0;
-  for i in 0..dc.sampleSize { // inclusive of top bound to consider last vs 0
-    const cur = dc.cover[i % dc.sampleSize];
-    var next = dc.cover[(i+1) % dc.sampleSize];
-    while next < cur do next += dc.period;
-    const dist = next - cur;
-    minDist = min(dist, minDist);
-    maxDist = max(dist, maxDist);
-  }
-
-  writeln("  sample size = ", dc.sampleSize);
-  writeln("  sample percentage = ", (100.0 * dc.sampleSize) / dc.period);
-  writeln("  min distance between samples = ", minDist);
-  writeln("  max distance between samples = ", maxDist);
-
-  // check containedInCover and coverIndex
-  for i in 0..<period {
-    var found = -1;
-    for j in 0..<dc.cover.size {
-      if dc.cover[j] == i then found = j;
-    }
-    assert(dc.containedInCover(i) == (found >= 0));
-    assert(dc.coverIndex(i) == found);
-  }
-
-  // check findInCover
-  for i in 0..<period {
-    for j in 0..<period {
-      const k = dc.findInCover(i, j);
-      assert(0 <= k && k < period);
-      assert(dc.containedInCover((i + k) % period));
-      assert(dc.containedInCover((j + k) % period));
-    }
-  }
-}
-
-proc testCovers() {
-  testCover(3);
-  testCover(7);
-  testCover(13);
-  testCover(21);
-  testCover(31);
-  testCover(39);
-  testCover(57);
-  testCover(73);
-  testCover(91);
-  testCover(95);
-  testCover(133);
-  testCover(1024);
-  testCover(2048);
-  testCover(4096);
-  testCover(8192);
-}
-proc main() {
-  writeln("Testing Difference Covers");
-  testCovers();
 }
 
 
