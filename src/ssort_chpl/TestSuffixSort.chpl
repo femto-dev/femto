@@ -259,6 +259,44 @@ private proc testSeeresses() {
   //                   inputArr, n, 3, expectOffsets);
 }
 
+proc testOtherCase(input: string, expectSA: [] int,
+                   param period, type cachedDataType) {
+  writeln("testOtherCase(input=", input, ", period=", period, ", ",
+                           "cachedDataType=", cachedDataType:string, ")");
+
+  const n = input.size;
+  const inputArr = bytesToArray(input);
+
+  type offsetType = int; // always int for this test
+
+  const cfg = new ssortConfig(idxType=inputArr.idxType,
+                              characterType=inputArr.eltType,
+                              offsetType=offsetType,
+                              cachedDataType=cachedDataType,
+                              cover=new differenceCover(period));
+  const SA = ssortDcx(cfg, inputArr, n:offsetType);
+
+  if n <= 10 {
+    writeln("Expect SA ", expectSA);
+    writeln("Got SA    ", SA);
+  }
+  checkOffsets(SA, expectSA);
+}
+
+proc testOther(input: string, expectSA: [] int) {
+  testOtherCase(input, expectSA, period=3, cachedDataType=nothing);
+  testOtherCase(input, expectSA, period=3, cachedDataType=uint);
+
+  testOtherCase(input, expectSA, period=7, cachedDataType=nothing);
+  testOtherCase(input, expectSA, period=7, cachedDataType=uint);
+}
+
+proc testOthers() {
+  testOther("abracadabra", [10,7,0,3,5,8,1,4,6,9,2]);
+  testOther("mississippi", [10,7,4,1,0,9,8,6,3,5,2]);
+  testOther("aaaacaaaacaaaab", [10,5,0,11,6,1,12,7,2,13,8,3,14,9,4]);
+}
+
 proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
   writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period, ", ",
                            "cachedDataType=", cachedDataType:string, ")");
@@ -312,6 +350,7 @@ proc testRepeats() {
 proc main() {
   testMyDivCeil();
   testSeeresses();
+  testOthers();
   testRepeats();
 }
 
