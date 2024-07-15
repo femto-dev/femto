@@ -65,12 +65,20 @@ record ssortConfig {
   more memory. Here we store together an offset for the suffix array
   along with some of the data that is present at that offset.
   */
-record offsetAndCached {
+record offsetAndCached : writeSerializable {
   type offsetType;
   type cacheType;
 
   var offset: offsetType;
   var cached: cacheType;
+
+  proc serialize(writer, ref serializer) throws {
+    if cacheType == nothing {
+      writer.write(offset);
+    } else {
+      writer.writef("%i (%016xu)", offset, cached);
+    }
+  }
 }
 
 inline proc myDivCeil(x: integral, param y: integral) {
@@ -115,10 +123,19 @@ inline proc loadWord(const text, n: integral, i: integral, type wordType) {
 proc makeOffsetAndCached(type offsetType, type cachedDataType,
                          i: offsetType,
                          const text, n: offsetType) {
+  const cached: cachedDataType;
+  if cachedDataType == nothing {
+    cached = none;
+  } else if i < n {
+    cached = loadWord(text, n, i, cachedDataType);
+  } else {
+    cached = 0;
+  }
+
   return new offsetAndCached(offsetType=offsetType,
                              cacheType=cachedDataType,
                              offset=i,
-                             cached=loadWord(text, n, i, cachedDataType));
+                             cached=cached);
 }
 
 /**
@@ -274,9 +291,8 @@ proc makeSampleOffset(type offsetType, type cachedDataType,
   // i is a packed index into the offsets to sample
   // we have to unpack it to get the regular offset
   const whichPeriod = i / cover.sampleSize;
-  const periodStart = whichPeriod * cover.sampleSize;
-  const coverIdx = i - periodStart;
-  const coverVal = cover.cover[coverIdx]:offsetType;
+  const phase = i % cover.sampleSize;
+  const coverVal = cover.cover[phase]:offsetType;
   const unpackedIdx = whichPeriod * cover.period + coverVal;
   return makeOffsetAndCached(offsetType=offsetType,
                              cachedDataType=cachedDataType,

@@ -259,9 +259,60 @@ private proc testSeeresses() {
   //                   inputArr, n, 3, expectOffsets);
 }
 
+proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
+  writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period, ", ",
+                           "cachedDataType=", cachedDataType:string, ")");
+
+  var inputArr: [0..<n+INPUT_PADDING] uint(8);
+  var expectSA: [0..<n] int;
+
+  forall i in 0..<n {
+    inputArr[i] = c;
+    expectSA[i] = n-i-1;
+  }
+
+  type offsetType = int; // always int for this test
+
+  const cfg = new ssortConfig(idxType=inputArr.idxType,
+                              characterType=inputArr.eltType,
+                              offsetType=offsetType,
+                              cachedDataType=cachedDataType,
+                              cover=new differenceCover(period));
+  const SA = ssortDcx(cfg, inputArr, n:offsetType);
+
+  if n <= 10 {
+    writeln("Expect SA ", expectSA);
+    writeln("Got SA    ", SA);
+  }
+  checkOffsets(SA, expectSA);
+}
+
+proc testRepeats() {
+  const sizes = [0, 1, 2, 3, 4, 5, 10, 20, 50, 100, 1000, 10000];
+
+  for (size,i) in zip(sizes,1..) {
+    const chr = i:uint(8);
+    testRepeatsCase(c=chr, size, period=3, cachedDataType=nothing);
+    testRepeatsCase(c=chr, n=size, period=3, cachedDataType=uint);
+
+    testRepeatsCase(c=chr, n=size, period=7, cachedDataType=nothing);
+    testRepeatsCase(c=chr, n=size, period=7, cachedDataType=uint);
+
+    testRepeatsCase(c=chr, n=size, period=13, cachedDataType=nothing);
+    testRepeatsCase(c=chr, n=size, period=13, cachedDataType=uint);
+
+    testRepeatsCase(c=chr, n=size, period=21, cachedDataType=nothing);
+    testRepeatsCase(c=chr, n=size, period=21, cachedDataType=uint);
+
+    testRepeatsCase(c=chr, n=size, period=133, cachedDataType=nothing);
+    testRepeatsCase(c=chr, n=size, period=133, cachedDataType=uint);
+  }
+}
+
 proc main() {
   testMyDivCeil();
   testSeeresses();
+  testRepeats();
 }
 
 
