@@ -256,6 +256,40 @@ proc sortSuffixes(const cfg:ssortConfig(?), const thetext,
   sort(A, new myPrefixComparator());
 }
 
+/* If we computed the suffix array for text using cachedDataType!=nothing,
+   there is some ambiguity between 0s due to end-of-string/padding
+   vs 0s due to the input. This function resolves the issue
+   by adjusting the first several suffix array entries.
+ */
+proc fixTrailingZeros(const text, n:integral, ref A: [],
+                      type characterType, type offsetType,
+                      type cachedDataType) {
+  if cachedDataType != nothing &&
+     numBits(cachedDataType) != numBits(characterType) {
+    // We use 0s to indicate padding which can happen at the end of
+    // the string. If the input also ended with 0s, then we need to
+    // re-sort the suffixes at the end of the string. Since they
+    // all end in zero, we know that the suffix array order here
+    // is the offsets in descending order.
+
+    var firstNonZero = -1;
+    // loop starting at the end of the string, stop when we hit a nonzero
+    for i in 0..<n by -1 {
+      if text[i] != 0 {
+        firstNonZero = i;
+        break;
+      }
+    }
+    var firstZero = firstNonZero+1;
+    var nZero = n-firstZero;
+
+    forall i in 0..<nZero {
+      if EXTRA_CHECKS then assert(A[i].cached == 0);
+      A[i].offset = n-1-i;
+    }
+  }
+}
+
 /**
   Create a suffix array for the suffixes 0..<n for 'text'
   by sorting the data at those suffixes directly.
@@ -280,6 +314,11 @@ proc computeSuffixArrayDirectly(const text, n:integral,
                           text, useN);
 
   sortSuffixes(cfg, text, A, n=useN, maxPrefix=max(offsetType));
+
+  fixTrailingZeros(text, n, A,
+                   characterType=characterType,
+                   offsetType=offsetType,
+                   cachedDataType=cachedDataType);
 
   return A;
 }
@@ -487,6 +526,11 @@ proc ssortDcx(const cfg:ssortConfig(?), const text, n: cfg.offsetType)
   }
 
   sort(SA, new myComparator());
+
+  fixTrailingZeros(text, n, SA,
+                   characterType=cfg.characterType,
+                   offsetType=offsetType,
+                   cachedDataType=cfg.cachedDataType);
 
   return SA;
 }

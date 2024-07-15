@@ -21,9 +21,12 @@ module TestDifferenceCovers {
 
 
 use DifferenceCovers;
+import SuffixSort.TRACE;
 
 proc testCover(param period) {
-  writeln("testing difference cover with period ", period);
+  if TRACE {
+    writeln("testing difference cover with period ", period);
+  }
 
   const dc = new differenceCover(period);
   assert(dc.sampleSize == dc.cover.size);
@@ -40,10 +43,12 @@ proc testCover(param period) {
     maxDist = max(dist, maxDist);
   }
 
-  writeln("  sample size = ", dc.sampleSize);
-  writeln("  sample percentage = ", (100.0 * dc.sampleSize) / dc.period);
-  writeln("  min distance between samples = ", minDist);
-  writeln("  max distance between samples = ", maxDist);
+  if TRACE {
+    writeln("  sample size = ", dc.sampleSize);
+    writeln("  sample percentage = ", (100.0 * dc.sampleSize) / dc.period);
+    writeln("  min distance between samples = ", minDist);
+    writeln("  max distance between samples = ", maxDist);
+  }
 
   // check containedInCover and coverIndex
   for i in 0..<period {
@@ -84,8 +89,10 @@ proc testCovers() {
   testCover(8192);
 }
 proc main() {
-  writeln("Testing Difference Covers");
+  if TRACE then writeln("Testing Difference Covers");
   testCovers();
+
+  writeln("TestDifferenceCovers OK");
 }
 
 

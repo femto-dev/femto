@@ -26,6 +26,8 @@ use Math;
 use IO;
 use Sort;
 
+import SuffixSort.TRACE;
+
 private proc bytesToArray(s: bytes) {
   const nWithPadding = s.size+INPUT_PADDING;
   const A:[0..<nWithPadding] uint(8)=
@@ -88,7 +90,9 @@ private proc checkCached(got: [] offsetAndCached, expect: []) {
 private proc checkSeeressesCase(type offsetType, type cachedDataType,
                                 inputArr, n:int, param period,
                                 expectOffsets, expectCached:?t = none) {
-  writeln("  ", offsetType:string, " offsets, caching ", cachedDataType:string);
+  if TRACE {
+    writeln("  ", offsetType:string, " offsets, caching ", cachedDataType:string);
+  }
 
   if expectCached.type != nothing {
     const A = buildAllOffsets(offsetType=offsetType,
@@ -141,7 +145,9 @@ private proc testMyDivCeil() {
 
 // test suffix sorting stuff with "seeresses" as input.
 private proc testSeeresses() {
-  writeln("Testing suffix sorting of 'seeresses'");
+  if TRACE {
+    writeln("Testing suffix sorting of 'seeresses'");
+  }
 
   const input = "seeresses";
   const n = input.size;
@@ -261,8 +267,10 @@ private proc testSeeresses() {
 
 proc testOtherCase(input: string, expectSA: [] int,
                    param period, type cachedDataType) {
-  writeln("testOtherCase(input=", input, ", period=", period, ", ",
-                           "cachedDataType=", cachedDataType:string, ")");
+  if TRACE {
+    writeln("testOtherCase(input=", input, ", period=", period, ", ",
+                             "cachedDataType=", cachedDataType:string, ")");
+  }
 
   const n = input.size;
   const inputArr = bytesToArray(input);
@@ -276,7 +284,7 @@ proc testOtherCase(input: string, expectSA: [] int,
                               cover=new differenceCover(period));
   const SA = ssortDcx(cfg, inputArr, n:offsetType);
 
-  if n <= 10 {
+  if TRACE && n <= 10 {
     writeln("Expect SA ", expectSA);
     writeln("Got SA    ", SA);
   }
@@ -298,8 +306,10 @@ proc testOthers() {
 }
 
 proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
-  writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period, ", ",
-                           "cachedDataType=", cachedDataType:string, ")");
+  if TRACE {
+    writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period, ", ",
+                             "cachedDataType=", cachedDataType:string, ")");
+  }
 
   var inputArr: [0..<n+INPUT_PADDING] uint(8);
   var expectSA: [0..<n] int;
@@ -318,7 +328,8 @@ proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
                               cover=new differenceCover(period));
   const SA = ssortDcx(cfg, inputArr, n:offsetType);
 
-  if n <= 10 {
+  if TRACE && n <= 50 {
+    writeln("Input     ", inputArr[0..<n]);
     writeln("Expect SA ", expectSA);
     writeln("Got SA    ", SA);
   }
@@ -332,26 +343,177 @@ proc testRepeats() {
     const chr = i:uint(8);
     testRepeatsCase(c=chr, size, period=3, cachedDataType=nothing);
     testRepeatsCase(c=chr, n=size, period=3, cachedDataType=uint);
+    testRepeatsCase(c=0, size, period=3, cachedDataType=nothing);
+    testRepeatsCase(c=0, n=size, period=3, cachedDataType=uint);
 
     testRepeatsCase(c=chr, n=size, period=7, cachedDataType=nothing);
     testRepeatsCase(c=chr, n=size, period=7, cachedDataType=uint);
+    testRepeatsCase(c=0, n=size, period=7, cachedDataType=nothing);
+    testRepeatsCase(c=0, n=size, period=7, cachedDataType=uint);
 
     testRepeatsCase(c=chr, n=size, period=13, cachedDataType=nothing);
     testRepeatsCase(c=chr, n=size, period=13, cachedDataType=uint);
+    testRepeatsCase(c=0, n=size, period=13, cachedDataType=nothing);
+    testRepeatsCase(c=0, n=size, period=13, cachedDataType=uint);
 
     testRepeatsCase(c=chr, n=size, period=21, cachedDataType=nothing);
     testRepeatsCase(c=chr, n=size, period=21, cachedDataType=uint);
+    testRepeatsCase(c=0, n=size, period=21, cachedDataType=nothing);
+    testRepeatsCase(c=0, n=size, period=21, cachedDataType=uint);
 
     testRepeatsCase(c=chr, n=size, period=133, cachedDataType=nothing);
     testRepeatsCase(c=chr, n=size, period=133, cachedDataType=uint);
+    testRepeatsCase(c=0, n=size, period=133, cachedDataType=nothing);
+    testRepeatsCase(c=0, n=size, period=133, cachedDataType=uint);
   }
 }
+
+/* Test sequences consisting of descending characters.
+   The pattern
+   max, max-1, max-2, ..., 0
+   is repeated enough times to create the input.
+
+   max must be at most 256.
+ */
+proc testDescendingCase(max: int, repeats: int, in n: int,
+                        param period, type cachedDataType) {
+  if TRACE {
+    writeln("testDescendingCase(",
+            "max=", max, ", repeats=", repeats, ", n=", n, ", ",
+            "period=", period, ", cachedDataType=", cachedDataType:string, ")");
+  }
+
+  var inputArr: [0..<n+INPUT_PADDING] uint(8);
+  var expectSA: [0..<n] int;
+  var numCycles:int;
+  var cycleLen:int;
+
+  // Use a length that is a multiple of max*repeats.
+  cycleLen = max*repeats;
+  n /= cycleLen;
+  n *= cycleLen;
+  numCycles = n / (max*repeats);
+
+  assert( n % max == 0 );
+  assert( max <= 256 );
+
+  var c = (max-1):uint(8);
+  var count = repeats-1;
+  for i in 0..<n {
+    inputArr[i] = c;
+    if count == 0 {
+      if c == 0 then c = (max-1):uint(8);
+      else c -= 1;
+      count = repeats-1;
+    } else {
+      count -= 1;
+    }
+  }
+
+  var i = 0;
+  {
+    // First, the 0# 00# 000# ...
+    while i < repeats {
+      expectSA[i] = n - i - 1;
+      i += 1;
+    }
+  }
+  {
+    // Next, the other 003's and then the 003's
+    var rep = repeats - 1;
+    while rep >= 0 {
+      var cycle = numCycles-2;
+      while cycle >= 0 {
+        expectSA[i] = cycle*cycleLen + cycleLen - rep - 1;
+        i += 1;
+        cycle -= 1;
+      }
+      rep -= 1;
+    }
+
+    // Finally, the first 1.
+    var offset = n - repeats - 1;
+    while i < n {
+      expectSA[i] = offset;
+      offset -= max*repeats;
+      if offset < 0 {
+        offset += n-1;
+      }
+      i += 1;
+    }
+  }
+
+  type offsetType = int; // always int for this test
+
+  const cfg = new ssortConfig(idxType=inputArr.idxType,
+                              characterType=inputArr.eltType,
+                              offsetType=offsetType,
+                              cachedDataType=cachedDataType,
+                              cover=new differenceCover(period));
+  const SA = ssortDcx(cfg, inputArr, n:offsetType);
+
+  if TRACE && n <= 50 {
+    writeln("Input     ", inputArr[0..<n]);
+    writeln("Expect SA ", expectSA);
+    writeln("Got SA    ", SA);
+  }
+  checkOffsets(SA, expectSA);
+}
+
+proc testDescending() {
+  const configs = [
+                   // small
+                   (2, 5, 2*5*4),
+                   (3, 3, 3*3*2),
+                   (4, 1, 4*1*2),
+                   (4, 2, 4*2*2),
+                   (4, 2, 4*2*3),
+                   (4, 3, 4*3*2),
+                   (4, 3, 4*3*3),
+                   (4, 8, 4*8*3),
+                   (4, 8, 4*8*4),
+
+                   // medium
+                   (4, 8, 4*8*1024),
+                   (20, 2, 20*2*4),
+                   (50, 5, 50*5*10),
+                   (200, 1, 200),
+                   (255, 1, 255),
+                   (255, 2, 255*2),
+                   (256, 1, 256),
+                   (256, 1, 256*1*2),
+                   (256, 2, 256*2*2),
+                   (256, 8, 256*8*2),
+  ];
+
+  for tup in configs {
+    const (max, repeats, n) = tup;
+    testDescendingCase(max, repeats, n, period=3, cachedDataType=nothing);
+    testDescendingCase(max, repeats, n, period=3, cachedDataType=uint);
+
+    testDescendingCase(max, repeats, n, period=7, cachedDataType=nothing);
+    testDescendingCase(max, repeats, n, period=7, cachedDataType=uint);
+
+    testDescendingCase(max, repeats, n, period=13, cachedDataType=nothing);
+    testDescendingCase(max, repeats, n, period=13, cachedDataType=uint);
+
+    testDescendingCase(max, repeats, n, period=21, cachedDataType=nothing);
+    testDescendingCase(max, repeats, n, period=21, cachedDataType=uint);
+
+    testDescendingCase(max, repeats, n, period=133, cachedDataType=nothing);
+    testDescendingCase(max, repeats, n, period=133, cachedDataType=uint);
+  }
+}
+
 
 proc main() {
   testMyDivCeil();
   testSeeresses();
   testOthers();
   testRepeats();
+  testDescending();
+
+  writeln("TestSuffixSort OK");
 }
 
 
