@@ -25,35 +25,51 @@ import SuffixSort.EXTRA_CHECKS;
 use Partitioning;
 
 import Sort.{defaultComparator,isSorted};
-use Math;
-use Map;
+import Random;
+import Math;
+import Map;
 
+// nSplit positive: create that many splitters
+// nSplit negative: create a sample from the Input array
 proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   writeln("testPartition(n=", n, ", nSplit=", nSplit, ", ",
-          "useEqualBuckets=", useEqualBuckets, ", nTasks=", nTasks, ")"); 
+          "useEqualBuckets=", useEqualBuckets, ", nTasks=", nTasks, ")");
 
   var Input: [0..<n] int = 0..<n by -1;
   var Output: [0..<n] int = -1;
 
-  var InputCounts:map(int, int);
+  var InputCounts:Map.map(int, int);
 
   for x in Input {
     InputCounts[x] += 1;
   }
 
-  const nSplitters = (1 << log2(nSplit)) - 1;
+  const nSplitters = (1 << Math.log2(abs(nSplit))) - 1;
   var UseSplitters:[0..<nSplitters] int;
   for i in 0..<nSplitters {
     UseSplitters[i] = 1 + i * n / nSplitters;
   }
 
-  const sp = new splitters(UseSplitters, useEqualBuckets);
+  const sp;
+  if nSplit > 0 {
+    sp = new splitters(UseSplitters, useEqualBuckets);
+  } else {
+    var randNums = new Random.randomStream(int);
+    var SplittersSampleDom = {0..<abs(10*nSplit)};
+    var SplittersSample:[SplittersSampleDom] int;
+    for (x, r) in zip(SplittersSample,
+                      randNums.next(SplittersSampleDom, 0, n-1)) {
+      x = r;
+    }
+    sp = new splitters(SplittersSample, abs(nSplit), defaultComparator, false);
+  }
+
   assert(isSorted(sp.sortedStorage));
 
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
-  const counts = 
+  const counts =
     partition(Input, Output, sp, defaultComparator, 0, n-1, nTasks);
   assert(counts.size == nBuckets);
 
@@ -98,7 +114,7 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
     }
   }
 
-  var OutputCounts:map(int, int);
+  var OutputCounts:Map.map(int, int);
   for x in Output {
     OutputCounts[x] += 1;
   }
@@ -118,6 +134,19 @@ proc main() {
   testPartition(100, 20, true, 2);
   testPartition(10000, 100, false, 8);
   testPartition(10000, 100, true, 8);
+
+  testPartition(10, -4, false, 1);
+  testPartition(10, -4, true, 1);
+  testPartition(100, -20, false, 1);
+  testPartition(100, -20, true, 1);
+
+  testPartition(10, -4, false, 2);
+  testPartition(10, -4, true, 2);
+  testPartition(100, -20, false, 2);
+  testPartition(100, -20, true, 2);
+  testPartition(10000, -100, false, 8);
+  testPartition(10000, -100, true, 8);
+
 
   writeln("TestPartitioning OK");
 }

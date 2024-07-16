@@ -25,8 +25,9 @@ module Partitioning {
 
 import SuffixSort.EXTRA_CHECKS;
 
-import Sort.{chpl_compare,sort};
-import Math.log2;
+import Reflection.canResolveMethod;
+import Sort.{sort, defaultComparator};
+import Math.{log2, divCeil};
 import CTypes.c_array;
 
 // These settings control the sample sort and classification process
@@ -57,6 +58,46 @@ proc log2int(n: int) {
   return log2(n);
 }
 
+// compare two records according to a comparator, but allow them
+// to be different types.
+private inline proc mycompare(a, b, comparator) {
+  if canResolveMethod(comparator, "key", a) &&
+     canResolveMethod(comparator, "key", b) {
+    // Use the default comparator to compare the integer keys
+    return defaultComparator.compare(comparator.key(a), comparator.key(b));
+  // Use comparator.compare(a, b) if is defined by user
+  } else if canResolveMethod(comparator, "compare", a, b) {
+    return comparator.compare(a ,b);
+  } else if canResolveMethod(comparator, "keyPart", a, 0) &&
+            canResolveMethod(comparator, "keyPart", b, 0) {
+    return myCompareByPart(a, b, comparator);
+  } else {
+    compilerError("The comparator " + comparator.type:string + " requires a 'key(a)', 'compare(a, b)', or 'keyPart(a, i)' method");
+  }
+}
+
+private inline proc myCompareByPart(a, b, comparator) {
+  var curPart = 0;
+  while true {
+    var (aSection, aPart) = comparator.keyPart(a, curPart);
+    var (bSection, bPart) = comparator.keyPart(b, curPart);
+    if aSection != 0 || bSection != 0 {
+      return aSection - bSection;
+    }
+    if aPart < bPart {
+      return -1;
+    }
+    if aPart > bPart {
+      return 1;
+    }
+
+    curPart += 1;
+  }
+
+  // This is never reached. The return below is a workaround for issue #10447.
+  return 1;
+}
+
 // Compute a tuple of settings for creating splitters from SortedSample.
 // The tuple is (start, step, nUniqueSplitters, useEqualBuckets).
 //
@@ -70,24 +111,25 @@ proc computeSplitterStartStep(ref SortedSample:[],
   var numSplittersGoal = (1 << log2int(requestedNumBuckets)) - 1;
   // look for a sampleStep that gets us close to numSplittersGoal
   var sampleStep = max(1, SortedSample.size / numSplittersGoal): idxType;
-  var nSplitters = 0;
+  var nextSplitterIndex = 0;
   var nDuplicates = 0;
   while sampleStep > 1 {
-    var arrayIndex = (sampleStep-1):idxType;
-    nSplitters = 1;
     nDuplicates = 0;
-    while arrayIndex + sampleStep < SortedSample.size {
-      arrayIndex += sampleStep;
+    // account for splitter 0 being Sample[sampleStep-1]
+    nextSplitterIndex = 1;
+    var nextArrayIndex = sampleStep-1 + sampleStep;
+    while nextArrayIndex < SortedSample.size {
       // skip duplicates
-      if chpl_compare(Sample[arrayIndex - sampleStep],
-                      Sample[arrayIndex],
-                      comparator) !=0 {
-        nSplitters += 1;
+      if mycompare(SortedSample[nextArrayIndex - sampleStep],
+                   SortedSample[nextArrayIndex],
+                   comparator) !=0 {
+        nextSplitterIndex += 1;
       } else {
         nDuplicates += 1;
       }
+      nextArrayIndex += sampleStep;
     }
-    if nSplitters >= numSplittersGoal / 2 {
+    if nextSplitterIndex >= numSplittersGoal / 2 {
       // OK, we have approximately the right number of splitters
       break;
     }
@@ -96,10 +138,10 @@ proc computeSplitterStartStep(ref SortedSample:[],
   }
 
   const useEqualBuckets = nDuplicates >= equalBucketThreshold;
-  return (sampleStep-1, sampleStep, nSplitters, useEqualBuckets);
+  return (sampleStep-1, sampleStep, nextSplitterIndex, useEqualBuckets);
 }
 
- 
+
 /*
    The splitters record helps with distribution sorting, where input elements
    are split among buckets according to how they compares with a group of
@@ -145,13 +187,13 @@ record splitters : writeSerializable {
     if !sampleIsSorted {
       sort(Sample, comparator);
     }
-    
+
     const (sampleStart, sampleStep, nUniqueSplitters, useEqualBuckets) =
       computeSplitterStartStep(Sample, requestedNumBuckets, comparator);
 
     // set the fields
     this.eltType = Sample.eltType;
-    this.logBuckets = log2(nUniqueSplitters) + 1;
+    this.logBuckets = log2int(nUniqueSplitters) + 1;
     this.myNumBuckets = 1 << logBuckets;
     this.equalBuckets = useEqualBuckets;
 
@@ -159,29 +201,31 @@ record splitters : writeSerializable {
     init this;
 
     // fill in the array values
-    var arrayIndex = sampleStart;
-    var splitterIndex = 0;
-    sortedStorage[splitterIndex] = Sample[arrayIndex];
-    while arrayIndex + sampleStep < Sample.size {
-      arrayIndex += sampleStep;
+    sortedStorage[0] = Sample[sampleStart];
+    var nextArrayIndex = sampleStart + sampleStep;
+    var nextSplitterIndex = 1;
+    while nextArrayIndex < Sample.size && nextSplitterIndex < nUniqueSplitters {
       // skip duplicates
-      if chpl_compare(Sample[arrayIndex - sampleStep],
-                      Sample[arrayIndex],
-                      comparator) !=0 {
-        splitterIndex += 1;
-        sortedStorage[splitterIndex] = Sample[arrayIndex];
+      if mycompare(Sample[nextArrayIndex - sampleStep],
+                   Sample[nextArrayIndex],
+                   comparator) !=0 {
+        sortedStorage[nextSplitterIndex] = Sample[nextArrayIndex];
+        nextSplitterIndex += 1;
       }
+      nextArrayIndex += sampleStep;
     }
-    assert(nUniqueSplitters == splitterIndex + 1);
 
     // fill in the array to the next power of two
     // note: myNumBuckets-1 is not set here, it is set in build()
-    while splitterIndex < myNumBuckets-1 {
-      splitterIndex += 1;
-      if arrayIndex + 1 < Sample.size {
-        arrayIndex += 1;
+    while nextSplitterIndex < myNumBuckets-1 {
+      if nextArrayIndex < Sample.size {
+        sortedStorage[nextSplitterIndex] = Sample[nextArrayIndex];
+        nextSplitterIndex += 1;
+      } else {
+        // duplicate the last one
+        sortedStorage[nextSplitterIndex] = sortedStorage[nextSplitterIndex-1];
+        nextSplitterIndex += 1;
       }
-      sortedStorage[splitterIndex] = Sample[arrayIndex];
     }
 
     // Build the tree in 'storage'
@@ -299,10 +343,10 @@ record splitters : writeSerializable {
   proc bucketForRecord(a, comparator) {
     var bk = 1;
     for lg in 0..<logBuckets {
-      bk = 2*bk + (chpl_compare(splitter(bk), a, comparator) < 0):int;
+      bk = 2*bk + (mycompare(splitter(bk), a, comparator) < 0):int;
     }
     if equalBuckets {
-      bk = 2*bk + (chpl_compare(a, sortedSplitter(bk-myNumBuckets), comparator) == 0):int;
+      bk = 2*bk + (mycompare(a, sortedSplitter(bk-myNumBuckets), comparator) == 0):int;
     }
     return bk - (if equalBuckets then 2*myNumBuckets else myNumBuckets);
   }
@@ -326,14 +370,15 @@ record splitters : writeSerializable {
       for /*param*/ lg in 0..paramLogBuckets-1 {
         for /*param*/ i in 0..classifyUnrollFactor-1 {
           b[i] = 2*b[i] +
-                 (chpl_compare(splitter(b[i]), elts[i],comparator)<0):int;
+                 (mycompare(splitter(b[i]), elts[i],comparator)<0):int;
         }
       }
       if paramEqualBuckets {
         for /*param*/ i in 0..classifyUnrollFactor-1 {
           b[i] = 2*b[i] +
-                 (chpl_compare(elts[i],
-                         sortedSplitter(b[i] - paramNumBuckets/2),comparator)==0):int;
+                 (mycompare(elts[i],
+                            sortedSplitter(b[i] - paramNumBuckets/2),
+                            comparator)==0):int;
         }
       }
       for /*param*/ i in 0..classifyUnrollFactor-1 {
@@ -346,11 +391,12 @@ record splitters : writeSerializable {
       elts[0] = Input[cur];
       var bk = 1;
       for lg in 0..<paramLogBuckets {
-        bk = 2*bk + (chpl_compare(splitter(bk), elts[0], comparator)<0):int;
+        bk = 2*bk + (mycompare(splitter(bk), elts[0], comparator)<0):int;
       }
       if paramEqualBuckets {
-        bk = 2*bk + (chpl_compare(elts[0],
-                             sortedSplitter(bk - paramNumBuckets/2),comparator)==0):int;
+        bk = 2*bk + (mycompare(elts[0],
+                               sortedSplitter(bk - paramNumBuckets/2),
+                               comparator)==0):int;
       }
       yield (elts[0], bk - paramNumBuckets);
       cur += 1;
@@ -475,7 +521,7 @@ proc partition(const Input, ref Output, split:splitters(?), comparator,
                          then start+globalEnds[globalBin-1]
                          else start;
     }
- 
+
     for (elt,bin) in split.classify(Input, taskStart, taskEnd, comparator) {
       // Store it in the right bin
       ref next = nextOffsets[bin];
