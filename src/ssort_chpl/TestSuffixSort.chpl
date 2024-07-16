@@ -27,6 +27,7 @@ use IO;
 use Sort;
 
 import SuffixSort.TRACE;
+import SuffixSort.INPUT_PADDING;
 
 private proc bytesToArray(s: bytes) {
   const nWithPadding = s.size+INPUT_PADDING;
