@@ -102,13 +102,13 @@ private inline proc myCompareByPart(a, b, comparator) {
 // Returns an array of splitters that is of size 2**n,
 // where only the first 2**n-1 elements are used.
 // Assumes that SortedSample is 0-based and non-strided.
-private proc computeSplitters(const SortedSample:[],
+private proc computeSplitters(const SortedSample,
                               in requestedNumBuckets: int,
                               comparator,
                               out useEqualBuckets: bool) {
   if requestedNumBuckets > SortedSample.size then
     requestedNumBuckets = SortedSample.size;
-  var myNumBuckets = 1 << log2int(requestedNumBuckets);
+  var myNumBuckets = max(2, 1 << log2int(requestedNumBuckets));
   var numSplitters = myNumBuckets-1;
   const perSplitter = SortedSample.size:real / (numSplitters+1):real;
   var SortedSplitters:[0..<myNumBuckets] SortedSample.eltType;
@@ -137,12 +137,13 @@ private proc computeSplitters(const SortedSample:[],
   // if there were duplicates, reduce the number of splitters accordingly,
   // activate equality buckets, and return a de-duplicated array.
   const nUnique = numSplitters - nDuplicates;
-  myNumBuckets = 1 << log2int(nUnique);
+  myNumBuckets = max(2, 1 << log2int(nUnique));
   numSplitters = myNumBuckets-1;
   var UniqueSplitters:[0..<myNumBuckets] SortedSample.eltType;
   UniqueSplitters[0] = SortedSplitters[0];
   var next = 1;
   for i in 1..<SortedSplitters.size {
+    if next >= numSplitters then break;
     if mycompare(UniqueSplitters[next-1], SortedSplitters[i], comparator) != 0 {
       UniqueSplitters[next] = SortedSplitters[i];
       next += 1;
@@ -180,14 +181,17 @@ record splitters : writeSerializable {
   // filled from 0..myNumBuckets-2; myNumBuckets-1 is a duplicate of previous
   var sortedStorage: [0..<myNumBuckets] eltType;
 
-  // create splitters based on some precomputed, already sorted splitters
+  // Create splitters based on some precomputed, already sorted splitters
   // useSplitters needs to be of size 2**n and the last element will
   // not be used.
+  // Assumes that UseSplitters starts at 0 and is not strided.
   proc init(in UseSplitters: [], useEqualBuckets: bool) {
+    assert(UseSplitters.size >= 2);
     this.eltType = UseSplitters.eltType;
-    this.logBuckets = log2int(UseSplitters.size+1);
+    this.logBuckets = log2int(UseSplitters.size);
     this.myNumBuckets = 1 << logBuckets;
     assert(this.myNumBuckets == UseSplitters.size);
+    assert(this.myNumBuckets >= 2);
     this.equalBuckets = useEqualBuckets;
     this.sortedStorage = UseSplitters;
     init this;
@@ -196,8 +200,9 @@ record splitters : writeSerializable {
     this.build();
   }
 
-  // create splitters based upon a sample of data
-  proc init(const Sample:[],
+  // create splitters based upon a sample of data.
+  // Sample is an array or something like it.
+  proc init(const Sample,
             requestedNumBuckets: int,
             comparator,
             param sampleIsSorted: bool) where sampleIsSorted==true {

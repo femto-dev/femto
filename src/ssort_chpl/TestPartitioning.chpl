@@ -76,10 +76,14 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
 
   const ends = + scan counts;
 
+  var total = 0;
+
   for bin in 0..<nBuckets {
     const binSize = counts[bin];
     const binStart = ends[bin] - binSize;
     const binEnd = binStart + binSize - 1;
+
+    total += binSize;
 
     if bin == 0 {
       assert(binStart == 0);
@@ -121,6 +125,8 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   }
 
   assert(InputCounts == OutputCounts);
+
+  assert(total == n);
 }
 
 proc testPartitionsEven(n: int, nSplit: int) {
@@ -144,15 +150,50 @@ proc testPartitionsEven(n: int, nSplit: int) {
   for bin in 0..<nBuckets {
     const binSize = counts[bin];
 
-    if TRACE {
-      writeln("bucket ", bin, " has ", binSize, " elements");
+    if TRACE && nBuckets < 100 {
+      writeln("  bucket ", bin, " has ", binSize, " elements");
     }
 
     minSize = min(minSize, binSize);
     maxSize = max(maxSize, binSize);
   }
 
-  assert(minSize + 1 <= maxSize);
+  if TRACE {
+    writeln("  minSize ", minSize);
+    writeln("  maxSize ", maxSize);
+  }
+
+
+  assert(minSize + 2 >= maxSize);
+}
+
+proc testPartitionSingleSplitter(n: int) {
+  writeln("testPartitionSingleSplitter(n=", n, ")");
+
+  var Input: [0..<n] int = 0..<n by -1;
+  var Output: [0..<n] int = -1;
+
+  var Sample = [n/2, n/2, n/2, n/2, n/2, n/2];
+  const sp = new splitters(Sample, 100, defaultComparator, false);
+  assert(isSorted(sp.sortedStorage));
+
+  const nBuckets = sp.numBuckets;
+  assert(sp.hasEqualityBuckets);
+  assert(nBuckets == 3); // < == and > buckets
+
+  const counts = partition(Input, Output, sp, defaultComparator, 0, n-1, 1);
+  assert(counts.size == nBuckets);
+
+  var total = 0;
+  var minSize = max(int);
+  var maxSize = -1;
+  for bin in 0..<nBuckets {
+    const binSize = counts[bin];
+
+    total += binSize;
+  }
+
+  assert(total == n);
 }
 
 
@@ -182,6 +223,9 @@ proc main() {
   testPartitionsEven(1000, 100);
   testPartitionsEven(10000, 80);
   testPartitionsEven(10000, 9876);
+
+  // test that creating a single splitter works OK
+  testPartitionSingleSplitter(10);
 
   writeln("TestPartitioning OK");
 }
