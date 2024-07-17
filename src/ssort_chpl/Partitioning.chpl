@@ -187,6 +187,9 @@ record splitters : writeSerializable {
   // Assumes that UseSplitters starts at 0 and is not strided.
   proc init(in UseSplitters: [], useEqualBuckets: bool) {
     assert(UseSplitters.size >= 2);
+    if EXTRA_CHECKS {
+      assert(isSorted(UseSplitters[0..UseSplitters.size-2]));
+    }
     this.eltType = UseSplitters.eltType;
     this.logBuckets = log2int(UseSplitters.size);
     this.myNumBuckets = 1 << logBuckets;
