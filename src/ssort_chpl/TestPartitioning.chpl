@@ -21,6 +21,7 @@ module TestPartitioning {
 
 
 import SuffixSort.EXTRA_CHECKS;
+import SuffixSort.TRACE;
 
 use Partitioning;
 
@@ -45,7 +46,7 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   }
 
   const nSplitters = (1 << Math.log2(abs(nSplit))) - 1;
-  var UseSplitters:[0..<nSplitters] int;
+  var UseSplitters:[0..<nSplitters+1] int;
   for i in 0..<nSplitters {
     UseSplitters[i] = 1 + i * n / nSplitters;
   }
@@ -122,6 +123,39 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   assert(InputCounts == OutputCounts);
 }
 
+proc testPartitionsEven(n: int, nSplit: int) {
+  writeln("testPartitionsEven(n=", n, ", nSplit=", nSplit, ")");
+
+  var Input: [0..<n] int = 0..<n by -1;
+  var Output: [0..<n] int = -1;
+
+  var Sample = Input;
+  const sp = new splitters(Sample, nSplit, defaultComparator, false);
+  assert(isSorted(sp.sortedStorage));
+
+  const nBuckets = sp.numBuckets;
+  const hasEqualityBuckets = sp.hasEqualityBuckets;
+
+  const counts = partition(Input, Output, sp, defaultComparator, 0, n-1, 1);
+  assert(counts.size == nBuckets);
+
+  var minSize = max(int);
+  var maxSize = -1;
+  for bin in 0..<nBuckets {
+    const binSize = counts[bin];
+
+    if TRACE {
+      writeln("bucket ", bin, " has ", binSize, " elements");
+    }
+
+    minSize = min(minSize, binSize);
+    maxSize = max(maxSize, binSize);
+  }
+
+  assert(minSize + 1 <= maxSize);
+}
+
+
 proc main() {
   testPartition(10, 4, false, 1);
   testPartition(10, 4, true, 1);
@@ -135,18 +169,19 @@ proc main() {
   testPartition(10000, 100, false, 8);
   testPartition(10000, 100, true, 8);
 
+  // test with random samples
   testPartition(10, -4, false, 1);
-  testPartition(10, -4, true, 1);
   testPartition(100, -20, false, 1);
-  testPartition(100, -20, true, 1);
-
   testPartition(10, -4, false, 2);
-  testPartition(10, -4, true, 2);
   testPartition(100, -20, false, 2);
-  testPartition(100, -20, true, 2);
   testPartition(10000, -100, false, 8);
-  testPartition(10000, -100, true, 8);
 
+  // test partitions are even with a perfect sample
+  testPartitionsEven(10, 4);
+  testPartitionsEven(1000, 20);
+  testPartitionsEven(1000, 100);
+  testPartitionsEven(10000, 80);
+  testPartitionsEven(10000, 9876);
 
   writeln("TestPartitioning OK");
 }

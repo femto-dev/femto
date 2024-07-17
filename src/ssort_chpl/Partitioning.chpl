@@ -98,49 +98,67 @@ private inline proc myCompareByPart(a, b, comparator) {
   return 1;
 }
 
-// Compute a tuple of settings for creating splitters from SortedSample.
-// The tuple is (start, step, nUniqueSplitters, useEqualBuckets).
-//
-// The splitters will be created from SortedSample[start.. by step].
+// Compute splitters from a sorted sample.
+// Returns an array of splitters that is of size 2**n,
+// where only the first 2**n-1 elements are used.
 // Assumes that SortedSample is 0-based and non-strided.
-proc computeSplitterStartStep(ref SortedSample:[],
-                              requestedNumBuckets: int,
-                              comparator) {
-  type idxType = SortedSample.idxType;
+private proc computeSplitters(const SortedSample:[],
+                              in requestedNumBuckets: int,
+                              comparator,
+                              out useEqualBuckets: bool) {
+  if requestedNumBuckets > SortedSample.size then
+    requestedNumBuckets = SortedSample.size;
+  var myNumBuckets = 1 << log2int(requestedNumBuckets);
+  var numSplitters = myNumBuckets-1;
+  const perSplitter = SortedSample.size:real / (numSplitters+1):real;
+  var SortedSplitters:[0..<myNumBuckets] SortedSample.eltType;
 
-  var numSplittersGoal = (1 << log2int(requestedNumBuckets)) - 1;
-  // look for a sampleStep that gets us close to numSplittersGoal
-  var sampleStep = max(1, SortedSample.size / numSplittersGoal): idxType;
-  var nextSplitterIndex = 0;
-  var nDuplicates = 0;
-  while sampleStep > 1 {
-    nDuplicates = 0;
-    // account for splitter 0 being Sample[sampleStep-1]
-    nextSplitterIndex = 1;
-    var nextArrayIndex = sampleStep-1 + sampleStep;
-    while nextArrayIndex < SortedSample.size {
-      // skip duplicates
-      if mycompare(SortedSample[nextArrayIndex - sampleStep],
-                   SortedSample[nextArrayIndex],
-                   comparator) !=0 {
-        nextSplitterIndex += 1;
-      } else {
-        nDuplicates += 1;
-      }
-      nextArrayIndex += sampleStep;
-    }
-    if nextSplitterIndex >= numSplittersGoal / 2 {
-      // OK, we have approximately the right number of splitters
-      break;
-    }
-    // otherwise, try again with half the sample step
-    sampleStep = max(1, sampleStep/2);
+  var start = perSplitter:int;
+  for i in 0..<numSplitters {
+    var sampleIdx = start + (i*perSplitter):int;
+    if sampleIdx >= SortedSample.size then sampleIdx = SortedSample.size-1;
+    SortedSplitters[i] = SortedSample[sampleIdx];
   }
 
-  const useEqualBuckets = nDuplicates >= equalBucketThreshold;
-  return (sampleStep-1, sampleStep, nextSplitterIndex, useEqualBuckets);
-}
+  // check for duplicates.
+  var nDuplicates = 0;
+  for i in 1..<numSplitters {
+    if mycompare(SortedSplitters[i-1], SortedSplitters[i], comparator) == 0 {
+      nDuplicates += 1;
+    }
+  }
 
+  // if there are no duplicates, proceed with what we have
+  if nDuplicates == 0 {
+    useEqualBuckets = false;
+    return SortedSplitters;
+  }
+
+  // if there were duplicates, reduce the number of splitters accordingly,
+  // activate equality buckets, and return a de-duplicated array.
+  const nUnique = numSplitters - nDuplicates;
+  myNumBuckets = 1 << log2int(nUnique);
+  numSplitters = myNumBuckets-1;
+  var UniqueSplitters:[0..<myNumBuckets] SortedSample.eltType;
+  UniqueSplitters[0] = SortedSplitters[0];
+  var next = 1;
+  for i in 1..<SortedSplitters.size {
+    if mycompare(UniqueSplitters[next-1], SortedSplitters[i], comparator) != 0 {
+      UniqueSplitters[next] = SortedSplitters[i];
+      next += 1;
+    }
+  }
+
+  // repeat the last splitter to get to the power of 2
+  // note: myNumBuckets-1 is not set here, it is set in build()
+  while next < numSplitters {
+    UniqueSplitters[next] = UniqueSplitters[next-1];
+    next += 1;
+  }
+
+  useEqualBuckets = true;
+  return UniqueSplitters;
+}
 
 /*
    The splitters record helps with distribution sorting, where input elements
@@ -162,74 +180,48 @@ record splitters : writeSerializable {
   // filled from 0..myNumBuckets-2; myNumBuckets-1 is a duplicate of previous
   var sortedStorage: [0..<myNumBuckets] eltType;
 
-  // this version is used in testing
-  // useSplitters needs to be of size 2**n-1
+  // create splitters based on some precomputed, already sorted splitters
+  // useSplitters needs to be of size 2**n and the last element will
+  // not be used.
   proc init(in UseSplitters: [], useEqualBuckets: bool) {
     this.eltType = UseSplitters.eltType;
     this.logBuckets = log2int(UseSplitters.size+1);
     this.myNumBuckets = 1 << logBuckets;
+    assert(this.myNumBuckets == UseSplitters.size);
     this.equalBuckets = useEqualBuckets;
-
+    this.sortedStorage = UseSplitters;
     init this;
 
-    assert(myNumBuckets-1 == UseSplitters.size);
-    sortedStorage[0..<myNumBuckets-1] = UseSplitters;
     // Build the tree in 'storage'
     this.build();
   }
 
-  // this is the main practical initializer
+  // create splitters based upon a sample of data
+  proc init(const Sample:[],
+            requestedNumBuckets: int,
+            comparator,
+            param sampleIsSorted: bool) where sampleIsSorted==true {
+    var useEqualBuckets = false;
+    const Splitters = computeSplitters(Sample, requestedNumBuckets,
+                                       comparator, /*out*/ useEqualBuckets);
+
+    this.init(Splitters, useEqualBuckets);
+  }
+
   proc init(ref Sample:[],
             requestedNumBuckets: int,
             comparator,
-            sampleIsSorted: bool) {
+            param sampleIsSorted: bool) where sampleIsSorted==false {
     // sort the sample if necessary
     if !sampleIsSorted {
       sort(Sample, comparator);
     }
 
-    const (sampleStart, sampleStep, nUniqueSplitters, useEqualBuckets) =
-      computeSplitterStartStep(Sample, requestedNumBuckets, comparator);
+    var useEqualBuckets = false;
+    const Splitters = computeSplitters(Sample, requestedNumBuckets,
+                                       comparator, /*out*/ useEqualBuckets);
 
-    // set the fields
-    this.eltType = Sample.eltType;
-    this.logBuckets = log2int(nUniqueSplitters) + 1;
-    this.myNumBuckets = 1 << logBuckets;
-    this.equalBuckets = useEqualBuckets;
-
-    // finish initializing the arrays
-    init this;
-
-    // fill in the array values
-    sortedStorage[0] = Sample[sampleStart];
-    var nextArrayIndex = sampleStart + sampleStep;
-    var nextSplitterIndex = 1;
-    while nextArrayIndex < Sample.size && nextSplitterIndex < nUniqueSplitters {
-      // skip duplicates
-      if mycompare(Sample[nextArrayIndex - sampleStep],
-                   Sample[nextArrayIndex],
-                   comparator) !=0 {
-        sortedStorage[nextSplitterIndex] = Sample[nextArrayIndex];
-        nextSplitterIndex += 1;
-      }
-      nextArrayIndex += sampleStep;
-    }
-
-    // fill in the array to the next power of two
-    // note: myNumBuckets-1 is not set here, it is set in build()
-    while nextSplitterIndex < myNumBuckets-1 {
-      if nextArrayIndex < Sample.size {
-        sortedStorage[nextSplitterIndex] = Sample[nextArrayIndex];
-        nextSplitterIndex += 1;
-      } else {
-        // duplicate the last one
-        sortedStorage[nextSplitterIndex] = sortedStorage[nextSplitterIndex-1];
-        nextSplitterIndex += 1;
-      }
-    }
-
-    // Build the tree in 'storage'
-    this.build();
+    this.init(Splitters, useEqualBuckets);
   }
 
   proc serialize(writer, ref serializer) throws {
