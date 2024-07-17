@@ -130,6 +130,10 @@ private proc computeSplitters(const SortedSample,
 
   // if there are no duplicates, proceed with what we have
   if nDuplicates == 0 {
+    if EXTRA_CHECKS {
+      assert(isSorted(SortedSplitters[0..<numSplitters], comparator));
+    }
+
     useEqualBuckets = false;
     return SortedSplitters;
   }
@@ -155,6 +159,10 @@ private proc computeSplitters(const SortedSample,
   while next < numSplitters {
     UniqueSplitters[next] = UniqueSplitters[next-1];
     next += 1;
+  }
+
+  if EXTRA_CHECKS {
+    assert(isSorted(SortedSplitters[0..<numSplitters], comparator));
   }
 
   useEqualBuckets = true;
@@ -187,9 +195,6 @@ record splitters : writeSerializable {
   // Assumes that UseSplitters starts at 0 and is not strided.
   proc init(in UseSplitters: [], useEqualBuckets: bool) {
     assert(UseSplitters.size >= 2);
-    if EXTRA_CHECKS {
-      assert(isSorted(UseSplitters[0..UseSplitters.size-2]));
-    }
     this.eltType = UseSplitters.eltType;
     this.logBuckets = log2int(UseSplitters.size);
     this.myNumBuckets = 1 << logBuckets;
@@ -376,8 +381,8 @@ record splitters : writeSerializable {
       if paramEqualBuckets {
         for /*param*/ i in 0..classifyUnrollFactor-1 {
           b[i] = 2*b[i] +
-                 (mycompare(elts[i],
-                            sortedSplitter(b[i] - paramNumBuckets/2),
+                 (mycompare(sortedSplitter(b[i] - paramNumBuckets/2),
+                            elts[i],
                             comparator)==0):int;
         }
       }
@@ -394,8 +399,8 @@ record splitters : writeSerializable {
         bk = 2*bk + (mycompare(splitter(bk), elts[0], comparator)<0):int;
       }
       if paramEqualBuckets {
-        bk = 2*bk + (mycompare(elts[0],
-                               sortedSplitter(bk - paramNumBuckets/2),
+        bk = 2*bk + (mycompare(sortedSplitter(bk - paramNumBuckets/2),
+                               elts[0],
                                comparator)==0):int;
       }
       yield (elts[0], bk - paramNumBuckets);
@@ -462,6 +467,11 @@ class PerTaskState {
 proc partition(const Input, ref Output, split:splitters(?), comparator,
                start: int, end: int,
                nTasks: int = computeNumTasks()) {
+
+  // check that the splitters are sorted according to comparator
+  if EXTRA_CHECKS {
+    assert(isSorted(split.sortedStorage[0..<split.myNumBuckets-1], comparator));
+  }
 
   const nBuckets = split.numBuckets;
   const n = end - start + 1;
