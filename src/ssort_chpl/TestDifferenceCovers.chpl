@@ -61,13 +61,35 @@ proc testCover(param period) {
   }
 
   // check findInCover
-  for i in 0..<period {
+  var maxSampleRanksPassed = -1;
+  forall i in 0..<period with (max reduce maxSampleRanksPassed) {
     for j in 0..<period {
       const k = dc.findInCover(i, j);
       assert(0 <= k && k < period);
       assert(dc.containedInCover((i + k) % period));
       assert(dc.containedInCover((j + k) % period));
+
+      if TRACE && period < 1000 {
+        // k is a distance that is less than the cover period.
+        // what is the maximum distance in terms of sample ranks passed?
+        var idist, jdist = -1;
+        for ii in i..i+k {
+          if dc.containedInCover(ii % period) {
+            idist += 1;
+          }
+        }
+        for jj in j..j+k {
+          if dc.containedInCover(jj % period) {
+            jdist += 1;
+          }
+        }
+        maxSampleRanksPassed = max(maxSampleRanksPassed, idist, jdist);
+      }
     }
+  }
+
+  if TRACE && maxSampleRanksPassed != -1 {
+    writeln("  maximum sample ranks passed ", maxSampleRanksPassed);
   }
 }
 
