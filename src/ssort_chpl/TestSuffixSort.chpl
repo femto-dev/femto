@@ -269,7 +269,7 @@ private proc testSeeresses() {
 proc testOtherCase(input: string, expectSA: [] int,
                    param period, type cachedDataType) {
   if TRACE {
-    writeln("testOtherCase(input=", input, ", period=", period, ", ",
+    writeln("testOtherCase(input='", input, "', period=", period, ", ",
                              "cachedDataType=", cachedDataType:string, ")");
   }
 
@@ -301,6 +301,29 @@ proc testOther(input: string, expectSA: [] int) {
 }
 
 proc testOthers() {
+  /*
+   abracadabra with DC3
+
+             1
+   01234567890
+   abracadabra
+   xx xx xx xx -- sample suffixes
+
+   sort sample by first 3 characters
+
+   suffix       offset  rank
+   a            10      1
+   abr a        7       2     |   these twocould be in either order
+   abr acadabra 0       2     |
+   aca dabra    3       3
+   bra cadabra  1       4
+   cad abra     4       5
+   dab ra       6       6
+   ra           9       7
+
+   Input for the recursive subproblem
+   2 3 6 7 0 4 5 2 1
+  */
   testOther("abracadabra", [10,7,0,3,5,8,1,4,6,9,2]);
   testOther("mississippi", [10,7,4,1,0,9,8,6,3,5,2]);
   testOther("aaaacaaaacaaaab", [10,5,0,11,6,1,12,7,2,13,8,3,14,9,4]);
