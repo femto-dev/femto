@@ -243,7 +243,7 @@ private proc testPrefixComparisons(type cachedDataType) {
   assert(charactersInCommon(cfg, prefixAAp, prefixAA3p) >= cover.period);
 }
 
-proc testRankComparisons() {
+proc testRankComparisons3() {
   const cover = new differenceCover(3);
   const cfg = new ssortConfig(idxType=int,
                               characterType=uint(8),
@@ -323,40 +323,158 @@ proc testRankComparisons() {
   const o19= makeOffsetAndCached(cfg.offsetType,cfg.cachedDataType,19, Text, n);
 
   // test self-compares
-  assert(compareSampleRanks(o1, o1, Ranks, charsPerMod, cover) == 0);
-  assert(compareSampleRanks(o3, o3, Ranks, charsPerMod, cover) == 0);
-  assert(compareSampleRanks(o5, o5, Ranks, charsPerMod, cover) == 0);
-  assert(compareSampleRanks(o19, o19, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(o1, o1, n, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(o3, o3, n, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(o5, o5, n, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(o19, o19, n, Ranks, charsPerMod, cover) == 0);
 
-  assert(compareSampleRanks(p1, o1, Ranks, charsPerMod, cover) == 0);
-  assert(compareSampleRanks(p3, o3, Ranks, charsPerMod, cover) == 0);
-  assert(compareSampleRanks(p19, o19, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(p1, o1, n, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(p3, o3, n, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(p19, o19, n, Ranks, charsPerMod, cover) == 0);
 
   // test 1 vs 3 : 1 has rank 13 and 3 has rank 10
-  assert(compareSampleRanks(o1, o3, Ranks, charsPerMod, cover) > 0);
-  assert(compareSampleRanks(p1, o3, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(o1, o3, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(p1, o3, n, Ranks, charsPerMod, cover) > 0);
 
-  assert(compareSampleRanks(o3, o1, Ranks, charsPerMod, cover) < 0);
-  assert(compareSampleRanks(p3, o1, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(o3, o1, n, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(p3, o1, n, Ranks, charsPerMod, cover) < 0);
 
   // test 3 vs 5 : use k=1, 3->4 has rank 9 ; 5->6 has rank 6
-  assert(compareSampleRanks(o3, o5, Ranks, charsPerMod, cover) > 0);
-  assert(compareSampleRanks(p3, o5, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(o3, o5, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(p3, o5, n, Ranks, charsPerMod, cover) > 0);
 
-  assert(compareSampleRanks(o5, o3, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(o5, o3, n, Ranks, charsPerMod, cover) < 0);
 
   // test 5 vs 19 : use k=2, 5->7 has rank 5 ; 19->21 has rank 0
-  assert(compareSampleRanks(o5, o19, Ranks, charsPerMod, cover) > 0);
+  // BUT 19 is beyond the end of the string, so 5 > 19
+  assert(compareSampleRanks(o5, o19, n, Ranks, charsPerMod, cover) > 0);
 
-  assert(compareSampleRanks(o19, o5, Ranks, charsPerMod, cover) < 0);
-  assert(compareSampleRanks(p19, o5, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(o19, o5, n, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(p19, o5, n, Ranks, charsPerMod, cover) < 0);
+}
+
+proc testRankComparisons21() {
+  const cover = new differenceCover(21); // 0 1 6 8 18
+  const cfg = new ssortConfig(idxType=int,
+                              characterType=uint(8),
+                              offsetType=int,
+                              cachedDataType=nothing,
+                              cover=cover);
+
+  type offsetType = cfg.offsetType;
+  type cachedDataType = cfg.cachedDataType;
+
+  // create the mapping to the recursive problem
+  const n = 24;
+  const charsPerMod = 3;
+  const nSample = charsPerMod*cover.sampleSize;
+  var Text:[0..<n+INPUT_PADDING] uint(8);
+  var Ranks:[0..<nSample] int; // this is sample offset to rank
+  var Offsets:[0..<nSample] int; // sample offset to regular offset
+
+  Ranks    = [15,  9,  5, 14, 10,  4, 13,  7,  2, 11,  8,  3, 12,  6,  1];
+  Offsets  = [ 0, 21, 42,  1, 22, 43,  6, 27, 48,  8, 29, 50, 18, 39, 60];
+  // sample    0   1   2   3   4   5   6   7   8   9  10  11  12  13  14
+  //  offsets
+
+  // check offsetToSubproblemOffset and subproblemOffsetToOffset
+  for i in 0..<nSample {
+    assert(Offsets[i] == subproblemOffsetToOffset(i, cover, charsPerMod));
+    assert(i == offsetToSubproblemOffset(Offsets[i], cover, charsPerMod));
+  }
+
+  // check self-compares
+  for i in 0..<n {
+    const o = makeOffsetAndCached(offsetType,cachedDataType, i, Text,n);
+    assert(compareSampleRanks(o, o, n, Ranks, charsPerMod, cover) == 0);
+    if cover.containedInCover(i % cover.period) {
+      const sampleOffset = offsetToSubproblemOffset(i, cover, charsPerMod);
+      const p = makePrefixAndSampleRanks(offset=i, Text, n,
+                                         sampleOffset=sampleOffset,
+                                         Ranks, nSample,
+                                         charsPerMod=charsPerMod,
+                                         cover, uint);
+      assert(compareSampleRanks(p, o, n, Ranks, charsPerMod, cover) == 0);
+    }
+  }
+
+  const o4  = makeOffsetAndCached(offsetType, cachedDataType, 4, Text, n);
+  const o20 = makeOffsetAndCached(offsetType, cachedDataType, 20, Text, n);
+  const o21 = makeOffsetAndCached(offsetType, cachedDataType, 21, Text, n);
+  const p21 = makePrefixAndSampleRanks(offset=21, Text, n,
+                                       sampleOffset=1,
+                                       Ranks, nSample, charsPerMod=charsPerMod,
+                                       cover, uint);
+  const o22 = makeOffsetAndCached(offsetType, cachedDataType, 22, Text, n);
+  const p22 = makePrefixAndSampleRanks(offset=22, Text, n,
+                                       sampleOffset=5,
+                                       Ranks, nSample, charsPerMod=charsPerMod,
+                                       cover, uint);
+  const o23 = makeOffsetAndCached(offsetType, cachedDataType, 23, Text, n);
+
+  // check p21 and p22 are ok
+  assert(p21.ranks[0] ==  9); // 21+0  = 21
+  assert(p21.ranks[1] == 10); // 21+1  = 22
+  assert(p21.ranks[2] ==  7); // 21+6  = 27
+  assert(p21.ranks[3] ==  8); // 21+8  = 29
+  assert(p21.ranks[4] ==  6); // 21+18 = 39
+
+  assert(p22.ranks[0] == 10); // 22-1+1  = 22
+  assert(p22.ranks[1] ==  7); // 22-1+6  = 27
+  assert(p22.ranks[2] ==  8); // 22-1+8  = 29
+  assert(p22.ranks[3] ==  6); // 22-1+18 = 39
+  assert(p22.ranks[4] ==  5); // 22-1+21 = 42
+
+  // try some comparisons
+
+  // 4 vs 20 k=2 4->6 has rank 13 ; 20->22 has rank 10
+  assert(compareSampleRanks(o4, o20, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(o20, o4, n, Ranks, charsPerMod, cover) < 0);
+
+  // 20 vs 21 k=1  20->21 has rank 9 ; 21->22 has rank 10
+  assert(compareSampleRanks(o20, o21, n, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(o21, o20, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(p21, o20, n, Ranks, charsPerMod, cover) > 0);
+
+  // 21 vs 22 k=0  21 has rank 9 ; 22 has rank 10
+  assert(compareSampleRanks(o21, o22, n, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(p21, o22, n, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(o22, o21, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(p22, o21, n, Ranks, charsPerMod, cover) > 0);
+
+  // 22 vs 23 k=20  42 has rank 5 ; 43 has rank 4
+  // BUT n=24 so both are beyond the end of the string, so 42 > 43
+  assert(compareSampleRanks(o22, o23, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(p22, o23, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(o23, o22, n, Ranks, charsPerMod, cover) < 0);
+
+  // 21 vs 23 k=6  27 has rank 7 ; 29 has rank 8
+  // BUT n=24, so both of these are beyond the string, so 27 > 29
+  assert(compareSampleRanks(o21, o23, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(p21, o23, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(o23, o21, n, Ranks, charsPerMod, cover) < 0);
+
+  // 4 vs 21 k=18  22 has rank 10 ; 39 has rank 6
+  // BUT n=24, so 39 is beyond the end of the string, so 22 > 39
+  assert(compareSampleRanks(o4, o21, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(o21, o4, n, Ranks, charsPerMod, cover) < 0);
+
+  // 4 vs 22 k=17  21 has rank 9 ; 39 has rank 6
+  // BUT n=24, so 39 is beyond the end of the string, so 21 > 39
+  assert(compareSampleRanks(o4, o22, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(o22, o4, n, Ranks, charsPerMod, cover) < 0);
+
+  // 4 vs 23 k=4  8 has rank 11 ; 27 has rank 7
+  assert(compareSampleRanks(o4, o23, n, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(o23, o4, n, Ranks, charsPerMod, cover) < 0);
 }
 
 private proc testComparisons() {
   testPrefixComparisons(nothing);
   testPrefixComparisons(uint);
 
-  testRankComparisons();
+  testRankComparisons3();
+  testRankComparisons21();
 }
 
 
@@ -781,16 +899,12 @@ proc testDescending() {
 
 
 proc main() {
-  testRepeats();
-
-  /*
   testMyDivCeil();
   testComparisons();
   testSeeresses();
   testOthers();
   testRepeats();
   testDescending();
-  */
 
   writeln("TestSuffixSort OK");
 }

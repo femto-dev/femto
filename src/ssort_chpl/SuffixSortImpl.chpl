@@ -908,11 +908,46 @@ proc subproblemOffsetToOffset(subOffset: integral, cover, charsPerMod: integral)
 }
 
 /*
+   This function helps with compareSampleRanks when considering offsets
+   after the end of the string, which can come up in the difference
+   cover computation. We imagine that after the end of the string
+   there are 0s and then a terminator. The suffix array ordering for
+   these will be to sort whatever offset is closest to the terminator
+   first; that is, to sort the offsets in reverse order.
+ */
+proc compareEndOfString(a: integral, b: integral, n: integral) {
+  if a == b {
+    return 0;
+  }
+
+  if a >= n && b >= n {
+    // if they are both past the end of the string, sort
+    // them in reverse offset order
+    if a > b {
+      return -1; // a sorts before b
+    } else if a < b {
+      return 1;
+    }
+    // a == b handled above
+  }
+
+  if a >= n { // && b < n, or would have returned above
+    return -1; // a sorts before b, a is at end of string and b is not
+  }
+
+  if b >= n { // && a < n, or would have returned above
+    return 1; // b sorts before a, b is at the end of the string and a is not
+  }
+
+  return 0; // a < n && b < n, so nothing to say here about the ordering
+}
+
+/*
   Assuming the prefix at two offsets matches, compare the offsets
   using the sample rank from the recursive subproblem.
  */
 proc compareSampleRanks(a: offsetAndCached(?), b: offsetAndCached(?),
-                        const SampleRanks, charsPerMod, cover) {
+                        n: integral, const SampleRanks, charsPerMod, cover) {
   // find k such that a.offset+k and b.offset+k are both in the cover
   // (i.e. both are in the sample solved in the recursive problem)
   const k = cover.findInCover(a.offset % cover.period,
@@ -925,12 +960,9 @@ proc compareSampleRanks(a: offsetAndCached(?), b: offsetAndCached(?),
   var rankA = SampleRanks[aSampleOffset];
   var rankB = SampleRanks[bSampleOffset];
 
-  // Adjust for positions near the end of the string
-  if a.offset + k >= charsPerMod * cover.period {
-    rankA = 0;
-  }
-  if b.offset + k >= charsPerMod * cover.period {
-    rankB = 0;
+  const cmp = compareEndOfString(a.offset + k, b.offset + k, n);
+  if cmp != 0 {
+    return cmp;
   }
 
   if rankA < rankB {
@@ -942,7 +974,7 @@ proc compareSampleRanks(a: offsetAndCached(?), b: offsetAndCached(?),
   return 0;
 }
 proc compareSampleRanks(a: prefixAndSampleRanks(?), b: offsetAndCached(?),
-                        const SampleRanks, charsPerMod, cover) {
+                        n: integral, const SampleRanks, charsPerMod, cover) {
   // find k such that a.offset+k and b.offset+k are both in the cover
   // (i.e. both are in the sample solved in the recursive problem)
   const k = cover.findInCover(a.offset % cover.period,
@@ -954,12 +986,12 @@ proc compareSampleRanks(a: prefixAndSampleRanks(?), b: offsetAndCached(?),
 
   const bSampleOffset = offsetToSubproblemOffset(b.offset + k,
                                                  cover, charsPerMod);
-  const rankA = a.ranks[aRankIdx];
+  var rankA = a.ranks[aRankIdx];
   var rankB = SampleRanks[bSampleOffset];
 
-  // Adjust for positions near the end of the string
-  if b.offset + k >= charsPerMod * cover.period {
-    rankB = 0;
+  const cmp = compareEndOfString(a.offset + k, b.offset + k, n);
+  if cmp != 0 {
+    return cmp;
   }
 
   if rankA < rankB {
@@ -988,7 +1020,7 @@ proc sortSuffixesCompletely(const cfg:ssortConfig(?),
       }
       // if the prefixes are the same, compare the nearby sample
       // rank from the recursive subproblem.
-      return compareSampleRanks(a, b, SampleRanks, charsPerMod, cfg.cover);
+      return compareSampleRanks(a, b, n, SampleRanks, charsPerMod, cfg.cover);
     }
   }
 
@@ -1039,7 +1071,7 @@ proc sortSuffixesCompletelyBounded(
       }
       // if the prefixes are the same, compare the nearby sample
       // rank from the recursive subproblem.
-      return compareSampleRanks(a, b, SampleRanks, charsPerMod, cfg.cover);
+      return compareSampleRanks(a, b, n, SampleRanks, charsPerMod, cfg.cover);
     }
   }
 
@@ -1266,7 +1298,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
         }
         // if the prefixes are the same, compare the nearby sample
         // rank from the recursive subproblem.
-        return compareSampleRanks(a, b, SampleText, charsPerMod, cover);
+        return compareSampleRanks(a, b, n, SampleText, charsPerMod, cover);
       }
     }
 
@@ -1274,8 +1306,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
 
     sort(SA, new finalComparator1());
 
-    /*
-    fixTrailingZeros(thetext, n, SA,
+    /*fixTrailingZeros(thetext, n, SA,
                    characterType=cfg.characterType,
                    offsetType=offsetType,
                    cachedDataType=cfg.cachedDataType);*/
@@ -1320,7 +1351,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
         }
         // if the prefixes are the same, compare the nearby sample
         // rank from the recursive subproblem.
-        return compareSampleRanks(a, b, SampleText, charsPerMod, cover);
+        return compareSampleRanks(a, b, n, SampleText, charsPerMod, cover);
       }
     }
 
