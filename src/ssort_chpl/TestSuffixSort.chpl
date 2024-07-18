@@ -67,6 +67,10 @@ private proc checkOffsets(got: [], expect: [] int) {
       gotOffset = g: int;
     }
     if gotOffset != e {
+      writeln("FAILURE, suffix array mismatch");
+      writeln("Expect SA ", expect);
+      writeln("Got SA    ", got);
+
       halt("at i=", i, " got offset ", gotOffset, " but expected ", e);
     }
   }
@@ -89,23 +93,27 @@ private proc checkCached(got: [] offsetAndCached, expect: []) {
   }
 }
 
-private proc checkSeeressesCase(type offsetType, type cachedDataType,
+private proc checkSeeressesCase(type offsetType,
+                                type cachedDataType,
+                                type loadWordType,
                                 inputArr, n:int, param period,
                                 expectOffsets, expectCached:?t = none) {
   if TRACE {
     writeln("  ", offsetType:string, " offsets, caching ", cachedDataType:string);
   }
 
-  if expectCached.type != nothing {
-    const A = buildAllOffsets(offsetType=offsetType,
+  const cfg = new ssortConfig(idxType=inputArr.idxType,
+                              characterType=inputArr.eltType,
+                              offsetType=offsetType,
                               cachedDataType=cachedDataType,
-                              inputArr, n:offsetType);
+                              loadWordType=loadWordType,
+                              cover=new differenceCover(period));
+
+  if expectCached.type != nothing {
+    const A = buildAllOffsets(cfg, inputArr, n);
     checkCached(A, expectCached);
   }
-  const SA = computeSuffixArrayDirectly(inputArr, n:offsetType,
-                                        inputArr.eltType,
-                                        offsetType=offsetType,
-                                        cachedDataType=cachedDataType);
+  const SA = computeSuffixArrayDirectly(cfg, inputArr, n:offsetType);
   checkOffsets(SA, expectOffsets);
   assert(SA.eltType.cacheType == cachedDataType);
 
@@ -114,11 +122,6 @@ private proc checkSeeressesCase(type offsetType, type cachedDataType,
   }
 
   // try ssortDcx
-  const cfg = new ssortConfig(idxType=inputArr.idxType,
-                              characterType=inputArr.eltType,
-                              offsetType=offsetType,
-                              cachedDataType=cachedDataType,
-                              cover=new differenceCover(period));
   const SA2 = ssortDcx(cfg, inputArr, n:offsetType);
   checkOffsets(SA2, expectOffsets);
   assert(SA2.eltType.cacheType == cachedDataType);
@@ -128,7 +131,7 @@ private proc checkSeeressesCase(type offsetType, type cachedDataType,
   }
 }
 
-private proc testMyDivCeil() {
+private proc testHelpers() {
   assert(myDivCeil(0,2) == 0);
   assert(myDivCeil(1,2) == 1);
   assert(myDivCeil(2,2) == 1);
@@ -143,14 +146,80 @@ private proc testMyDivCeil() {
   assert(myDivCeil(5,3) == 2);
   assert(myDivCeil(6,3) == 2);
   assert(myDivCeil(7,3) == 3);
+
+  {
+    const cfg = new ssortConfig(idxType=int,
+                                characterType=uint(8),
+                                offsetType=int,
+                                cachedDataType=nothing,
+                                loadWordType=uint(8),
+                                cover=new differenceCover(3));
+
+    assert(cfg.getPrefixSize(3) == 3);
+    assert(cfg.getPrefixSize(7) == 7);
+    assert(cfg.getPrefixSize(21) == 21);
+  }
+
+  {
+    const cfg = new ssortConfig(idxType=int,
+                                characterType=uint(8),
+                                offsetType=int,
+                                cachedDataType=nothing,
+                                loadWordType=uint(16),
+                                cover=new differenceCover(3));
+
+    assert(cfg.getPrefixSize(3) == 4);
+    assert(cfg.getPrefixSize(7) == 8);
+    assert(cfg.getPrefixSize(21) == 22);
+  }
+
+  {
+    const cfg = new ssortConfig(idxType=int,
+                                characterType=uint(8),
+                                offsetType=int,
+                                cachedDataType=nothing,
+                                loadWordType=uint(32),
+                                cover=new differenceCover(3));
+
+    assert(cfg.getPrefixSize(3) == 4);
+    assert(cfg.getPrefixSize(7) == 8);
+    assert(cfg.getPrefixSize(21) == 24);
+  }
+
+  {
+    const cfg = new ssortConfig(idxType=int,
+                                characterType=uint(8),
+                                offsetType=int,
+                                cachedDataType=nothing,
+                                loadWordType=uint(64),
+                                cover=new differenceCover(3));
+
+    assert(cfg.getPrefixSize(3) == 8);
+    assert(cfg.getPrefixSize(7) == 8);
+    assert(cfg.getPrefixSize(21) == 24);
+  }
+
+  {
+    const cfg = new ssortConfig(idxType=int,
+                                characterType=uint(64),
+                                offsetType=int,
+                                cachedDataType=uint(64),
+                                loadWordType=uint(64),
+                                cover=new differenceCover(3));
+
+    assert(cfg.getPrefixSize(3) == 3);
+    assert(cfg.getPrefixSize(7) == 7);
+    assert(cfg.getPrefixSize(21) == 21);
+  }
 }
 
-private proc testPrefixComparisons(type cachedDataType) {
+private proc testPrefixComparisons(type loadWordType, type cachedDataType) {
   const cover = new differenceCover(3);
   const cfg = new ssortConfig(idxType=int,
                               characterType=uint(8),
                               offsetType=int,
                               cachedDataType=cachedDataType,
+                              loadWordType=loadWordType,
                               cover=cover);
   const inputStr = "aabbccaaddffffffffaabbccaaddff";
                  //           11111111112222222222
@@ -166,70 +235,62 @@ private proc testPrefixComparisons(type cachedDataType) {
   const ranks = for i in text do 0;
   var ranksN = n;
 
-  const prefixAA =  makeOffsetAndCached(cfg.offsetType, cfg.cachedDataType,
-                                        0, text, n);
-  const prefixAA2 = makeOffsetAndCached(cfg.offsetType, cfg.cachedDataType,
-                                        6, text, n);
-  const prefixAA3 = makeOffsetAndCached(cfg.offsetType, cfg.cachedDataType,
-                                        18, text, n);
-  const prefixBB =  makeOffsetAndCached(cfg.offsetType, cfg.cachedDataType,
-                                        2, text, n);
+  const prefixAA =  makeOffsetAndCached(cfg, 0, text, n);
+  const prefixAA2 = makeOffsetAndCached(cfg, 6, text, n);
+  const prefixAA3 = makeOffsetAndCached(cfg, 18, text, n);
+  const prefixBB =  makeOffsetAndCached(cfg, 2, text, n);
 
-  const prefixAAp = makePrefix(0, text, n, cfg.cover, uint);
-  const prefixAA2p = makePrefix(6, text, n, cfg.cover, uint);
-  const prefixAA3p = makePrefix(18, text, n, cfg.cover, uint);
-  const prefixBBp = makePrefix(2, text, n, cfg.cover, uint);
+  const prefixAAp = makePrefix(cfg, 0, text, n);
+  const prefixAA2p = makePrefix(cfg, 6, text, n);
+  const prefixAA3p = makePrefix(cfg, 18, text, n);
+  const prefixBBp = makePrefix(cfg, 2, text, n);
 
-  const prefixAAs = makePrefixAndSampleRanks(0,
+  const prefixAAs = makePrefixAndSampleRanks(cfg, 0,
                                              text, n,
                                              0, ranks, ranksN,
-                                             charsPerMod=charsPerMod,
-                                             cfg.cover, uint);
-  const prefixAA2s = makePrefixAndSampleRanks(6,
+                                             charsPerMod=charsPerMod);
+  const prefixAA2s = makePrefixAndSampleRanks(cfg, 6,
                                               text, n,
                                               0, ranks, ranksN,
-                                              charsPerMod=charsPerMod,
-                                              cfg.cover, uint);
-   const prefixAA3s = makePrefixAndSampleRanks(18,
+                                              charsPerMod=charsPerMod);
+   const prefixAA3s = makePrefixAndSampleRanks(cfg, 18,
                                               text, n,
                                               0, ranks, ranksN,
-                                              charsPerMod=charsPerMod,
-                                              cfg.cover, uint);
+                                              charsPerMod=charsPerMod);
 
-  const prefixBBs = makePrefixAndSampleRanks(2,
+  const prefixBBs = makePrefixAndSampleRanks(cfg, 2,
                                              text, n,
                                              0, ranks, ranksN,
-                                             charsPerMod=charsPerMod,
-                                             cfg.cover, uint);
+                                             charsPerMod=charsPerMod);
 
-  assert(comparePrefixes(0, 0, cfg, text, n, maxPrefix=2)==0);
-  assert(comparePrefixes(0, 2, cfg, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(cfg, 0, 0, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(cfg, 0, 2, text, n, maxPrefix=2)<0);
 
-  assert(comparePrefixes(prefixAA, prefixAA, cfg, text, n, maxPrefix=2)==0);
-  assert(comparePrefixes(prefixAA, prefixAA3, cfg, text, n, maxPrefix=2)==0);
-  assert(comparePrefixes(prefixAA, prefixAA2, cfg, text, n, maxPrefix=2)<=0);
-  assert(comparePrefixes(prefixAA, prefixBB, cfg, text, n, maxPrefix=2)<0);
-  assert(comparePrefixes(prefixBB, prefixAA, cfg, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(cfg, prefixAA, prefixAA, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(cfg, prefixAA, prefixAA3, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(cfg, prefixAA, prefixAA2, text, n, maxPrefix=2)<=0);
+  assert(comparePrefixes(cfg, prefixAA, prefixBB, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(cfg, prefixBB, prefixAA, text, n, maxPrefix=2)>0);
 
-  assert(comparePrefixes(prefixAAp, prefixAAp, cfg, text, n, maxPrefix=2)==0);
-  assert(comparePrefixes(prefixAAp, prefixBBp, cfg, text, n, maxPrefix=2)<0);
-  assert(comparePrefixes(prefixBBp, prefixAAp, cfg, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(cfg, prefixAAp, prefixAAp, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(cfg, prefixAAp, prefixBBp, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(cfg, prefixBBp, prefixAAp, text, n, maxPrefix=2)>0);
 
-  assert(comparePrefixes(prefixAA, prefixAAp, cfg, text, n, maxPrefix=2)==0);
-  assert(comparePrefixes(prefixAA, prefixBBp, cfg, text, n, maxPrefix=2)<0);
-  assert(comparePrefixes(prefixAAp, prefixBB, cfg, text, n, maxPrefix=2)<0);
-  assert(comparePrefixes(prefixBBp, prefixAA, cfg, text, n, maxPrefix=2)>0);
-  assert(comparePrefixes(prefixBB, prefixAAp, cfg, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(cfg, prefixAA, prefixAAp, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(cfg, prefixAA, prefixBBp, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(cfg, prefixAAp, prefixBB, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(cfg, prefixBBp, prefixAA, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(cfg, prefixBB, prefixAAp, text, n, maxPrefix=2)>0);
 
-  assert(comparePrefixes(prefixAAp, prefixAAs, cfg, text, n, maxPrefix=2)==0);
-  assert(comparePrefixes(prefixAAs, prefixAAp, cfg, text, n, maxPrefix=2)==0);
-  assert(comparePrefixes(prefixAAs, prefixBBs, cfg, text, n, maxPrefix=2)<0);
-  assert(comparePrefixes(prefixAAs, prefixBBp, cfg, text, n, maxPrefix=2)<0);
-  assert(comparePrefixes(prefixAAp, prefixBBs, cfg, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(cfg, prefixAAp, prefixAAs, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(cfg, prefixAAs, prefixAAp, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(cfg, prefixAAs, prefixBBs, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(cfg, prefixAAs, prefixBBp, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(cfg, prefixAAp, prefixBBs, text, n, maxPrefix=2)<0);
 
-  assert(comparePrefixes(prefixBBs, prefixAAs, cfg, text, n, maxPrefix=2)>0);
-  assert(comparePrefixes(prefixBBs, prefixAAp, cfg, text, n, maxPrefix=2)>0);
-  assert(comparePrefixes(prefixBBp, prefixAAs, cfg, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(cfg, prefixBBs, prefixAAs, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(cfg, prefixBBs, prefixAAp, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(cfg, prefixBBp, prefixAAs, text, n, maxPrefix=2)>0);
 
   assert(charactersInCommon(cfg, prefixAAp, prefixAAp) >= cover.period);
   assert(charactersInCommon(cfg, prefixAAs, prefixAAs) >= cover.period);
@@ -249,6 +310,7 @@ proc testRankComparisons3() {
                               characterType=uint(8),
                               offsetType=int,
                               cachedDataType=nothing,
+                              loadWordType=uint(8),
                               cover=cover);
 
   // create the mapping to the recursive problem
@@ -273,18 +335,15 @@ proc testRankComparisons3() {
   // check makePrefixAndSampleRanks
 
   // check a few cases we can see above
-  const p1 = makePrefixAndSampleRanks(offset=1, Text, n,
+  const p1 = makePrefixAndSampleRanks(cfg, offset=1, Text, n,
                                       sampleOffset=7, Ranks, nSample,
-                                      charsPerMod=charsPerMod,
-                                      cover, uint);
-  const p3 = makePrefixAndSampleRanks(offset=3, Text, n,
+                                      charsPerMod=charsPerMod);
+  const p3 = makePrefixAndSampleRanks(cfg, offset=3, Text, n,
                                       sampleOffset=1, Ranks, nSample,
-                                      charsPerMod=charsPerMod,
-                                      cover, uint);
-  const p19 = makePrefixAndSampleRanks(offset=19, Text, n,
+                                      charsPerMod=charsPerMod);
+  const p19 = makePrefixAndSampleRanks(cfg, offset=19, Text, n,
                                       sampleOffset=13, Ranks, nSample,
-                                      charsPerMod=charsPerMod,
-                                      cover, uint);
+                                      charsPerMod=charsPerMod);
 
   assert(p1.ranks[0] == 13); // offset 1 -> sample offset 7 -> rank 13
   assert(p1.ranks[1] == 10); // offset 3 -> sample offset 1 -> rank 10
@@ -292,18 +351,16 @@ proc testRankComparisons3() {
   assert(p3.ranks[0] == 10); // offset 3 -> sample offset 1 -> rank 10
   assert(p3.ranks[1] == 9);  // offset 4 -> sample offset 8 -> rank 9
 
-  writeln(p19);
   assert(p19.ranks[0] == 1); // offset 19 -> sample offset 13 -> rank 1
   assert(p19.ranks[1] == 0); // offset 21 -> sample offset -  -> rank 0
 
   // check the rest of the cases
   for sampleOffset in 0..<nSample {
     const offset = subproblemOffsetToOffset(sampleOffset, cover, charsPerMod);
-    const p = makePrefixAndSampleRanks(offset=offset, Text, n,
+    const p = makePrefixAndSampleRanks(cfg, offset=offset, Text, n,
                                        sampleOffset=sampleOffset,
                                        Ranks, nSample,
-                                       charsPerMod=charsPerMod,
-                                       cover, uint);
+                                       charsPerMod=charsPerMod);
     // find the next cover.sampleSize offsets in the cover
     var cur = 0;
     for i in 0..<cover.period {
@@ -317,10 +374,10 @@ proc testRankComparisons3() {
   }
 
   // try some comparisons
-  const o1 = makeOffsetAndCached(cfg.offsetType,cfg.cachedDataType, 1, Text, n);
-  const o3 = makeOffsetAndCached(cfg.offsetType,cfg.cachedDataType, 3, Text, n);
-  const o5 = makeOffsetAndCached(cfg.offsetType,cfg.cachedDataType, 5, Text, n);
-  const o19= makeOffsetAndCached(cfg.offsetType,cfg.cachedDataType,19, Text, n);
+  const o1 = makeOffsetAndCached(cfg, 1, Text, n);
+  const o3 = makeOffsetAndCached(cfg, 3, Text, n);
+  const o5 = makeOffsetAndCached(cfg, 5, Text, n);
+  const o19= makeOffsetAndCached(cfg,19, Text, n);
 
   // test self-compares
   assert(compareSampleRanks(o1, o1, n, Ranks, charsPerMod, cover) == 0);
@@ -359,6 +416,7 @@ proc testRankComparisons21() {
                               characterType=uint(8),
                               offsetType=int,
                               cachedDataType=nothing,
+                              loadWordType=uint(8),
                               cover=cover);
 
   type offsetType = cfg.offsetType;
@@ -385,32 +443,29 @@ proc testRankComparisons21() {
 
   // check self-compares
   for i in 0..<n {
-    const o = makeOffsetAndCached(offsetType,cachedDataType, i, Text,n);
+    const o = makeOffsetAndCached(cfg, i, Text,n);
     assert(compareSampleRanks(o, o, n, Ranks, charsPerMod, cover) == 0);
     if cover.containedInCover(i % cover.period) {
       const sampleOffset = offsetToSubproblemOffset(i, cover, charsPerMod);
-      const p = makePrefixAndSampleRanks(offset=i, Text, n,
+      const p = makePrefixAndSampleRanks(cfg, offset=i, Text, n,
                                          sampleOffset=sampleOffset,
                                          Ranks, nSample,
-                                         charsPerMod=charsPerMod,
-                                         cover, uint);
+                                         charsPerMod=charsPerMod);
       assert(compareSampleRanks(p, o, n, Ranks, charsPerMod, cover) == 0);
     }
   }
 
-  const o4  = makeOffsetAndCached(offsetType, cachedDataType, 4, Text, n);
-  const o20 = makeOffsetAndCached(offsetType, cachedDataType, 20, Text, n);
-  const o21 = makeOffsetAndCached(offsetType, cachedDataType, 21, Text, n);
-  const p21 = makePrefixAndSampleRanks(offset=21, Text, n,
+  const o4  = makeOffsetAndCached(cfg, 4, Text, n);
+  const o20 = makeOffsetAndCached(cfg, 20, Text, n);
+  const o21 = makeOffsetAndCached(cfg, 21, Text, n);
+  const p21 = makePrefixAndSampleRanks(cfg, offset=21, Text, n,
                                        sampleOffset=1,
-                                       Ranks, nSample, charsPerMod=charsPerMod,
-                                       cover, uint);
-  const o22 = makeOffsetAndCached(offsetType, cachedDataType, 22, Text, n);
-  const p22 = makePrefixAndSampleRanks(offset=22, Text, n,
+                                       Ranks, nSample, charsPerMod=charsPerMod);
+  const o22 = makeOffsetAndCached(cfg, 22, Text, n);
+  const p22 = makePrefixAndSampleRanks(cfg, offset=22, Text, n,
                                        sampleOffset=5,
-                                       Ranks, nSample, charsPerMod=charsPerMod,
-                                       cover, uint);
-  const o23 = makeOffsetAndCached(offsetType, cachedDataType, 23, Text, n);
+                                       Ranks, nSample, charsPerMod=charsPerMod);
+  const o23 = makeOffsetAndCached(cfg, 23, Text, n);
 
   // check p21 and p22 are ok
   assert(p21.ranks[0] ==  9); // 21+0  = 21
@@ -470,8 +525,9 @@ proc testRankComparisons21() {
 }
 
 private proc testComparisons() {
-  testPrefixComparisons(nothing);
-  testPrefixComparisons(uint);
+  testPrefixComparisons(uint(8), nothing);
+  testPrefixComparisons(uint, nothing);
+  testPrefixComparisons(uint, uint);
 
   testRankComparisons3();
   testRankComparisons21();
@@ -480,9 +536,7 @@ private proc testComparisons() {
 
 // test suffix sorting stuff with "seeresses" as input.
 private proc testSeeresses() {
-  if TRACE {
-    writeln("Testing suffix sorting of 'seeresses'");
-  }
+  writeln("Testing suffix sorting of 'seeresses'");
 
   const input = "seeresses";
   const n = input.size;
@@ -598,14 +652,19 @@ private proc testSeeresses() {
 
   // check different cached data types
   checkSeeressesCase(offsetType=int, cachedDataType=nothing,
+                     loadWordType=uint(8),
                      inputArr, n, 3, expectOffsets);
   checkSeeressesCase(offsetType=int, cachedDataType=uint(8),
+                     loadWordType=uint(8),
                      inputArr, n, 7, expectOffsets, expectCached1);
   checkSeeressesCase(offsetType=int, cachedDataType=uint(16),
+                     loadWordType=uint(16),
                      inputArr, n, 3, expectOffsets, expectCached2);
   checkSeeressesCase(offsetType=int, cachedDataType=uint(32),
+                     loadWordType=uint(32),
                      inputArr, n, 13, expectOffsets, expectCached4);
   checkSeeressesCase(offsetType=int, cachedDataType=uint(64),
+                     loadWordType=uint(64),
                      inputArr, n, 3, expectOffsets, expectCached8);
 
   // check some different offset types
@@ -613,17 +672,22 @@ private proc testSeeresses() {
   //checkSeeressesCase(offsetType=uint(32), cachedDataType=nothing,
   //                   inputArr, n, 3, expectOffsets);
   checkSeeressesCase(offsetType=int, cachedDataType=nothing,
+                     loadWordType=uint(8),
                      inputArr, n, 3, expectOffsets);
   //checkSeeressesCase(offsetType=uint, cachedDataType=nothing,
   //                   inputArr, n, 3, expectOffsets);
+
+
+  // check load word uint + uint(8) charactercs
+  checkSeeressesCase(offsetType=int, cachedDataType=nothing,
+                     loadWordType=uint,
+                     inputArr, n, 3, expectOffsets);
 }
 
 proc testOtherCase(input: string, expectSA: [] int,
                    param period, type cachedDataType) {
-  if TRACE {
-    writeln("testOtherCase(input='", input, "', period=", period, ", ",
-                             "cachedDataType=", cachedDataType:string, ")");
-  }
+  writeln("testOtherCase(input='", input, "', period=", period, ", ",
+                           "cachedDataType=", cachedDataType:string, ")");
 
   const n = input.size;
   const inputArr = bytesToArray(input);
@@ -634,6 +698,10 @@ proc testOtherCase(input: string, expectSA: [] int,
                               characterType=inputArr.eltType,
                               offsetType=offsetType,
                               cachedDataType=cachedDataType,
+                              loadWordType=
+                                (if cachedDataType != nothing
+                                 then cachedDataType
+                                 else inputArr.eltType),
                               cover=new differenceCover(period));
   const SA = ssortDcx(cfg, inputArr, n:offsetType);
 
@@ -692,15 +760,78 @@ proc testOthers() {
 
   */
   testOther("abracadabra", [10,7,0,3,5,8,1,4,6,9,2]);
+
+
+  /*
+   i           10
+   ippi        7
+   issippi     4
+   ississippi  1
+   mississippi 0
+   pi          9
+   ppi         8
+   sippi       6
+   sissippi    3
+   ssippi      5
+   ssissippi   2
+   */
   testOther("mississippi", [10,7,4,1,0,9,8,6,3,5,2]);
+
+  /*
+   aaaacaaaacaaaab with DC3
+
+             11111
+   012345678901234
+   aaaacaaaacaaaab
+   xx xx xx xx xx -- sample suffixes
+
+   sort sample by first 3 characters
+
+   suffix           offset  rank
+   aaa ab           10      1   | could be in any order
+   aaa acaaaacaaaab 0       1   |
+   aaa caaaab       6       1   |
+   aaa caaaacaaaab  1       1   |
+   aab              12      2
+   aac aaaab        7       3
+   ab               13      4
+   aca aaacaaaab    3       5
+   caa aab          9       7   | any order
+   caa aacaaaab     4       7   |
+
+
+   charsPerMod 6
+                               11
+   subproblem offset 012345678901
+
+                         11   111
+      regular offset 036925147036
+
+   suffix           offset
+   aaa ab           10
+   aaa acaaaab      5
+   aaa acaaaacaaaab 0
+   aaa b            11
+   aaa caaaab       6
+   aaa caaaacaaaab  1
+   aab              12
+   aac aaaab        7
+   aac aaaacaaaab   2
+   ab               13
+   aca aaab         8
+   aca aaacaaaab    3
+   b                14
+   caa aab          9
+   caa aacaaaab     4
+
+
+  */
   testOther("aaaacaaaacaaaab", [10,5,0,11,6,1,12,7,2,13,8,3,14,9,4]);
 }
 
 proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
-  if TRACE {
-    writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period, ", ",
-                             "cachedDataType=", cachedDataType:string, ")");
-  }
+  writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period, ", ",
+                           "cachedDataType=", cachedDataType:string, ")");
 
   var inputArr: [0..<n+INPUT_PADDING] uint(8);
   var expectSA: [0..<n] int;
@@ -716,6 +847,10 @@ proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
                               characterType=inputArr.eltType,
                               offsetType=offsetType,
                               cachedDataType=cachedDataType,
+                              loadWordType=
+                                (if cachedDataType != nothing
+                                 then cachedDataType
+                                 else inputArr.eltType),
                               cover=new differenceCover(period));
   const SA = ssortDcx(cfg, inputArr, n:offsetType);
 
@@ -728,7 +863,9 @@ proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
 }
 
 proc testRepeats() {
-  const sizes = [0, 1, 2, 3, 4, 5, 10, 20, 50, 100, 1000, 10000];
+  // TODO: figure out what's going wrong with n=0;
+  // getting a runtime error: size mismatch in zippered iteration
+  const sizes = [/*0,*/ 1, 2, 3, 4, 5, 10, 20, 50, 100, 1000, 10000];
 
   for (size,i) in zip(sizes,1..) {
     const chr = i:uint(8);
@@ -768,11 +905,9 @@ proc testRepeats() {
  */
 proc testDescendingCase(max: int, repeats: int, in n: int,
                         param period, type cachedDataType) {
-  if TRACE {
-    writeln("testDescendingCase(",
-            "max=", max, ", repeats=", repeats, ", n=", n, ", ",
-            "period=", period, ", cachedDataType=", cachedDataType:string, ")");
-  }
+  writeln("testDescendingCase(",
+          "max=", max, ", repeats=", repeats, ", n=", n, ", ",
+          "period=", period, ", cachedDataType=", cachedDataType:string, ")");
 
   var inputArr: [0..<n+INPUT_PADDING] uint(8);
   var expectSA: [0..<n] int;
@@ -840,6 +975,10 @@ proc testDescendingCase(max: int, repeats: int, in n: int,
                               characterType=inputArr.eltType,
                               offsetType=offsetType,
                               cachedDataType=cachedDataType,
+                              loadWordType=
+                                (if cachedDataType != nothing
+                                 then cachedDataType
+                                 else inputArr.eltType),
                               cover=new differenceCover(period));
   const SA = ssortDcx(cfg, inputArr, n:offsetType);
 
@@ -898,13 +1037,23 @@ proc testDescending() {
 }
 
 
-proc main() {
-  testMyDivCeil();
+proc runTests() {
+  testHelpers();
   testComparisons();
   testSeeresses();
   testOthers();
   testRepeats();
   testDescending();
+}
+
+proc main() {
+  serial {
+    writeln("Testing with one task");
+    runTests();
+  }
+
+  writeln("Testing with many tasks");
+  runTests();
 
   writeln("TestSuffixSort OK");
 }

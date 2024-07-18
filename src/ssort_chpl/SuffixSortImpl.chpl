@@ -38,8 +38,9 @@ import SuffixSort.INPUT_PADDING;
 // how much more should we sample to create splitters?
 // 1.0 would be only to sample enough for the splitters
 config const SAMPLE_RATIO = 1.5;
-config const PARTITION_SORT_SAMPLE = false;
-config const PARTITION_SORT_ALL = false;
+config const PARTITION_SORT_SAMPLE = true;
+config const PARTITION_SORT_ALL = true;
+config const SEED = 1;
 
 /**
  This record contains the configuration for the suffix sorting
@@ -59,16 +60,11 @@ record ssortConfig {
   type cachedDataType; // cache this much text data along with offsets
                        // (no caching if this is 'nothing')
 
+  type loadWordType; // load this much text data when doing comparisons
+                     // or when sorting. it's like cachedDataType
+                     // but doesn't cause caching.
+
   const cover: differenceCover(?);
-
-  proc wordType type {
-    return if cachedDataType != nothing
-           then cachedDataType
-           else characterType;
-  }
-
-  // this type is used in record prefix / record prefixAndSampleRanks
-  proc prefixWordType type do return uint;
 }
 
 /**
@@ -169,23 +165,27 @@ inline proc myDivCeil(param x: integral, param y: integral) param {
   Read a "word" of data from 'text' character index 'i'.
   Assumes that there are 8 bytes of padding past the real data.
   */
-inline proc loadWord(const text, n: integral, i: integral, type wordType) {
-  //writeln("loadWord(", i, ", ", wordType:string, ")");
+inline proc loadWord(const cfg: ssortConfig(?),
+                     offset: cfg.offsetType,
+                     const text, n: cfg.offsetType) {
+
+  if EXTRA_CHECKS {
+    assert(0 <= offset && offset:uint < n:uint);
+  }
 
   // handle some simple cases first
-  if wordType == nothing then return none;
-  if wordType == text.eltType then return text[i];
+  type wordType = cfg.loadWordType;
+
+  if numBits(wordType) == numBits(text.eltType) {
+    return text[offset]: wordType;
+  }
 
   param wordBytes = numBytes(wordType);
   param textCharBytes = numBytes(text.eltType);
   param textCharBits = textCharBytes*8;
   param numToRead = wordBytes / textCharBytes;
-  if wordBytes < textCharBytes || !isUintType(wordType) {
+  if wordBytes <= textCharBytes || !isUintType(wordType) {
     compilerError("invalid loadWord call");
-  }
-
-  if EXTRA_CHECKS {
-    assert(0 <= i && i:uint < n:uint);
   }
 
   // I expect this loop to be folded away by the backend compiler &
@@ -193,46 +193,76 @@ inline proc loadWord(const text, n: integral, i: integral, type wordType) {
   var ret: wordType = 0;
   for j in 0..<numToRead {
     ret <<= textCharBits;
-    ret |= text[i+j];
+    ret |= text[offset+j];
   }
 
-  //writef("loadWord returning %016xu\n", ret);
   return ret;
 }
 
-proc ssortConfig.getWordType(a: integral) type {
-  return this.prefixWordType;
+proc ssortConfig.checkWordType(a: integral) {
+  return true;
 }
-proc ssortConfig.getWordType(a: offsetAndCached(?)) type {
-  return if a.cacheType != nothing
-         then a.cacheType
-         else this.characterType;
+proc ssortConfig.checkWordType(a: offsetAndCached(?)) param {
+  if a.cacheType != nothing {
+    if a.cacheType != this.loadWordType {
+      compilerError("bad configuration for offsetAndCached");
+    }
+  }
+  return true;
 }
-proc ssortConfig.getWordType(a: prefix(?)) type {
-  return a.wordType;
+proc ssortConfig.checkWordType(a: prefix(?)) param {
+  if a.wordType != this.loadWordType {
+      compilerError("bad configuration for prefix");
+  }
+
+  return true;
 }
-proc ssortConfig.getWordType(a: prefixAndSampleRanks(?)) type {
-  return a.wordType;
+proc ssortConfig.checkWordType(a: prefixAndSampleRanks(?)) param {
+  if a.wordType != this.loadWordType {
+      compilerError("bad configuration for prefixAndSampleRanks");
+  }
+
+  return true;
+}
+
+/**
+  When sorting using 'loadWordType', how many characters should
+  be considered in order to match 'minChars' characters
+  that are handled a 'loadWordType' at a time?
+
+  The result will fit eveny into 'loadWordType' and be >= 'minChars'.
+ */
+proc ssortConfig.getPrefixSize(param minChars) param {
+  // how many words do we need in order to hold cover.period characters?
+  param wordBytes = numBytes(loadWordType);
+  param textCharBytes = numBytes(characterType);
+  param nWords = myDivCeil(minChars * textCharBytes, wordBytes);
+  return nWords*wordBytes / textCharBytes;
 }
 
 /**
  Construct an offsetAndCached for offset 'i' in the input.
  */
-inline proc makeOffsetAndCached(type offsetType, type cachedDataType,
-                                i: offsetType,
-                                const text, n: offsetType) {
-  const cached: cachedDataType;
-  if cachedDataType == nothing {
+inline proc makeOffsetAndCached(const cfg: ssortConfig(?),
+                                offset: cfg.offsetType,
+                                const text, n: cfg.offsetType) {
+  if cfg.cachedDataType != nothing {
+    if cfg.cachedDataType != cfg.loadWordType {
+      compilerError("cachedDataType must be nothing or match loadWordType");
+    }
+  }
+  const cached: cfg.cachedDataType;
+  if cfg.cachedDataType == nothing {
     cached = none;
-  } else if i < n {
-    cached = loadWord(text, n, i, cachedDataType);
+  } else if offset < n {
+    cached = loadWord(cfg, offset, text, n);
   } else {
     cached = 0;
   }
 
-  return new offsetAndCached(offsetType=offsetType,
-                             cacheType=cachedDataType,
-                             offset=i,
+  return new offsetAndCached(offsetType=cfg.offsetType,
+                             cacheType=cfg.cachedDataType,
+                             offset=offset,
                              cached=cached);
 }
 
@@ -240,16 +270,18 @@ inline proc makeOffsetAndCached(type offsetType, type cachedDataType,
   Construct an prefix record for offset 'offset' in the input
   by loading the relevant data from 'text'.
  */
-proc makePrefix(offset: integral, const text, n: integral, cover, type wordType)
-{
-  type characterType = text.eltType;
+proc makePrefix(const cfg: ssortConfig(?), offset: cfg.offsetType,
+                const text, n: cfg.offsetType) {
+  type characterType = cfg.characterType;
+  type wordType = cfg.loadWordType;
+  const ref cover = cfg.cover;
   // how many words do we need in order to hold cover.period characters?
   param wordBytes = numBytes(wordType);
   param textCharBytes = numBytes(characterType);
   param charsPerWord = wordBytes / textCharBytes;
   param nWords = myDivCeil(cover.period, charsPerWord);
   if wordBytes < textCharBytes || !isUintType(wordType) {
-    compilerError("invalid makeOffsetAndCached call");
+    compilerError("invalid makePrefix call");
   }
 
   var result = new prefix(wordType=wordType, nWords=nWords);
@@ -261,7 +293,7 @@ proc makePrefix(offset: integral, const text, n: integral, cover, type wordType)
     const castI = i:idxType;
     const idx = castOffset + castI*eltsPerWord;
     if idx < n {
-      result.words[i] = loadWord(text, n, idx, wordType);
+      result.words[i] = loadWord(cfg, idx, text, n);
     } else {
       result.words[i] = 0;
     }
@@ -274,18 +306,20 @@ proc makePrefix(offset: integral, const text, n: integral, cover, type wordType)
   Construct an prefixAndSampleRanks record for offset 'i' in the input
   by loading the relevant data from 'text' and 'ranks'.
  */
-proc makePrefixAndSampleRanks(offset: integral,
-                              const text, n: integral,
-                              sampleOffset: integral,
-                              const Ranks, ranksN: integral,
-                              charsPerMod: integral,
-                              cover, type wordType) {
+proc makePrefixAndSampleRanks(const cfg: ssortConfig(?),
+                              offset: cfg.offsetType,
+                              const text, n: cfg.offsetType,
+                              sampleOffset: cfg.offsetType,
+                              const Ranks, ranksN: cfg.offsetType,
+                              charsPerMod: cfg.offsetType) {
+  const ref cover = cfg.cover;
   // compute the type information for creating a prefix
-  type prefixType = makePrefix(offset, text, n, cover, wordType).type;
+  type prefixType = makePrefix(cfg, offset, text, n).type;
   type characterType = text.eltType;
+  type wordType = cfg.loadWordType;
 
   var result = new prefixAndSampleRanks(wordType=wordType,
-                                        offsetType=Ranks.eltType,
+                                        offsetType=cfg.offsetType,
                                         nWords=prefixType.nWords,
                                         nRanks=cover.sampleSize,
                                         offset=offset);
@@ -298,7 +332,7 @@ proc makePrefixAndSampleRanks(offset: integral,
     const castI = i:idxType;
     const idx = castOffset + castI*eltsPerWord;
     if idx < n {
-      result.words[i] = loadWord(text, n, idx, wordType);
+      result.words[i] = loadWord(cfg, idx, text, n);
     } else {
       result.words[i] = 0;
     }
@@ -328,13 +362,12 @@ proc makePrefixAndSampleRanks(offset: integral,
   Construct an array of suffixes (not yet sorted)
   for all of the offsets in 0..<n.
  */
-proc buildAllOffsets(type offsetType, type cachedDataType,
-                     const text, n: offsetType) {
+proc buildAllOffsets(const cfg:ssortConfig(?), const text, n: cfg.offsetType) {
   const Dom = {0..<n};
-  var SA:[Dom] offsetAndCached(offsetType, cachedDataType) =
+  var SA:[Dom] offsetAndCached(cfg.offsetType, cfg.cachedDataType) =
     forall i in Dom do
-      makeOffsetAndCached(offsetType=offsetType, cachedDataType=cachedDataType,
-                          i, text, n);
+      makeOffsetAndCached(cfg, i, text, n);
+
   return SA;
 }
 
@@ -364,40 +397,17 @@ inline proc getKeyPartForPrefix(const p: prefixAndSampleRanks(?), i: integral) {
   return (sectionEnd, 0:p.wordType);
 }
 
-// considers the prefix and the 1st sample rank only
-inline proc getKeyPartForPrefixAndFirstRank(const p: prefixAndSampleRanks(?),
-                                            i: integral) {
-  param sectionReturned = 0:int(8);
-  param sectionEnd = -1:int(8);
-
-  if i < p.nWords {
-    return (sectionReturned, p.words[i]);
-  }
-
-  if i == p.nWords {
-    return (sectionReturned, p.ranks[0]);
-  }
-
-  // otherwise, return that we reached the end
-  return (sectionEnd, 0:p.wordType);
-}
-
-record prefixAndSampleRanksComparePrefixAndFirstRank {
-  proc keyPart(a: prefixAndSampleRanks(?), i: int):(int(8), a.wordType) {
-    return getKeyPartForPrefixAndFirstRank(a, i);
-  }
-}
-
 // can be called from keyPart(someOffset, i)
 // gets the key part for sorting the suffix starting at
 // offset 'offset' within 'text' by the first 'maxPrefix characters.
-inline proc getKeyPartForOffset(const offset: integral, i: integral,
-                                const cfg:ssortConfig(?), type wordType,
+inline proc getKeyPartForOffset(const cfg: ssortConfig(?),
+                                const offset: cfg.offsetType, i: integral,
                                 const text, n: cfg.offsetType,
                                 maxPrefix: cfg.offsetType) {
   type idxType = cfg.idxType;
   type characterType = cfg.characterType;
   type offsetType = cfg.offsetType;
+  type wordType = cfg.loadWordType;
   param sectionReturned = 0:int(8);
   param sectionEnd = -1:int(8);
 
@@ -405,10 +415,9 @@ inline proc getKeyPartForOffset(const offset: integral, i: integral,
   const iOff = i:offsetType;
   const nCharsIn:offsetType = iOff*eltsPerWord;
   const startIdx:offsetType = offset + nCharsIn;
-  const startIdxCast = startIdx: idxType;
-  if nCharsIn < maxPrefix && startIdxCast < n:idxType {
+  if nCharsIn < maxPrefix && startIdx < n {
     // return further data by loading from the text array
-    return (sectionReturned, loadWord(text, n, startIdxCast, wordType));
+    return (sectionReturned, loadWord(cfg, startIdx, text, n));
   }
 
   // otherwise, return that we reached the end
@@ -417,78 +426,68 @@ inline proc getKeyPartForOffset(const offset: integral, i: integral,
 
 
 // can be called from keyPart(offsetAndCached, i)
-inline proc getKeyPartForOffsetAndCached(const a: offsetAndCached(?),
+inline proc getKeyPartForOffsetAndCached(const cfg: ssortConfig(?),
+                                         const a: offsetAndCached(?),
                                          i: integral,
-                                         const cfg:ssortConfig(?),
                                          const text, n: cfg.offsetType,
-                                         maxPrefix: cfg.offsetType,
-                                         type wordType=cfg.wordType) {
-  type idxType = cfg.idxType;
-  type characterType = cfg.characterType;
-  type offsetType = cfg.offsetType;
-  type cachedDataType = cfg.cachedDataType;
-
+                                         maxPrefix: cfg.offsetType) {
   param sectionReturned = 0:int(8);
   param sectionEnd = -1:int(8);
-  if a.cacheType != nothing && wordType == a.cacheType && i == 0 {
+  if a.cacheType != nothing && cfg.loadWordType == a.cacheType && i == 0 {
     // return the cached data
     return (sectionReturned, a.cached);
   }
 
-  return getKeyPartForOffset(a.offset, i, cfg, wordType,
-                             text, n, maxPrefix=maxPrefix);
+  return getKeyPartForOffset(cfg, a.offset, i, text, n, maxPrefix=maxPrefix);
 }
 
 // these getPrefixKeyPart overloads call the above to adapt
 // to different types.
-inline proc getPrefixKeyPart(const a: offsetAndCached(?), i: integral,
-                             const cfg:ssortConfig(?),
+inline proc getPrefixKeyPart(const cfg: ssortConfig(?),
+                             const a: offsetAndCached(?), i: integral,
                              const text, n: cfg.offsetType,
-                             maxPrefix: cfg.offsetType,
-                             type wordType=cfg.wordType) {
-  return getKeyPartForOffsetAndCached(a, i, cfg, text, n, maxPrefix, wordType);
+                             maxPrefix: cfg.offsetType) {
+  cfg.checkWordType(a);
+  return getKeyPartForOffsetAndCached(cfg, a, i, text, n, maxPrefix);
 }
-inline proc getPrefixKeyPart(const a: integral, i: integral,
-                             const cfg:ssortConfig(?),
+inline proc getPrefixKeyPart(const cfg: ssortConfig(?),
+                             const a: cfg.offsetType, i: integral,
                              const text, n: cfg.offsetType,
-                             maxPrefix: cfg.offsetType,
-                             type wordType=cfg.wordType) {
-  return getKeyPartForOffset(a, i, cfg, wordType, text, n, maxPrefix);
+                             maxPrefix: cfg.offsetType) {
+  return getKeyPartForOffset(cfg, a, i, text, n, maxPrefix);
 }
-inline proc getPrefixKeyPart(const a: prefix(?), i: integral,
-                             const cfg:ssortConfig(?),
+inline proc getPrefixKeyPart(const cfg:ssortConfig(?),
+                             const a: prefix(?), i: integral,
                              const text, n: cfg.offsetType,
-                             maxPrefix: cfg.offsetType,
-                             type wordType=cfg.prefixWordType) {
+                             maxPrefix: cfg.offsetType) {
+  cfg.checkWordType(a);
   return getKeyPartForPrefix(a, i);
 }
-inline proc getPrefixKeyPart(const a: prefixAndSampleRanks(?), i: integral,
-                             const cfg:ssortConfig(?),
+inline proc getPrefixKeyPart(const cfg:ssortConfig(?),
+                             const a: prefixAndSampleRanks(?), i: integral,
                              const text, n: cfg.offsetType,
-                             maxPrefix: cfg.offsetType,
-                             type wordType=cfg.prefixWordType) {
+                             maxPrefix: cfg.offsetType) {
+  cfg.checkWordType(a);
   return getKeyPartForPrefix(a, i);
 }
 
-inline proc comparePrefixes(const a, const b,
-                            const cfg:ssortConfig(?),
+inline proc comparePrefixes(const cfg: ssortConfig(?),
+                            const a, const b,
                             const text, n: cfg.offsetType,
                             maxPrefix: cfg.offsetType): int {
-  type aWordType = cfg.getWordType(a);
-  type bWordType = cfg.getWordType(b);
-  type wordType = if numBits(aWordType) > numBits(bWordType)
-                  then aWordType
-                  else bWordType;
+
+  cfg.checkWordType(a);
+  cfg.checkWordType(b);
+  type wordType = cfg.loadWordType;
+
   param charsPerWord = numBits(wordType) / numBits(cfg.characterType);
   const m = myDivCeil(maxPrefix, charsPerWord);
   var curPart = 0;
   while curPart < m {
-    var (aSection, aPart) = getPrefixKeyPart(a, curPart,
-                                             cfg, text, n, maxPrefix,
-                                             wordType=wordType);
-    var (bSection, bPart) = getPrefixKeyPart(b, curPart,
-                                             cfg, text, n, maxPrefix,
-                                             wordType=wordType);
+    var (aSection, aPart) = getPrefixKeyPart(cfg, a, curPart,
+                                             text, n, maxPrefix=maxPrefix);
+    var (bSection, bPart) = getPrefixKeyPart(cfg, b, curPart,
+                                             text, n, maxPrefix=maxPrefix);
     if aSection != 0 || bSection != 0 {
       return aSection - bSection;
     }
@@ -498,7 +497,6 @@ inline proc comparePrefixes(const a, const b,
     if aPart > bPart {
       return 1;
     }
-
 
     curPart += 1;
   }
@@ -522,8 +520,8 @@ proc prefixDiffersFromPrevious(const cfg:ssortConfig(?),
   }
 
   // otherwise, compare this element and the previous
-  const cmp = comparePrefixes(Sample[i], Sample[i-1],
-                              cfg, text, n=n, maxPrefix=maxPrefix);
+  var cmp = comparePrefixes(cfg, Sample[i], Sample[i-1],
+                            text, n=n, maxPrefix=maxPrefix);
   if cmp == 0 {
     return 0:offsetType; // same prefix, so don't assign a new rank
   }
@@ -536,10 +534,8 @@ proc charactersInCommon(const cfg:ssortConfig(?), const a, const b): int
         (isSubtype(a.type, prefix) ||
          isSubtype(a.type, prefixAndSampleRanks))
 {
-  type aWordType = cfg.getWordType(a);
-  type bWordType = cfg.getWordType(a);
-  if aWordType != bWordType then
-    compilerError("bad call to charactersInCommon");
+  cfg.checkWordType(a);
+  cfg.checkWordType(b);
 
   var curPart = 0;
   var bitsInCommon = 0;
@@ -576,12 +572,12 @@ proc sortSuffixesByPrefix(const cfg:ssortConfig(?),
   type characterType = cfg.characterType;
   type offsetType = cfg.offsetType;
   type cachedDataType = cfg.cachedDataType;
-  type wordType = cfg.wordType;
+  type wordType = cfg.loadWordType;
   // Define a comparator to support radix sorting by the first maxPrefix
   // character values.
   record myPrefixComparator1 {
     proc keyPart(a: offsetAndCached(?), i: int):(int(8), wordType) {
-      return getPrefixKeyPart(a, i=i, cfg, thetext, n=n, maxPrefix=maxPrefix);
+      return getPrefixKeyPart(cfg, a, i, thetext, n, maxPrefix=maxPrefix);
     }
   }
 
@@ -598,7 +594,7 @@ proc sortSuffixesByPrefixBounded(const cfg:ssortConfig(?),
   type characterType = cfg.characterType;
   type offsetType = cfg.offsetType;
   type cachedDataType = cfg.cachedDataType;
-  type wordType = cfg.wordType;
+  type wordType = cfg.loadWordType;
 
   // compute the number of characters in common between lowerBound and
   // upperBound.
@@ -618,10 +614,8 @@ proc sortSuffixesByPrefixBounded(const cfg:ssortConfig(?),
   // characters up to maxPrefix that it's not already sorted by.
   record myPrefixComparator2 {
     proc keyPart(a: offsetAndCached(?), i: int):(int(8), wordType) {
-      return getKeyPartForOffset(a.offset + nCharsCommon, i=i,
-                                 cfg, wordType,
-                                 thetext, n=n,
-                                 maxPrefix=useMaxPrefix);
+      return getKeyPartForOffset(cfg, a.offset + nCharsCommon, i,
+                                 thetext, n, maxPrefix=useMaxPrefix);
     }
   }
 
@@ -636,11 +630,9 @@ proc sortSuffixesByPrefixBounded(const cfg:ssortConfig(?),
 
    This fix does not need to apply to suffix sorting done with
    a recursive subproblem (rather than with the base case)
-   as compareSampleRanks will cover it.
+   as compareSampleRanks will cover it with compareEndOfString.
  */
-proc fixTrailingZeros(const text, n:integral, ref A: [],
-                      type characterType, type offsetType,
-                      type cachedDataType) {
+proc fixTrailingZeros(const text, n:integral, ref A: []) {
 
   // We use 0s to indicate padding which can happen at the end of
   // the string. If the input also ended with 0s, then we need to
@@ -673,44 +665,31 @@ proc fixTrailingZeros(const text, n:integral, ref A: [],
 
   Return an array representing this suffix array.
   */
-proc computeSuffixArrayDirectly(const text, n:integral,
-                                type characterType, type offsetType,
-                                type cachedDataType) {
-  const useN = n:offsetType;
-  const cfg = new ssortConfig(idxType = text.idxType,
-                              characterType = characterType,
-                              offsetType = offsetType,
-                              cachedDataType = cachedDataType,
-                              cover = new differenceCover(DEFAULT_PERIOD));
-
+proc computeSuffixArrayDirectly(const cfg:ssortConfig(?),
+                                const text, n: cfg.offsetType) {
   // First, construct the offsetAndCached array that will be sorted.
-  var A = buildAllOffsets(offsetType=offsetType, cachedDataType=cachedDataType,
-                          text, useN);
+  var A = buildAllOffsets(cfg, text, n);
 
-  sortSuffixesByPrefix(cfg, text, n=useN, A, maxPrefix=max(offsetType));
+  sortSuffixesByPrefix(cfg, text, n, A, maxPrefix=max(cfg.offsetType));
 
-  fixTrailingZeros(text, n, A,
-                   characterType=characterType,
-                   offsetType=offsetType,
-                   cachedDataType=cachedDataType);
+  fixTrailingZeros(text, n, A);
 
   return A;
 }
 
-proc makeSampleOffset(type offsetType, type cachedDataType,
-                      i: offsetType,
-                      const text, n: offsetType,
-                      cover: differenceCover(?)) {
+proc makeSampleOffset(const cfg: ssortConfig(?),
+                      i: cfg.offsetType,
+                      const text, n: cfg.offsetType) {
   // i is a packed index into the offsets to sample
   // we have to unpack it to get the regular offset
+  type offsetType = cfg.offsetType;
+  const ref cover = cfg.cover;
   const whichPeriod = i / cover.sampleSize;
   const phase = i % cover.sampleSize;
   const coverVal = cover.cover[phase]:offsetType;
   const unpackedIdx = whichPeriod * cover.period + coverVal;
 
-  return makeOffsetAndCached(offsetType=offsetType,
-                             cachedDataType=cachedDataType,
-                             unpackedIdx, text, n);
+  return makeOffsetAndCached(cfg, unpackedIdx, text, n);
 }
 
 proc chooseIdxType(type offsetType) {
@@ -723,18 +702,17 @@ proc chooseIdxType(type offsetType) {
   Construct an array of suffixes (not yet sorted)
   for only those offsets in 0..<n that are also in the difference cover.
  */
-proc buildSampleOffsets(type offsetType, type cachedDataType,
-                        const text, n: offsetType,
-                        const cover: differenceCover(?),
-                        sampleN: offsetType) {
+proc buildSampleOffsets(const cfg: ssortConfig(?),
+                        const text, n: cfg.offsetType,
+                        sampleN: cfg.offsetType) {
+  const ref cover = cfg.cover;
   const nPeriods = myDivCeil(n, cover.period); // nPeriods * period >= n
   assert(sampleN == cover.sampleSize * nPeriods);
 
   const Dom = {0..<sampleN};
-  var SA:[Dom] offsetAndCached(offsetType, cachedDataType) =
+  var SA:[Dom] offsetAndCached(cfg.offsetType, cfg.cachedDataType) =
     forall i in Dom do
-      makeSampleOffset(offsetType=offsetType, cachedDataType=cachedDataType,
-                       i=i, text, n=n, cover);
+      makeSampleOffset(cfg, i, text, n);
 
   return SA;
 }
@@ -754,12 +732,11 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
   if !PARTITION_SORT_SAMPLE || nToSampleForSplitters >= sampleN {
     // Simpler approach: build sample offsets and sort them
     // does more random access and/or uses more memory (if caching data)
-    var Sample = buildSampleOffsets(offsetType=cfg.offsetType,
-                                    cachedDataType=cfg.cachedDataType,
-                                    thetext, n, cover, /*out*/ sampleN);
+    var Sample = buildSampleOffsets(cfg, thetext, n, sampleN);
     // then sort the these by the first cover.period characters;
     // note that these offsets are in 0..<n not 0..<mySampleN
-    sortSuffixesByPrefix(cfg, thetext, n=n, Sample, maxPrefix=cover.period);
+    param coverPrefix = cfg.getPrefixSize(cover.period);
+    sortSuffixesByPrefix(cfg, thetext, n=n, Sample, maxPrefix=coverPrefix);
 
     return Sample;
   } else {
@@ -769,17 +746,21 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
     // for the Sample.
     type offsetType = cfg.offsetType;
     type cachedDataType = cfg.cachedDataType;
-    type wordType = uint(64);
+    type wordType = cfg.loadWordType;
+
+    param coverPrefix = cfg.getPrefixSize(cover.period);
+
+    //writeln("PARTITION_SORT_SAMPLE with coverPrefix=", coverPrefix);
 
     record myPrefixComparator3 {
       proc keyPart(a: offsetAndCached(?), i: int):(int(8), wordType) {
         if a.cacheType == wordType {
-          return getKeyPartForOffsetAndCached(a, i=i,
-                                              cfg, thetext, n=n,
-                                              maxPrefix=cover.period);
+          return getKeyPartForOffsetAndCached(cfg, a, i,
+                                              thetext, n,
+                                              maxPrefix=coverPrefix);
         } else {
-          return getKeyPartForOffset(a.offset, i=i, cfg, wordType=wordType,
-                                     thetext, n, maxPrefix=cover.period);
+          return getKeyPartForOffset(cfg, a.offset, i,
+                                     thetext, n, maxPrefix=coverPrefix);
         }
       }
       proc keyPart(a: prefix(?), i: int):(int(8), wordType) {
@@ -790,8 +771,7 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
     record offsetProducer1 {
       proc eltType type do return offsetAndCached(offsetType, cachedDataType);
       proc this(i: offsetType) {
-        return makeSampleOffset(offsetType, cachedDataType, i,
-                                thetext, n, cover);
+        return makeSampleOffset(cfg, i, thetext, n);
       }
     }
 
@@ -801,9 +781,14 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
     // first, create a sorting sample of offsets in the cover
     const sp; // initialized below
     {
-      var randNums = new Random.randomStream(cfg.offsetType);
+      var randNums;
+      if SEED == 0 {
+        randNums = new Random.randomStream(cfg.offsetType);
+      } else {
+        randNums = new Random.randomStream(cfg.offsetType, seed=SEED);
+      }
       var SplittersSampleDom = {0..<nToSampleForSplitters};
-      type prefixType = makePrefix(0,thetext,n,cover,cfg.prefixWordType).type;
+      type prefixType = makePrefix(cfg, 0,thetext, n).type;
       var SplittersSample:[SplittersSampleDom] prefixType;
       for (x, r) in zip(SplittersSample,
                         randNums.next(SplittersSampleDom, 0, sampleN-1)) {
@@ -813,12 +798,12 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
         const phase = r % cover.sampleSize;
         const coverVal = cover.cover[phase]:offsetType;
         const unpackedIdx = whichPeriod * cover.period + coverVal;
-        x = makePrefix(unpackedIdx, thetext, n, cover, cfg.prefixWordType);
+        x = makePrefix(cfg, unpackedIdx, thetext, n);
       }
 
       // sort the sample and create the splitters
       sp = new splitters(SplittersSample, requestedNumBuckets, comparator,
-                         sampleIsSorted=false);
+                         howSorted=sortLevel.unsorted);
     }
 
     var Sample: [0..<sampleN] offsetAndCached(offsetType, cachedDataType);
@@ -836,24 +821,39 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
 
-      if TRACE {
+      /*if TRACE {
         writeln("sortSampleOffsets bucket ", bucketIdx,
                 " has ", bucketSize, " suffixes");
-      }
+
+        if sp.bucketHasLowerBound(bucketIdx) {
+          writeln("lower bound ", sp.bucketLowerBound(bucketIdx));
+        }
+        if sp.bucketHasEqualityBound(bucketIdx) {
+          writeln("equal bound ",
+                   sp.bucketEqualityBound(bucketIdx));
+        }
+        if sp.bucketHasUpperBound(bucketIdx) {
+          writeln("upper bound ", sp.bucketUpperBound(bucketIdx));
+        }
+
+        //writeln(Sample[bucketStart..bucketEnd]);
+      }*/
 
       if bucketSize > 1 {
-        if !sp.bucketHasEqualityBound(bucketIdx) &&
-           sp.bucketHasLowerBound(bucketIdx) &&
-           sp.bucketHasUpperBound(bucketIdx) {
+        if sp.bucketHasEqualityBound(bucketIdx) {
+          // nothing else to do because everything in this bucket
+          // has the same prefix
+        } else if sp.bucketHasLowerBound(bucketIdx) &&
+                  sp.bucketHasUpperBound(bucketIdx) {
           sortSuffixesByPrefixBounded(cfg, thetext, n=n,
                                       Sample[bucketStart..bucketEnd],
                                       sp.bucketLowerBound(bucketIdx),
                                       sp.bucketUpperBound(bucketIdx),
-                                      maxPrefix=cover.period);
+                                      maxPrefix=coverPrefix);
         } else {
           sortSuffixesByPrefix(cfg, thetext, n=n,
                                Sample[bucketStart..bucketEnd],
-                               maxPrefix=cover.period);
+                               maxPrefix=coverPrefix);
         }
         // TODO: adjust sort library call to avoid the ~2x array view overhead
         //   * by optimizing down to c_ptr for contiguous arrays, or
@@ -908,6 +908,22 @@ proc subproblemOffsetToOffset(subOffset: integral, cover, charsPerMod: integral)
 }
 
 /*
+  This function just helps to return the comparison result between two integers.
+  We could just return a - b, but that does not behave as expected with unsigned
+  types.
+ */
+inline proc compareIntegers(a: integral, b: a.type) {
+  if a < b {
+    return -1;
+  }
+  if a > b {
+    return 1;
+  }
+
+  return 0;
+}
+
+/*
    This function helps with compareSampleRanks when considering offsets
    after the end of the string, which can come up in the difference
    cover computation. We imagine that after the end of the string
@@ -923,12 +939,7 @@ proc compareEndOfString(a: integral, b: integral, n: integral) {
   if a >= n && b >= n {
     // if they are both past the end of the string, sort
     // them in reverse offset order
-    if a > b {
-      return -1; // a sorts before b
-    } else if a < b {
-      return 1;
-    }
-    // a == b handled above
+    return compareIntegers(b, a);
   }
 
   if a >= n { // && b < n, or would have returned above
@@ -942,36 +953,63 @@ proc compareEndOfString(a: integral, b: integral, n: integral) {
   return 0; // a < n && b < n, so nothing to say here about the ordering
 }
 
+inline proc comparePrefixAndSampleRanks(const cfg: ssortConfig(?),
+                                        const a: prefixAndSampleRanks(?),
+                                        const b: prefixAndSampleRanks(?),
+                                        const text, n: cfg.offsetType,
+                                        maxPrefix: cfg.offsetType) {
+  //writeln("comparePrefixAndSampleRanks(", a, ", ", b, ")");
+
+  // first, compare the first cover.period characters of text
+  const prefixCmp = comparePrefixes(cfg, a, b, text, n, maxPrefix);
+  if prefixCmp != 0 {
+    //writeln("returnA ", prefixCmp);
+    return prefixCmp;
+  }
+
+  const rankA = a.ranks[0];
+  const rankB = b.ranks[0];
+
+  // if the prefixes are the same, consider the end-of-string behavior
+  const cmpEnd = compareEndOfString(a.offset, b.offset, n);
+  if cmpEnd != 0 {
+    //writeln("returnB ", cmpEnd);
+    return cmpEnd;
+  }
+
+  // lastly, compare the sample ranks
+  //writeln("returnC ", compareIntegers(rankA, rankB));
+  return compareIntegers(rankA, rankB);
+}
+
+
 /*
   Assuming the prefix at two offsets matches, compare the offsets
   using the sample rank from the recursive subproblem.
  */
 proc compareSampleRanks(a: offsetAndCached(?), b: offsetAndCached(?),
                         n: integral, const SampleRanks, charsPerMod, cover) {
+  //writeln("compareSampleRanks(", a, ", ", b, ")");
+
   // find k such that a.offset+k and b.offset+k are both in the cover
   // (i.e. both are in the sample solved in the recursive problem)
   const k = cover.findInCover(a.offset % cover.period,
                               b.offset % cover.period);
+  //writeln("k is ", k);
 
   const aSampleOffset = offsetToSubproblemOffset(a.offset + k,
                                                  cover, charsPerMod);
   const bSampleOffset = offsetToSubproblemOffset(b.offset + k,
                                                  cover, charsPerMod);
-  var rankA = SampleRanks[aSampleOffset];
-  var rankB = SampleRanks[bSampleOffset];
+  const rankA = SampleRanks[aSampleOffset];
+  const rankB = SampleRanks[bSampleOffset];
 
   const cmp = compareEndOfString(a.offset + k, b.offset + k, n);
   if cmp != 0 {
     return cmp;
   }
 
-  if rankA < rankB {
-    return -1;
-  }
-  if rankA > rankB {
-    return 1;
-  }
-  return 0;
+  return compareIntegers(rankA, rankB);
 }
 proc compareSampleRanks(a: prefixAndSampleRanks(?), b: offsetAndCached(?),
                         n: integral, const SampleRanks, charsPerMod, cover) {
@@ -986,21 +1024,15 @@ proc compareSampleRanks(a: prefixAndSampleRanks(?), b: offsetAndCached(?),
 
   const bSampleOffset = offsetToSubproblemOffset(b.offset + k,
                                                  cover, charsPerMod);
-  var rankA = a.ranks[aRankIdx];
-  var rankB = SampleRanks[bSampleOffset];
+  const rankA = a.ranks[aRankIdx];
+  const rankB = SampleRanks[bSampleOffset];
 
   const cmp = compareEndOfString(a.offset + k, b.offset + k, n);
   if cmp != 0 {
     return cmp;
   }
 
-  if rankA < rankB {
-    return -1;
-  }
-  if rankA > rankB {
-    return 1;
-  }
-  return 0;
+  return compareIntegers(rankA, rankB);
 }
 
 
@@ -1011,16 +1043,24 @@ proc sortSuffixesCompletely(const cfg:ssortConfig(?),
                             const thetext, n: cfg.offsetType,
                             const SampleRanks, charsPerMod: cfg.offsetType,
                             ref A: [] offsetAndCached(?)) {
+
+  param coverPrefix = cfg.getPrefixSize(cfg.cover.period);
+
   record finalComparator1 {
     proc compare(a: offsetAndCached(?), b: offsetAndCached(?)) {
+      //writeln("finalComparator1(", a, ", ", b, ")");
       // first, compare the first cover.period characters of text
-      const prefixCmp=comparePrefixes(a, b, cfg, thetext, n, cfg.cover.period);
+      const prefixCmp=comparePrefixes(cfg, a, b, thetext, n, coverPrefix);
       if prefixCmp != 0 {
+        //writeln("returnA ", prefixCmp);
         return prefixCmp;
       }
       // if the prefixes are the same, compare the nearby sample
       // rank from the recursive subproblem.
-      return compareSampleRanks(a, b, n, SampleRanks, charsPerMod, cfg.cover);
+      const cmp =
+        compareSampleRanks(a, b, n, SampleRanks, charsPerMod, cfg.cover);
+      //writeln("returnB ", cmp);
+      return cmp;
     }
   }
 
@@ -1040,7 +1080,7 @@ proc sortSuffixesCompletelyBounded(
 
   type characterType = cfg.characterType;
   type cachedDataType = cfg.cachedDataType;
-  type wordType = cfg.wordType;
+  param coverPrefix = cfg.getPrefixSize(cfg.cover.period);
 
   // compute the number of characters in common between lowerBound and
   // upperBound.
@@ -1054,7 +1094,7 @@ proc sortSuffixesCompletelyBounded(
     return;
   }
 
-  const useMaxPrefix=max(cfg.cover.period-nCharsCommon, 0);
+  const useMaxPrefix=max(coverPrefix - nCharsCommon, 0);
 
   record finalComparator2 {
     proc compare(a: offsetAndCached(?), b: offsetAndCached(?)) {
@@ -1062,8 +1102,8 @@ proc sortSuffixesCompletelyBounded(
       if useMaxPrefix > 0 {
         const aOffset = a.offset + nCharsCommon;
         const bOffset = b.offset + nCharsCommon;
-        const prefixCmp = comparePrefixes(aOffset, bOffset,
-                                          cfg, thetext, n,
+        const prefixCmp = comparePrefixes(cfg, aOffset, bOffset,
+                                          thetext, n,
                                           maxPrefix=useMaxPrefix);
         if prefixCmp != 0 {
           return prefixCmp;
@@ -1086,17 +1126,19 @@ proc sortSuffixesCompletelyBounded(
 proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
  : [0..<n] offsetAndCached(cfg.offsetType, cfg.cachedDataType) {
 
-  // figure out how big the sample will be, including a 0 after each mod
   type offsetType = cfg.offsetType;
   type cachedDataType = cfg.cachedDataType;
   const ref cover = cfg.cover;
+  param coverPrefix = cfg.getPrefixSize(cover.period);
+
+  // figure out how big the sample will be, including a 0 after each mod
   const charsPerMod = 1+myDivCeil(n, cover.period);
   const sampleN = cover.sampleSize * charsPerMod;
 
   if TRACE {
     writeln("in ssortDcx ", cfg.type:string, " n=", n);
-    writeln("thetext is ", thetext[0..<n]); // TODO remove me
-    writeln("charsPerMod is ", charsPerMod);
+    //writeln("thetext is ", thetext[0..<n]); // TODO remove me
+    //writeln("charsPerMod is ", charsPerMod);
   }
 
   if thetext.domain.low != 0 {
@@ -1116,10 +1158,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     if TRACE {
       writeln("Base case suffix sort for n=", n);
     }
-    return computeSuffixArrayDirectly(thetext, n,
-                                      characterType=cfg.characterType,
-                                      offsetType=offsetType,
-                                      cachedDataType=cachedDataType);
+    return computeSuffixArrayDirectly(cfg, thetext, n);
   }
 
   // set up information for recursive subproblem
@@ -1127,17 +1166,22 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     if (cachedDataType == nothing ||
         numBits(cachedDataType) >= numBits(offsetType))
     then cachedDataType
-    else offsetType;
+    else uint;
+  type subLoad =
+    if numBits(cfg.loadWordType) >= numBits(offsetType)
+    then cfg.loadWordType
+    else uint;
 
   const subCfg = new ssortConfig(idxType=cfg.idxType,
                                  characterType=offsetType,
                                  offsetType=offsetType,
                                  cachedDataType=subCached,
+                                 loadWordType=subLoad,
                                  cover=cover);
 
   var nTasks = computeNumTasks() * thetext.targetLocales().size;
-  writeln("nTasks is ", nTasks);
   var requestedNumBuckets = 8 * nTasks;
+  //writeln("nTasks is ", nTasks);
 
   //// Step 1: Sort Sample Suffixes ////
 
@@ -1145,10 +1189,9 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
   var SampleText:[0..<sampleN+INPUT_PADDING] subCfg.characterType;
   var allSamplesHaveUniqueRanks = false;
   // create a sample splitters that can be replaced later
-  var unusedSplitter = makePrefixAndSampleRanks(0, thetext, n,
+  var unusedSplitter = makePrefixAndSampleRanks(cfg, 0, thetext, n,
                                                 0, SampleText, sampleN,
-                                                charsPerMod=charsPerMod,
-                                                cover, cfg.prefixWordType);
+                                                charsPerMod);
   // these are initialized below
   const SampleSplitters1; // used if allSamplesHaveUniqueRanks
   const SampleSplitters2; // used otherwise
@@ -1160,7 +1203,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
                                      nTasks=nTasks,
                                      requestedNumBuckets=requestedNumBuckets,
                                      /*out*/ mySampleN);
-    writeln("Sample ", Sample);
+    //writeln("Sample ", Sample);
 
     // now, compute the rank of each of these. we need to compare
     // the first cover.period characters & assign different ranks when these
@@ -1179,8 +1222,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
 
 
     allSamplesHaveUniqueRanks = Ranks.last == mySampleN + 1;
-    writeln("Naming ranks ", Ranks);
-    writeln("allSamplesHaveUniqueRanks ", allSamplesHaveUniqueRanks);
+    //writeln("Naming ranks ", Ranks);
+    //writeln("allSamplesHaveUniqueRanks ", allSamplesHaveUniqueRanks);
 
     // create the input for the recursive subproblem from the offsets and ranks
     SampleText = 0; // PERF TODO: noinit it
@@ -1198,7 +1241,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
       SampleText[useIdx] = rank;
     }
 
-    writeln("SampleText ", SampleText[0..<mySampleN]);
+    //writeln("SampleText ", SampleText[0..<mySampleN]);
 
     if PARTITION_SORT_ALL && allSamplesHaveUniqueRanks {
       // set SampleSplitters to one based upon Sample sorted offsets
@@ -1213,19 +1256,26 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
           // find the index in the parent problem.
           const offset =
             subproblemOffsetToOffset(subOffset, cover, charsPerMod);
-          return makePrefixAndSampleRanks(offset, thetext, n,
+          return makePrefixAndSampleRanks(cfg, offset, thetext, n,
                                           subOffset, SampleText, sampleN,
-                                          charsPerMod=charsPerMod,
-                                          cover, cfg.prefixWordType);
+                                          charsPerMod);
         }
       }
-      const comparator = new prefixAndSampleRanksComparePrefixAndFirstRank();
+
+      record sampleComparator1 {
+        proc compare(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?)) {
+          return comparePrefixAndSampleRanks(cfg, a, b, thetext, n,
+                                             maxPrefix=coverPrefix);
+        }
+      }
+
+      const comparator = new sampleComparator1();
       // split-init SampleSplitters1
-      writeln("initing SampleSplitters1");
+      //writeln("initing SampleSplitters1");
       SampleSplitters1 = new splitters(new sampleCreator1(),
                                        requestedNumBuckets,
                                        comparator,
-                                       sampleIsSorted = true);
+                                       howSorted=sortLevel.approximately);
     } else {
       // This will not be used -- initializing it to keep compiler happy
       SampleSplitters1 = new splitters([unusedSplitter, unusedSplitter], false);
@@ -1237,14 +1287,14 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     const SubSA = ssortDcx(subCfg, SampleText, sampleN);
     if TRACE {
       writeln("back in ssortDcx n=", n);
-      writeln("SubSA is ", SubSA);
+      //writeln("SubSA is ", SubSA);
     }
     // Replace the values in SampleText with
     // 1-based ranks from the suffix array.
     forall (offset,rank) in zip(SubSA, SubSA.domain) {
       SampleText[offset.offset] = rank+1;
     }
-    writeln("SampleText is ", SampleText);
+    //writeln("SampleText is ", SampleText);
     if PARTITION_SORT_ALL {
       // replace SampleSplitters with one based the SubSA suffix array
       // and SampleText ranks.
@@ -1254,22 +1304,29 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
         proc this(i: int) {
           // i is an index into the subproblem suffix array, <sampleN.
           // find the offset in the subproblem
-          const subOffset = SubSA[i].offset;
+          var subOffset = SubSA[i].offset;
           // find the index in the parent problem.
-          const offset =
-            subproblemOffsetToOffset(subOffset, cover, charsPerMod);
-          return makePrefixAndSampleRanks(offset, thetext, n,
+          var offset = subproblemOffsetToOffset(subOffset, cover, charsPerMod);
+
+          return makePrefixAndSampleRanks(cfg, offset, thetext, n,
                                           subOffset, SampleText, sampleN,
-                                          charsPerMod=charsPerMod,
-                                          cover, cfg.prefixWordType);
+                                          charsPerMod);
         }
       }
-      const comparator = new prefixAndSampleRanksComparePrefixAndFirstRank();
-      writeln("initing SampleSplitters2");
+
+      record sampleComparator2 {
+        proc compare(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?)) {
+          return comparePrefixAndSampleRanks(cfg, a, b, thetext, n,
+                                             maxPrefix=coverPrefix);
+        }
+      }
+
+      const comparator = new sampleComparator2();
+      //writeln("initing SampleSplitters2");
       SampleSplitters2 = new splitters(new sampleCreator2(),
                                        requestedNumBuckets,
                                        comparator,
-                                       sampleIsSorted = true);
+                                       howSorted=sortLevel.approximately);
     } else {
        SampleSplitters2 = new splitters([unusedSplitter, unusedSplitter],
                                         false); // dummy to support split init
@@ -1285,33 +1342,11 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
   //// Step 2: Sort everything all together ////
   if !PARTITION_SORT_ALL {
     // simple sort of everything all together
-    var SA = buildAllOffsets(offsetType=offsetType,
-                             cachedDataType=cfg.cachedDataType,
-                             thetext, n);
+    var SA = buildAllOffsets(cfg, thetext, n);
 
-    record finalComparator1 {
-      proc compare(a: offsetAndCached(?), b: offsetAndCached(?)) {
-        // first, compare the first cover.period characters of text
-        const prefixCmp = comparePrefixes(a, b, cfg, thetext, n, cover.period);
-        if prefixCmp != 0 {
-          return prefixCmp;
-        }
-        // if the prefixes are the same, compare the nearby sample
-        // rank from the recursive subproblem.
-        return compareSampleRanks(a, b, n, SampleText, charsPerMod, cover);
-      }
-    }
+    sortSuffixesCompletely(cfg, thetext, n=n, SampleText, charsPerMod, SA);
 
-    writeln("final sort (simple) ranks are ", SampleText[0..<sampleN]);
-
-    sort(SA, new finalComparator1());
-
-    /*fixTrailingZeros(thetext, n, SA,
-                   characterType=cfg.characterType,
-                   offsetType=offsetType,
-                   cachedDataType=cfg.cachedDataType);*/
-
-    writeln("returning SA ", SA);
+    //writeln("returning SA ", SA);
     return SA;
 
   } else {
@@ -1323,9 +1358,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     record offsetProducer2 {
       proc eltType type do return offsetAndCached(offsetType, cachedDataType);
       proc this(i: offsetType) {
-        const ret = makeOffsetAndCached(offsetType, cachedDataType, i,
-                                        thetext, n);
-        writeln("offsetProducer2(", i, ") generated ", ret);
+        const ret = makeOffsetAndCached(cfg, i, thetext, n);
+        //writeln("offsetProducer2(", i, ") generated ", ret);
         return ret;
       }
     }
@@ -1333,19 +1367,12 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     record finalPartitionComparator {
       // note: this one should just be used for EXTRA_CHECKS
       proc compare(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?)) {
-        // first, compare the first cover.period characters of text
-        const prefixCmp = comparePrefixes(a, b, cfg, thetext, n, cover.period);
-        if prefixCmp != 0 {
-          return prefixCmp;
-        }
-        // if the prefixes are the same, compare the nearby sample
-        // rank from the recursive subproblem.
-        return a.ranks[0] - b.ranks[0];
+        return comparePrefixAndSampleRanks(cfg, a, b, thetext, n, coverPrefix);
       }
       // this is the main compare function used in the partition
       proc compare(a: prefixAndSampleRanks(?), b: offsetAndCached(?)) {
         // first, compare the first cover.period characters of text
-        const prefixCmp = comparePrefixes(a, b, cfg, thetext, n, cover.period);
+        const prefixCmp = comparePrefixes(cfg, a, b, thetext, n, coverPrefix);
         if prefixCmp != 0 {
           return prefixCmp;
         }
@@ -1364,13 +1391,13 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
                                 then SampleSplitters1
                                 else SampleSplitters2;
 
-    writeln("SampleSplitters ", SampleSplitters.sortedStorage);
+    //writeln("SampleSplitters is ", SampleSplitters.sortedStorage);
 
     const Counts = partition(InputProducer, SA, SampleSplitters, comparator,
                              0, n-1, nTasks);
 
-    writeln("final sort ranks are ", SampleText[0..<sampleN]);
-    writeln("final sort after partition SA is ", SA);
+    //writeln("final sort ranks are ", SampleText[0..<sampleN]);
+    //writeln("final sort after partition SA is ", SA);
 
     const Ends = + scan Counts;
 
@@ -1381,7 +1408,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
 
-      if TRACE {
+      /*if TRACE {
         writeln("final sort bucket ", bucketIdx,
                 " has ", bucketSize, " suffixes");
         if SampleSplitters.bucketHasLowerBound(bucketIdx) {
@@ -1395,8 +1422,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
           writeln("upper bound ", SampleSplitters.bucketUpperBound(bucketIdx));
         }
 
-        writeln("Bucket is ", SA[bucketStart..bucketEnd]);
-      }
+        //writeln("Bucket is ", SA[bucketStart..bucketEnd]);
+      }*/
 
       if bucketSize > 1 && !SampleSplitters.bucketHasEqualityBound(bucketIdx) {
         if SampleSplitters.bucketHasLowerBound(bucketIdx) &&
@@ -1417,13 +1444,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
 
     assert(Ends.last == n);
 
-    /*
-    fixTrailingZeros(thetext, n, SA,
-                   characterType=cfg.characterType,
-                   offsetType=offsetType,
-                   cachedDataType=cfg.cachedDataType);*/
-
-    writeln("returning SA ", SA);
+    //writeln("returning SA ", SA);
     return SA;
   }
 }
