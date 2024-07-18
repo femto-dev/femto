@@ -156,7 +156,7 @@ record differenceCover {
    Given offset i with 0 <= i < period, returns 'true'
    if and only if 'i' is in the difference cover.
    */
-  inline proc containedInCover(i: integral) : bool{
+  inline proc containedInCover(i: integral) : bool {
     if EXTRA_CHECKS {
       assert(0 <= i && i < period);
     }
@@ -168,7 +168,7 @@ record differenceCover {
      * if it is in the difference cover, returns j such that cover[j] = i
      * otherwise, returns -1
    */
-  inline proc coverIndex(i: integral) : i.type{
+  inline proc coverIndex(i: integral) : i.type {
     if EXTRA_CHECKS {
       assert(0 <= i && i < period);
     }

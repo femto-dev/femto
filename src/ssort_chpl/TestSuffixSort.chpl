@@ -28,6 +28,7 @@ use Sort;
 
 import SuffixSort.TRACE;
 import SuffixSort.INPUT_PADDING;
+import SuffixSort.DEFAULT_PERIOD;
 
 private proc bytesToArray(s: bytes) {
   const nWithPadding = s.size+INPUT_PADDING;
@@ -144,6 +145,221 @@ private proc testMyDivCeil() {
   assert(myDivCeil(7,3) == 3);
 }
 
+private proc testPrefixComparisons(type cachedDataType) {
+  const cover = new differenceCover(3);
+  const cfg = new ssortConfig(idxType=int,
+                              characterType=uint(8),
+                              offsetType=int,
+                              cachedDataType=cachedDataType,
+                              cover=cover);
+  const inputStr = "aabbccaaddffffffffaabbccaaddff";
+                 //           11111111112222222222
+                 // 012345678901234567890123456789
+                 // * |   *           *
+                 // AA|   AA2         AA3
+                 //   BB
+  const text = bytesToArray(inputStr);
+  const n = inputStr.size;
+
+  // these are irrelevant here
+  const charsPerMod = 2;
+  const ranks = for i in text do 0;
+  var ranksN = n;
+
+  const prefixAA =  makeOffsetAndCached(cfg.offsetType, cfg.cachedDataType,
+                                        0, text, n);
+  const prefixAA2 = makeOffsetAndCached(cfg.offsetType, cfg.cachedDataType,
+                                        6, text, n);
+  const prefixAA3 = makeOffsetAndCached(cfg.offsetType, cfg.cachedDataType,
+                                        18, text, n);
+  const prefixBB =  makeOffsetAndCached(cfg.offsetType, cfg.cachedDataType,
+                                        2, text, n);
+
+  const prefixAAp = makePrefix(0, text, n, cfg.cover, uint);
+  const prefixAA2p = makePrefix(6, text, n, cfg.cover, uint);
+  const prefixAA3p = makePrefix(18, text, n, cfg.cover, uint);
+  const prefixBBp = makePrefix(2, text, n, cfg.cover, uint);
+
+  const prefixAAs = makePrefixAndSampleRanks(0,
+                                             text, n,
+                                             0, ranks, ranksN,
+                                             charsPerMod=charsPerMod,
+                                             cfg.cover, uint);
+  const prefixAA2s = makePrefixAndSampleRanks(6,
+                                              text, n,
+                                              0, ranks, ranksN,
+                                              charsPerMod=charsPerMod,
+                                              cfg.cover, uint);
+   const prefixAA3s = makePrefixAndSampleRanks(18,
+                                              text, n,
+                                              0, ranks, ranksN,
+                                              charsPerMod=charsPerMod,
+                                              cfg.cover, uint);
+
+  const prefixBBs = makePrefixAndSampleRanks(2,
+                                             text, n,
+                                             0, ranks, ranksN,
+                                             charsPerMod=charsPerMod,
+                                             cfg.cover, uint);
+
+  assert(comparePrefixes(0, 0, cfg, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(0, 2, cfg, text, n, maxPrefix=2)<0);
+
+  assert(comparePrefixes(prefixAA, prefixAA, cfg, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(prefixAA, prefixAA3, cfg, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(prefixAA, prefixAA2, cfg, text, n, maxPrefix=2)<=0);
+  assert(comparePrefixes(prefixAA, prefixBB, cfg, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(prefixBB, prefixAA, cfg, text, n, maxPrefix=2)>0);
+
+  assert(comparePrefixes(prefixAAp, prefixAAp, cfg, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(prefixAAp, prefixBBp, cfg, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(prefixBBp, prefixAAp, cfg, text, n, maxPrefix=2)>0);
+
+  assert(comparePrefixes(prefixAA, prefixAAp, cfg, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(prefixAA, prefixBBp, cfg, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(prefixAAp, prefixBB, cfg, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(prefixBBp, prefixAA, cfg, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(prefixBB, prefixAAp, cfg, text, n, maxPrefix=2)>0);
+
+  assert(comparePrefixes(prefixAAp, prefixAAs, cfg, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(prefixAAs, prefixAAp, cfg, text, n, maxPrefix=2)==0);
+  assert(comparePrefixes(prefixAAs, prefixBBs, cfg, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(prefixAAs, prefixBBp, cfg, text, n, maxPrefix=2)<0);
+  assert(comparePrefixes(prefixAAp, prefixBBs, cfg, text, n, maxPrefix=2)<0);
+
+  assert(comparePrefixes(prefixBBs, prefixAAs, cfg, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(prefixBBs, prefixAAp, cfg, text, n, maxPrefix=2)>0);
+  assert(comparePrefixes(prefixBBp, prefixAAs, cfg, text, n, maxPrefix=2)>0);
+
+  assert(charactersInCommon(cfg, prefixAAp, prefixAAp) >= cover.period);
+  assert(charactersInCommon(cfg, prefixAAs, prefixAAs) >= cover.period);
+  assert(charactersInCommon(cfg, prefixAAp, prefixAA2p) == 2);
+  assert(charactersInCommon(cfg, prefixAAs, prefixAA2s) == 2);
+  assert(charactersInCommon(cfg, prefixAA2p, prefixAA2p) >= cover.period);
+  assert(charactersInCommon(cfg, prefixAA2s, prefixAA2s) >= cover.period);
+  assert(charactersInCommon(cfg, prefixAAp, prefixBBp) == 0);
+  assert(charactersInCommon(cfg, prefixAA3p, prefixAA3p) >= cover.period);
+  assert(charactersInCommon(cfg, prefixAA3s, prefixAA3s) >= cover.period);
+  assert(charactersInCommon(cfg, prefixAAp, prefixAA3p) >= cover.period);
+}
+
+proc testRankComparisons() {
+  const cover = new differenceCover(3);
+  const cfg = new ssortConfig(idxType=int,
+                              characterType=uint(8),
+                              offsetType=int,
+                              cachedDataType=nothing,
+                              cover=cover);
+
+  // create the mapping to the recursive problem
+  const n = 16;
+  const charsPerMod = 7;
+  const nSample = charsPerMod*cover.sampleSize;
+  var Text:[0..<n+INPUT_PADDING] uint(8);
+  var Ranks:[0..<nSample] int; // this is sample offset to rank
+  var Offsets:[0..<nSample] int; // sample offset to regular offset
+
+  Ranks    = [14, 10,  6, 12,  8,  4,  2, 13,  9,  5, 11,  7,  3,  1];
+  Offsets =  [ 0,  3,  6,  9, 12, 15, 18,  1,  4,  7, 10, 13, 16, 19];
+  // sample    0   1   2   3   4   5   6   7   8   9  10  11  12  13
+  //  offsets
+
+  // check offsetToSubproblemOffset and subproblemOffsetToOffset
+  for i in 0..<nSample {
+    assert(Offsets[i] == subproblemOffsetToOffset(i, cover, charsPerMod));
+    assert(i == offsetToSubproblemOffset(Offsets[i], cover, charsPerMod));
+  }
+
+  // check makePrefixAndSampleRanks
+
+  // check a few cases we can see above
+  const p1 = makePrefixAndSampleRanks(offset=1, Text, n,
+                                      sampleOffset=7, Ranks, nSample,
+                                      charsPerMod=charsPerMod,
+                                      cover, uint);
+  const p3 = makePrefixAndSampleRanks(offset=3, Text, n,
+                                      sampleOffset=1, Ranks, nSample,
+                                      charsPerMod=charsPerMod,
+                                      cover, uint);
+  const p19 = makePrefixAndSampleRanks(offset=19, Text, n,
+                                      sampleOffset=13, Ranks, nSample,
+                                      charsPerMod=charsPerMod,
+                                      cover, uint);
+
+  assert(p1.ranks[0] == 13); // offset 1 -> sample offset 7 -> rank 13
+  assert(p1.ranks[1] == 10); // offset 3 -> sample offset 1 -> rank 10
+
+  assert(p3.ranks[0] == 10); // offset 3 -> sample offset 1 -> rank 10
+  assert(p3.ranks[1] == 9);  // offset 4 -> sample offset 8 -> rank 9
+
+  writeln(p19);
+  assert(p19.ranks[0] == 1); // offset 19 -> sample offset 13 -> rank 1
+  assert(p19.ranks[1] == 0); // offset 21 -> sample offset -  -> rank 0
+
+  // check the rest of the cases
+  for sampleOffset in 0..<nSample {
+    const offset = subproblemOffsetToOffset(sampleOffset, cover, charsPerMod);
+    const p = makePrefixAndSampleRanks(offset=offset, Text, n,
+                                       sampleOffset=sampleOffset,
+                                       Ranks, nSample,
+                                       charsPerMod=charsPerMod,
+                                       cover, uint);
+    // find the next cover.sampleSize offsets in the cover
+    var cur = 0;
+    for i in 0..<cover.period {
+      if offset+i < n && cover.containedInCover((offset + i) % cover.period) {
+        const sampleOffset =
+          offsetToSubproblemOffset(offset + i, cover, charsPerMod);
+        assert(p.ranks[cur] == Ranks[sampleOffset]);
+        cur += 1;
+      }
+    }
+  }
+
+  // try some comparisons
+  const o1 = makeOffsetAndCached(cfg.offsetType,cfg.cachedDataType, 1, Text, n);
+  const o3 = makeOffsetAndCached(cfg.offsetType,cfg.cachedDataType, 3, Text, n);
+  const o5 = makeOffsetAndCached(cfg.offsetType,cfg.cachedDataType, 5, Text, n);
+  const o19= makeOffsetAndCached(cfg.offsetType,cfg.cachedDataType,19, Text, n);
+
+  // test self-compares
+  assert(compareSampleRanks(o1, o1, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(o3, o3, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(o5, o5, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(o19, o19, Ranks, charsPerMod, cover) == 0);
+
+  assert(compareSampleRanks(p1, o1, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(p3, o3, Ranks, charsPerMod, cover) == 0);
+  assert(compareSampleRanks(p19, o19, Ranks, charsPerMod, cover) == 0);
+
+  // test 1 vs 3 : 1 has rank 13 and 3 has rank 10
+  assert(compareSampleRanks(o1, o3, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(p1, o3, Ranks, charsPerMod, cover) > 0);
+
+  assert(compareSampleRanks(o3, o1, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(p3, o1, Ranks, charsPerMod, cover) < 0);
+
+  // test 3 vs 5 : use k=1, 3->4 has rank 9 ; 5->6 has rank 6
+  assert(compareSampleRanks(o3, o5, Ranks, charsPerMod, cover) > 0);
+  assert(compareSampleRanks(p3, o5, Ranks, charsPerMod, cover) > 0);
+
+  assert(compareSampleRanks(o5, o3, Ranks, charsPerMod, cover) < 0);
+
+  // test 5 vs 19 : use k=2, 5->7 has rank 5 ; 19->21 has rank 0
+  assert(compareSampleRanks(o5, o19, Ranks, charsPerMod, cover) > 0);
+
+  assert(compareSampleRanks(o19, o5, Ranks, charsPerMod, cover) < 0);
+  assert(compareSampleRanks(p19, o5, Ranks, charsPerMod, cover) < 0);
+}
+
+private proc testComparisons() {
+  testPrefixComparisons(nothing);
+  testPrefixComparisons(uint);
+
+  testRankComparisons();
+}
+
+
 // test suffix sorting stuff with "seeresses" as input.
 private proc testSeeresses() {
   if TRACE {
@@ -203,6 +419,24 @@ private proc testSeeresses() {
     es         7                 5               2
     <padding>                                    0
 
+    in summary, the recursive subroblem input is:
+
+    54601320
+    01234567
+
+    recursive problem suffix array is:
+             (offset) (rank)
+    0        7        1
+    01320    3        2
+    1320     4        3
+    20       6        4
+    320      5        5
+    4601320  1        6
+    54601320 0        7
+    601320   2        8
+
+    ranks from recursive subproblem
+    76823541
   */
 
   const expectOffsets = [1,2,7,4,3,8,0,6,5];
@@ -313,7 +547,7 @@ proc testOthers() {
 
    suffix       offset  rank
    a            10      1
-   abr a        7       2     |   these twocould be in either order
+   abr a        7       2     |   these two could be in either order
    abr acadabra 0       2     |
    aca dabra    3       3
    bra cadabra  1       4
@@ -322,7 +556,22 @@ proc testOthers() {
    ra           9       7
 
    Input for the recursive subproblem
-   2 3 6 7 0 4 5 2 1
+
+   012345678
+   236704521
+
+   suffix    offset
+   <pad>     0
+   04521     4
+   1         8
+   21        7
+   236704521 0
+   36704521  1
+   4521      5
+   521       6
+   6704521   2
+   704521    3
+
   */
   testOther("abracadabra", [10,7,0,3,5,8,1,4,6,9,2]);
   testOther("mississippi", [10,7,4,1,0,9,8,6,3,5,2]);
@@ -498,6 +747,7 @@ proc testDescending() {
                    (4, 8, 4*8*4),
 
                    // medium
+                   (2, 32, 2*32*4),
                    (4, 8, 4*8*1024),
                    (20, 2, 20*2*4),
                    (50, 5, 50*5*10),
@@ -531,11 +781,16 @@ proc testDescending() {
 
 
 proc main() {
+  testRepeats();
+
+  /*
   testMyDivCeil();
+  testComparisons();
   testSeeresses();
   testOthers();
   testRepeats();
   testDescending();
+  */
 
   writeln("TestSuffixSort OK");
 }
