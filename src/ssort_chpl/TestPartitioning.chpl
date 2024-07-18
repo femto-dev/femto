@@ -62,7 +62,8 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
                       randNums.next(SplittersSampleDom, 0, n-1)) {
       x = r;
     }
-    sp = new splitters(SplittersSample, abs(nSplit), defaultComparator, false);
+    sp = new splitters(SplittersSample, abs(nSplit), defaultComparator,
+                       howSorted=sorted.unsorted);
   }
 
   assert(isSorted(sp.sortedStorage));
@@ -136,7 +137,8 @@ proc testPartitionsEven(n: int, nSplit: int) {
   var Output: [0..<n] int = -1;
 
   var Sample = Input;
-  const sp = new splitters(Sample, nSplit, defaultComparator, false);
+  const sp = new splitters(Sample, nSplit, defaultComparator,
+                           howSorted=sorted.unsorted);
   assert(isSorted(sp.sortedStorage));
 
   const nBuckets = sp.numBuckets;
@@ -174,7 +176,8 @@ proc testPartitionSingleSplitter(n: int) {
   var Output: [0..<n] int = -1;
 
   var Sample = [n/2, n/2, n/2, n/2, n/2, n/2];
-  const sp = new splitters(Sample, 100, defaultComparator, false);
+  const sp = new splitters(Sample, 100, defaultComparator,
+                           howSorted=sorted.unsorted);
   assert(isSorted(sp.sortedStorage));
 
   const nBuckets = sp.numBuckets;
@@ -196,8 +199,7 @@ proc testPartitionSingleSplitter(n: int) {
   assert(total == n);
 }
 
-
-proc main() {
+proc testPartitions() {
   testPartition(10, 4, false, 1);
   testPartition(10, 4, true, 1);
   testPartition(100, 20, false, 1);
@@ -226,6 +228,16 @@ proc main() {
 
   // test that creating a single splitter works OK
   testPartitionSingleSplitter(10);
+}
+
+proc main() {
+  serial {
+    writeln("Testing partitioning with one task");
+    testPartitions();
+  }
+
+  writeln("Testing partitioning with many tasks");
+  testPartitions();
 
   writeln("TestPartitioning OK");
 }

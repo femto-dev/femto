@@ -98,6 +98,13 @@ private inline proc myCompareByPart(a, b, comparator) {
   return 1;
 }
 
+/* This enum describes to what extent the sample is already sorted */
+enum sortLevel {
+  unsorted,
+  approximately,
+  fully
+}
+
 // Compute splitters from a sorted sample.
 // Returns an array of splitters that is of size 2**n,
 // where only the first 2**n-1 elements are used.
@@ -105,6 +112,7 @@ private inline proc myCompareByPart(a, b, comparator) {
 private proc computeSplitters(const SortedSample,
                               in requestedNumBuckets: int,
                               comparator,
+                              reSort: bool,
                               out useEqualBuckets: bool) {
   if requestedNumBuckets > SortedSample.size then
     requestedNumBuckets = SortedSample.size;
@@ -130,6 +138,9 @@ private proc computeSplitters(const SortedSample,
 
   // if there are no duplicates, proceed with what we have
   if nDuplicates == 0 {
+    if reSort {
+      sort(SortedSplitters[0..<numSplitters], comparator);
+    }
     if EXTRA_CHECKS {
       assert(isSorted(SortedSplitters[0..<numSplitters], comparator));
     }
@@ -161,6 +172,9 @@ private proc computeSplitters(const SortedSample,
     next += 1;
   }
 
+  if reSort {
+    sort(SortedSplitters[0..<numSplitters], comparator);
+  }
   if EXTRA_CHECKS {
     assert(isSorted(SortedSplitters[0..<numSplitters], comparator));
   }
@@ -209,30 +223,32 @@ record splitters : writeSerializable {
   }
 
   // create splitters based upon a sample of data.
-  // Sample is an array or something like it.
   proc init(const Sample,
             requestedNumBuckets: int,
             comparator,
-            param sampleIsSorted: bool) where sampleIsSorted==true {
+            param howSorted: sortLevel) where howSorted!=sortLevel.unsorted {
     var useEqualBuckets = false;
     const Splitters = computeSplitters(Sample, requestedNumBuckets,
-                                       comparator, /*out*/ useEqualBuckets);
+                                       comparator,
+                                       reSort=
+                                         (howSorted==sortLevel.approximately),
+                                       /*out*/ useEqualBuckets);
 
     this.init(Splitters, useEqualBuckets);
   }
 
+  // create splitters based upon a sample of data by sorting it
   proc init(ref Sample:[],
             requestedNumBuckets: int,
             comparator,
-            param sampleIsSorted: bool) where sampleIsSorted==false {
-    // sort the sample if necessary
-    if !sampleIsSorted {
-      sort(Sample, comparator);
-    }
+            param howSorted: sortLevel) where howSorted==sortLevel.unsorted {
+    // sort the sample
+    sort(Sample, comparator);
 
     var useEqualBuckets = false;
     const Splitters = computeSplitters(Sample, requestedNumBuckets,
-                                       comparator, /*out*/ useEqualBuckets);
+                                       comparator, reSort=false,
+                                       /*out*/ useEqualBuckets);
 
     this.init(Splitters, useEqualBuckets);
   }
