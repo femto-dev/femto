@@ -41,6 +41,8 @@ config const SAMPLE_RATIO = 1.5;
 config const PARTITION_SORT_SAMPLE = true;
 config const PARTITION_SORT_ALL = true;
 config const SEED = 1;
+config const MIN_BUCKETS_PER_TASK = 8;
+config const MIN_BUCKETS = 10_000;
 
 /**
  This record contains the configuration for the suffix sorting
@@ -268,10 +270,12 @@ inline proc makeOffsetAndCached(const cfg: ssortConfig(?),
 
 /**
   Construct an prefix record for offset 'offset' in the input
-  by loading the relevant data from 'text'.
+  by loading the relevant data from 'text'. The prefix stores
+  at least k characters.
  */
 proc makePrefix(const cfg: ssortConfig(?), offset: cfg.offsetType,
-                const text, n: cfg.offsetType) {
+                const text, n: cfg.offsetType,
+                param k = cfg.cover.period) {
   type characterType = cfg.characterType;
   type wordType = cfg.loadWordType;
   const ref cover = cfg.cover;
@@ -279,7 +283,7 @@ proc makePrefix(const cfg: ssortConfig(?), offset: cfg.offsetType,
   param wordBytes = numBytes(wordType);
   param textCharBytes = numBytes(characterType);
   param charsPerWord = wordBytes / textCharBytes;
-  param nWords = myDivCeil(cover.period, charsPerWord);
+  param nWords = myDivCeil(k, charsPerWord);
   if wordBytes < textCharBytes || !isUintType(wordType) {
     compilerError("invalid makePrefix call");
   }
@@ -506,7 +510,6 @@ inline proc comparePrefixes(const cfg: ssortConfig(?),
 }
 
 /* This is helpful for computing ranks based on first v characters. */
-private
 proc prefixDiffersFromPrevious(const cfg:ssortConfig(?),
                                i: cfg.offsetType,
                                const Sample: [] offsetAndCached(?),
@@ -1180,7 +1183,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
                                  cover=cover);
 
   var nTasks = computeNumTasks() * thetext.targetLocales().size;
-  var requestedNumBuckets = 8 * nTasks;
+  var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks, MIN_BUCKETS);
+
   //writeln("nTasks is ", nTasks);
 
   //// Step 1: Sort Sample Suffixes ////
