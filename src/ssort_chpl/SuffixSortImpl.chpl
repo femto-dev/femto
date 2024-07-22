@@ -1454,4 +1454,155 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
 }
 
 
+/** Sort the suffixes on the first k characters and output
+    those kmers that occur only once.
+ */
+/*proc minUniqueKImpl(const cfg:ssortConfig(?),
+                    const thetext, n: cfg.offsetType,
+                    const nTasks: int,
+                    const requestedNumBuckets: int,
+                    param k: int) {
+  // To better avoid random access,
+  // go through the input & partition by a splitter
+  // while creating the offset & storing it into an output array
+  // for the Sample.
+  type offsetType = cfg.offsetType;
+  type cachedDataType = cfg.cachedDataType;
+  type wordType = cfg.loadWordType;
+  var nToSampleForSplitters = (SAMPLE_RATIO*requestedNumBuckets):int;
+
+  record myPrefixComparatorK {
+    proc keyPart(a: offsetAndCached(?), i: int):(int(8), wordType) {
+      if a.cacheType == wordType {
+        return getKeyPartForOffsetAndCached(cfg, a, i,
+                                            thetext, n,
+                                            maxPrefix=k);
+      } else {
+        return getKeyPartForOffset(cfg, a.offset, i,
+                                   thetext, n, maxPrefix=k);
+      }
+    }
+    proc keyPart(a: prefix(?), i: int):(int(8), wordType) {
+      return getKeyPartForPrefix(a, i);
+    }
+  }
+
+  record offsetProducerK {
+    proc eltType type do return offsetAndCached(offsetType, cachedDataType);
+    proc this(i: offsetType) {
+      return makeOffsetAndCached(cfg, i, thetext, n);
+    }
+  }
+
+  const comparator = new myPrefixComparatorK();
+  const InputProducer = new offsetProducerK();
+
+  // first, create a sorting sample of offsets in the cover
+  const sp; // initialized below
+  {
+    var randNums;
+    if SEED == 0 {
+      randNums = new Random.randomStream(cfg.offsetType);
+    } else {
+      randNums = new Random.randomStream(cfg.offsetType, seed=SEED);
+    }
+    var SplittersSampleDom = {0..<nToSampleForSplitters};
+    type prefixType = makePrefix(cfg, 0,thetext, n, k=k).type;
+    var SplittersSample:[SplittersSampleDom] prefixType;
+    for (x, r) in zip(SplittersSample,
+                      randNums.next(SplittersSampleDom, 0, n-1)) {
+      x = makePrefix(cfg, r, thetext, n, k=k);
+    }
+
+    // sort the sample and create the splitters
+    sp = new splitters(SplittersSample, requestedNumBuckets, comparator,
+                       howSorted=sortLevel.unsorted);
+  }
+
+  var Offsets: [0..<n] offsetAndCached(offsetType, cachedDataType);
+
+  // now, count & partition by the prefix by traversing over the input
+  const Counts = partition(InputProducer, Offsets, sp, comparator,
+                           0, n-1, nTasks);
+
+  const Ends = + scan Counts;
+
+  var nUniqueKmers = 0;
+
+  // now, consider each bucket & sort within that bucket
+  const nBuckets = sp.numBuckets;
+  forall bucketIdx in 0..<nBuckets with (+ reduce nUniqueKmers) {
+    const bucketSize = Counts[bucketIdx];
+    const bucketStart = Ends[bucketIdx] - bucketSize;
+    const bucketEnd = bucketStart + bucketSize - 1;
+
+    if TRACE {
+      writeln("minUniqueK bucket ", bucketIdx,
+              " has ", bucketSize, " suffixes");
+
+      /*
+      if sp.bucketHasLowerBound(bucketIdx) {
+        writeln("lower bound ", sp.bucketLowerBound(bucketIdx));
+      }
+      if sp.bucketHasEqualityBound(bucketIdx) {
+        writeln("equal bound ",
+                 sp.bucketEqualityBound(bucketIdx));
+      }
+      if sp.bucketHasUpperBound(bucketIdx) {
+        writeln("upper bound ", sp.bucketUpperBound(bucketIdx));
+      }*/
+
+      //writeln(Sample[bucketStart..bucketEnd]);
+    }
+
+    if bucketSize == 0 {
+      // nothing to do
+    } else if bucketSize == 1 {
+      nUniqueKmers += 1;
+      //writeln("Bucket size 1, reporting: ", Offsets[bucketStart]);
+    } else if sp.bucketHasEqualityBound(bucketIdx) {
+      // it can't be unique so continue
+    } else {
+      // sort the bucket and report
+      if sp.bucketHasLowerBound(bucketIdx) &&
+         sp.bucketHasUpperBound(bucketIdx) {
+        sortSuffixesByPrefixBounded(cfg, thetext, n=n,
+                                    Offsets[bucketStart..bucketEnd],
+                                    sp.bucketLowerBound(bucketIdx),
+                                    sp.bucketUpperBound(bucketIdx),
+                                    maxPrefix=k);
+      } else {
+        sortSuffixesByPrefix(cfg, thetext, n=n,
+                             Offsets[bucketStart..bucketEnd],
+                             maxPrefix=k);
+      }
+
+      for i in bucketStart..bucketEnd {
+        if prefixDiffersFromPrevious(cfg, i, Offsets, thetext, n, maxPrefix=k) {
+          nUniqueKmers += 1;
+          //writeln("reporting: ", Offsets[i]);
+        }
+      }
+
+      // TODO: adjust sort library call to avoid the ~2x array view overhead
+      //   * by optimizing down to c_ptr for contiguous arrays, or
+      //   * by allowing passing the array bounds
+      // Or, consider using MSB Radix Sort to avoid that overhead here.
+    }
+  }
+
+  writeln("Found ", nUniqueKmers, " unique k-mers");
+}
+
+proc minUniqueK(const cfg:ssortConfig(?),
+                const thetext, n: cfg.offsetType,
+                param k: int) {
+  var nTasks = computeNumTasks() * thetext.targetLocales().size;
+  var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks, MIN_BUCKETS);
+
+  minUniqueKImpl(cfg, thetext, n, nTasks, requestedNumBuckets, k);
+}
+*/
+
+
 }
