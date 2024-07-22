@@ -20,7 +20,7 @@
 module DifferenceCovers {
 
 
-config param EXTRA_CHECKS = false;
+import SuffixSort.EXTRA_CHECKS;
 
 const cover3    = (0,1); // alternately, 1,2
 const cover7    = (0,1,3);
@@ -103,15 +103,15 @@ record differenceCover {
   param period;
 
   /** given (i-j)mod v, return i' so that l=(i`-i) mod v
-      and (i+l) mod v and (j+l) mod v are both in 
+      and (i+l) mod v and (j+l) mod v are both in
       the difference cover. */
-  /*private*/ const ellTable: period*int; 
+  /*private*/ const ellTable: period*int;
 
   /** sample[i mod v]=index s.t. cover[index]=i, else -1 */
   /*private*/ const sampleTable: period*int;
 
   /** returns the size of the difference cover, that is, cover.size */
-  proc sampleSize param : int { return coverTuple(period).size; }  
+  proc sampleSize param : int { return coverTuple(period).size; }
   /** returns period - sampleSize */
   proc nonsampleSize param : int { return period - sampleSize; }
   /** returns the cover tuple */
@@ -122,14 +122,14 @@ record differenceCover {
     this.ellTable = makeEllTable(period);
     this.sampleTable = makeSampleTable(period);
   }
-    
+
   /**
     Given offsets i and j, with 0 <= i < period and 0 <= j < period,
     return k such that (i+k) mod period and (j+k) mod period
     are in in the difference cover.
     Returns such a k.
    */
-  inline proc findInCover(i: int, j: int) : int {
+  inline proc findInCover(i: integral, j: i.type) : i.type  {
     if EXTRA_CHECKS {
       assert(0 <= i && i < period);
       assert(0 <= j && j < period);
@@ -156,7 +156,7 @@ record differenceCover {
    Given offset i with 0 <= i < period, returns 'true'
    if and only if 'i' is in the difference cover.
    */
-  inline proc containedInCover(i: int) {
+  inline proc containedInCover(i: integral) : bool {
     if EXTRA_CHECKS {
       assert(0 <= i && i < period);
     }
@@ -168,78 +168,12 @@ record differenceCover {
      * if it is in the difference cover, returns j such that cover[j] = i
      * otherwise, returns -1
    */
-  inline proc coverIndex(i: int) {
+  inline proc coverIndex(i: integral) : i.type {
     if EXTRA_CHECKS {
       assert(0 <= i && i < period);
     }
-    return sampleTable[i];
+    return sampleTable[i] : i.type;
   }
-}
-
-proc testCover(param period) {
-  writeln("testing difference cover with period ", period);
-
-  const dc = new differenceCover(period);
-  assert(dc.sampleSize == dc.cover.size);
-
-  // print out information about this difference cover
-  var minDist = dc.period;
-  var maxDist = 0;
-  for i in 0..dc.sampleSize { // inclusive of top bound to consider last vs 0
-    const cur = dc.cover[i % dc.sampleSize];
-    var next = dc.cover[(i+1) % dc.sampleSize];
-    while next < cur do next += dc.period;
-    const dist = next - cur;
-    minDist = min(dist, minDist);
-    maxDist = max(dist, maxDist);
-  }
-
-  writeln("  sample size = ", dc.sampleSize);
-  writeln("  sample percentage = ", (100.0 * dc.sampleSize) / dc.period);
-  writeln("  min distance between samples = ", minDist);
-  writeln("  max distance between samples = ", maxDist);
-
-  // check containedInCover and coverIndex
-  for i in 0..<period {
-    var found = -1;
-    for j in 0..<dc.cover.size {
-      if dc.cover[j] == i then found = j;
-    }
-    assert(dc.containedInCover(i) == (found >= 0));
-    assert(dc.coverIndex(i) == found);
-  }
-  
-  // check findInCover
-  for i in 0..<period {
-    for j in 0..<period {
-      const k = dc.findInCover(i, j);
-      assert(0 <= k && k < period);
-      assert(dc.containedInCover((i + k) % period));
-      assert(dc.containedInCover((j + k) % period));
-    }
-  }
-}
-
-proc testCovers() {
-  testCover(3);
-  testCover(7);
-  testCover(13);
-  testCover(21);
-  testCover(31);
-  testCover(39);
-  testCover(57);
-  testCover(73);
-  testCover(91);
-  testCover(95);
-  testCover(133);
-  testCover(1024);
-  testCover(2048);
-  testCover(4096);
-  testCover(8192);
-}
-proc main() {
-  writeln("Testing Difference Covers");
-  testCovers();
 }
 
 
