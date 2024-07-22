@@ -63,7 +63,7 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
       x = r;
     }
     sp = new splitters(SplittersSample, abs(nSplit), defaultComparator,
-                       howSorted=sorted.unsorted);
+                       howSorted=sortLevel.unsorted);
   }
 
   assert(isSorted(sp.sortedStorage));
@@ -138,7 +138,7 @@ proc testPartitionsEven(n: int, nSplit: int) {
 
   var Sample = Input;
   const sp = new splitters(Sample, nSplit, defaultComparator,
-                           howSorted=sorted.unsorted);
+                           howSorted=sortLevel.unsorted);
   assert(isSorted(sp.sortedStorage));
 
   const nBuckets = sp.numBuckets;
@@ -177,7 +177,7 @@ proc testPartitionSingleSplitter(n: int) {
 
   var Sample = [n/2, n/2, n/2, n/2, n/2, n/2];
   const sp = new splitters(Sample, 100, defaultComparator,
-                           howSorted=sorted.unsorted);
+                           howSorted=sortLevel.unsorted);
   assert(isSorted(sp.sortedStorage));
 
   const nBuckets = sp.numBuckets;
