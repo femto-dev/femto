@@ -564,12 +564,16 @@ proc charactersInCommon(const cfg:ssortConfig(?), const a, const b): int
   return bitsInCommon / numBits(cfg.characterType);
 }
 
-/** Sort suffixes that we have already initialized in A
-    by the first maxPrefix character values.
+/**
+  Sort suffixes that we have already initialized in A
+  by the first maxPrefix character values.
+
+  Sorts only A[region].
  */
 proc sortSuffixesByPrefix(const cfg:ssortConfig(?),
                           const thetext, n: cfg.offsetType,
                           ref A: [] offsetAndCached(?),
+                          region: range(?),
                           maxPrefix: A.eltType.offsetType) {
   type idxType = cfg.idxType;
   type characterType = cfg.characterType;
@@ -584,12 +588,14 @@ proc sortSuffixesByPrefix(const cfg:ssortConfig(?),
     }
   }
 
-  sort(A, new myPrefixComparator1());
+  sort(A, new myPrefixComparator1(), region=region);
 }
 
+// similar to above but we know lower and upper bounds
 proc sortSuffixesByPrefixBounded(const cfg:ssortConfig(?),
                                  const thetext, n: cfg.offsetType,
                                  ref A: [] offsetAndCached(?),
+                                 region: range(?),
                                  lowerBound: prefix(?),
                                  upperBound: prefix(?),
                                  maxPrefix: A.eltType.offsetType) {
@@ -607,7 +613,7 @@ proc sortSuffixesByPrefixBounded(const cfg:ssortConfig(?),
      (cachedDataType != nothing &&
       numBits(characterType)*nCharsCommon < numBits(cachedDataType)) {
     // use the other sorter if there is no savings here
-    sortSuffixesByPrefix(cfg, thetext, n, A, maxPrefix);
+    sortSuffixesByPrefix(cfg, thetext, n, A, region, maxPrefix);
     return;
   }
 
@@ -622,7 +628,7 @@ proc sortSuffixesByPrefixBounded(const cfg:ssortConfig(?),
     }
   }
 
-  sort(A, new myPrefixComparator2());
+  sort(A, new myPrefixComparator2(), region=region);
 }
 
 
@@ -673,7 +679,8 @@ proc computeSuffixArrayDirectly(const cfg:ssortConfig(?),
   // First, construct the offsetAndCached array that will be sorted.
   var A = buildAllOffsets(cfg, text, n);
 
-  sortSuffixesByPrefix(cfg, text, n, A, maxPrefix=max(cfg.offsetType));
+  sortSuffixesByPrefix(cfg, text, n, A, 0..<n,
+                       maxPrefix=max(cfg.offsetType));
 
   fixTrailingZeros(text, n, A);
 
@@ -739,7 +746,8 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
     // then sort the these by the first cover.period characters;
     // note that these offsets are in 0..<n not 0..<mySampleN
     param coverPrefix = cfg.getPrefixSize(cover.period);
-    sortSuffixesByPrefix(cfg, thetext, n=n, Sample, maxPrefix=coverPrefix);
+    sortSuffixesByPrefix(cfg, thetext, n=n, Sample, 0..<sampleN,
+                         maxPrefix=coverPrefix);
 
     return Sample;
   } else {
@@ -849,13 +857,13 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
         } else if sp.bucketHasLowerBound(bucketIdx) &&
                   sp.bucketHasUpperBound(bucketIdx) {
           sortSuffixesByPrefixBounded(cfg, thetext, n=n,
-                                      Sample[bucketStart..bucketEnd],
+                                      Sample, bucketStart..bucketEnd,
                                       sp.bucketLowerBound(bucketIdx),
                                       sp.bucketUpperBound(bucketIdx),
                                       maxPrefix=coverPrefix);
         } else {
           sortSuffixesByPrefix(cfg, thetext, n=n,
-                               Sample[bucketStart..bucketEnd],
+                               Sample, bucketStart..bucketEnd,
                                maxPrefix=coverPrefix);
         }
         // TODO: adjust sort library call to avoid the ~2x array view overhead
@@ -1041,11 +1049,13 @@ proc compareSampleRanks(a: prefixAndSampleRanks(?), b: offsetAndCached(?),
 
 /* Sort suffixes by prefix and by the sample ranks.
    This puts them into final sorted order when computing the suffix array.
+   Sorts only A[region].
  */
 proc sortSuffixesCompletely(const cfg:ssortConfig(?),
                             const thetext, n: cfg.offsetType,
                             const SampleRanks, charsPerMod: cfg.offsetType,
-                            ref A: [] offsetAndCached(?)) {
+                            ref A: [] offsetAndCached(?),
+                            region: range(?)) {
 
   param coverPrefix = cfg.getPrefixSize(cfg.cover.period);
 
@@ -1070,7 +1080,7 @@ proc sortSuffixesCompletely(const cfg:ssortConfig(?),
   // TODO: consider sorting each non-sample suffix position (with radix sort)
   // and then doing a multi-way merge.
 
-  sort(A, new finalComparator1());
+  sort(A, new finalComparator1(), region=region);
 }
 
 proc sortSuffixesCompletelyBounded(
@@ -1078,6 +1088,7 @@ proc sortSuffixesCompletelyBounded(
                             const thetext, n: cfg.offsetType,
                             const SampleRanks, charsPerMod: cfg.offsetType,
                             ref A: [] offsetAndCached(?),
+                            region: range(?),
                             const lowerBound: prefixAndSampleRanks(?),
                             const upperBound: prefixAndSampleRanks(?)) {
 
@@ -1093,7 +1104,8 @@ proc sortSuffixesCompletelyBounded(
      (cachedDataType != nothing &&
       numBits(characterType)*nCharsCommon < numBits(cachedDataType)) {
     // use the other sorter if there is no savings here
-    sortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod, A);
+    sortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
+                           A, region);
     return;
   }
 
@@ -1121,7 +1133,7 @@ proc sortSuffixesCompletelyBounded(
   // TODO: consider sorting each non-sample suffix position (with radix sort)
   // and then doing a multi-way merge.
 
-  sort(A, new finalComparator2());
+  sort(A, new finalComparator2(), region=region);
 }
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
@@ -1348,7 +1360,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     // simple sort of everything all together
     var SA = buildAllOffsets(cfg, thetext, n);
 
-    sortSuffixesCompletely(cfg, thetext, n=n, SampleText, charsPerMod, SA);
+    sortSuffixesCompletely(cfg, thetext, n=n, SampleText, charsPerMod,
+                           SA, 0..<n);
 
     //writeln("returning SA ", SA);
     return SA;
@@ -1435,13 +1448,13 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
           sortSuffixesCompletelyBounded(
                                  cfg, thetext, n=n,
                                  SampleText, charsPerMod,
-                                 SA[bucketStart..bucketEnd],
+                                 SA, bucketStart..bucketEnd,
                                  SampleSplitters.bucketLowerBound(bucketIdx),
                                  SampleSplitters.bucketUpperBound(bucketIdx));
         } else {
           sortSuffixesCompletely(cfg, thetext, n=n,
                                  SampleText, charsPerMod,
-                                 SA[bucketStart..bucketEnd]);
+                                 SA, bucketStart..bucketEnd);
         }
       }
     }
@@ -1452,157 +1465,6 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     return SA;
   }
 }
-
-
-/** Sort the suffixes on the first k characters and output
-    those kmers that occur only once.
- */
-/*proc minUniqueKImpl(const cfg:ssortConfig(?),
-                    const thetext, n: cfg.offsetType,
-                    const nTasks: int,
-                    const requestedNumBuckets: int,
-                    param k: int) {
-  // To better avoid random access,
-  // go through the input & partition by a splitter
-  // while creating the offset & storing it into an output array
-  // for the Sample.
-  type offsetType = cfg.offsetType;
-  type cachedDataType = cfg.cachedDataType;
-  type wordType = cfg.loadWordType;
-  var nToSampleForSplitters = (SAMPLE_RATIO*requestedNumBuckets):int;
-
-  record myPrefixComparatorK {
-    proc keyPart(a: offsetAndCached(?), i: int):(int(8), wordType) {
-      if a.cacheType == wordType {
-        return getKeyPartForOffsetAndCached(cfg, a, i,
-                                            thetext, n,
-                                            maxPrefix=k);
-      } else {
-        return getKeyPartForOffset(cfg, a.offset, i,
-                                   thetext, n, maxPrefix=k);
-      }
-    }
-    proc keyPart(a: prefix(?), i: int):(int(8), wordType) {
-      return getKeyPartForPrefix(a, i);
-    }
-  }
-
-  record offsetProducerK {
-    proc eltType type do return offsetAndCached(offsetType, cachedDataType);
-    proc this(i: offsetType) {
-      return makeOffsetAndCached(cfg, i, thetext, n);
-    }
-  }
-
-  const comparator = new myPrefixComparatorK();
-  const InputProducer = new offsetProducerK();
-
-  // first, create a sorting sample of offsets in the cover
-  const sp; // initialized below
-  {
-    var randNums;
-    if SEED == 0 {
-      randNums = new Random.randomStream(cfg.offsetType);
-    } else {
-      randNums = new Random.randomStream(cfg.offsetType, seed=SEED);
-    }
-    var SplittersSampleDom = {0..<nToSampleForSplitters};
-    type prefixType = makePrefix(cfg, 0,thetext, n, k=k).type;
-    var SplittersSample:[SplittersSampleDom] prefixType;
-    for (x, r) in zip(SplittersSample,
-                      randNums.next(SplittersSampleDom, 0, n-1)) {
-      x = makePrefix(cfg, r, thetext, n, k=k);
-    }
-
-    // sort the sample and create the splitters
-    sp = new splitters(SplittersSample, requestedNumBuckets, comparator,
-                       howSorted=sortLevel.unsorted);
-  }
-
-  var Offsets: [0..<n] offsetAndCached(offsetType, cachedDataType);
-
-  // now, count & partition by the prefix by traversing over the input
-  const Counts = partition(InputProducer, Offsets, sp, comparator,
-                           0, n-1, nTasks);
-
-  const Ends = + scan Counts;
-
-  var nUniqueKmers = 0;
-
-  // now, consider each bucket & sort within that bucket
-  const nBuckets = sp.numBuckets;
-  forall bucketIdx in 0..<nBuckets with (+ reduce nUniqueKmers) {
-    const bucketSize = Counts[bucketIdx];
-    const bucketStart = Ends[bucketIdx] - bucketSize;
-    const bucketEnd = bucketStart + bucketSize - 1;
-
-    if TRACE {
-      writeln("minUniqueK bucket ", bucketIdx,
-              " has ", bucketSize, " suffixes");
-
-      /*
-      if sp.bucketHasLowerBound(bucketIdx) {
-        writeln("lower bound ", sp.bucketLowerBound(bucketIdx));
-      }
-      if sp.bucketHasEqualityBound(bucketIdx) {
-        writeln("equal bound ",
-                 sp.bucketEqualityBound(bucketIdx));
-      }
-      if sp.bucketHasUpperBound(bucketIdx) {
-        writeln("upper bound ", sp.bucketUpperBound(bucketIdx));
-      }*/
-
-      //writeln(Sample[bucketStart..bucketEnd]);
-    }
-
-    if bucketSize == 0 {
-      // nothing to do
-    } else if bucketSize == 1 {
-      nUniqueKmers += 1;
-      //writeln("Bucket size 1, reporting: ", Offsets[bucketStart]);
-    } else if sp.bucketHasEqualityBound(bucketIdx) {
-      // it can't be unique so continue
-    } else {
-      // sort the bucket and report
-      if sp.bucketHasLowerBound(bucketIdx) &&
-         sp.bucketHasUpperBound(bucketIdx) {
-        sortSuffixesByPrefixBounded(cfg, thetext, n=n,
-                                    Offsets[bucketStart..bucketEnd],
-                                    sp.bucketLowerBound(bucketIdx),
-                                    sp.bucketUpperBound(bucketIdx),
-                                    maxPrefix=k);
-      } else {
-        sortSuffixesByPrefix(cfg, thetext, n=n,
-                             Offsets[bucketStart..bucketEnd],
-                             maxPrefix=k);
-      }
-
-      for i in bucketStart..bucketEnd {
-        if prefixDiffersFromPrevious(cfg, i, Offsets, thetext, n, maxPrefix=k) {
-          nUniqueKmers += 1;
-          //writeln("reporting: ", Offsets[i]);
-        }
-      }
-
-      // TODO: adjust sort library call to avoid the ~2x array view overhead
-      //   * by optimizing down to c_ptr for contiguous arrays, or
-      //   * by allowing passing the array bounds
-      // Or, consider using MSB Radix Sort to avoid that overhead here.
-    }
-  }
-
-  writeln("Found ", nUniqueKmers, " unique k-mers");
-}
-
-proc minUniqueK(const cfg:ssortConfig(?),
-                const thetext, n: cfg.offsetType,
-                param k: int) {
-  var nTasks = computeNumTasks() * thetext.targetLocales().size;
-  var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks, MIN_BUCKETS);
-
-  minUniqueKImpl(cfg, thetext, n, nTasks, requestedNumBuckets, k);
-}
-*/
 
 
 }
