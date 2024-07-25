@@ -66,6 +66,14 @@ proc computeSuffixArray(input: [], const n: input.domain.idxType) {
   return ssortDcx(cfg, input, n);
 }
 
+
+proc computeSuffixArrayAndLCP(input: [], const n: input.domain.idxType,
+                              out SA: [],
+                              out LCP: []) {
+  SA = computeSuffixArray(input, n);
+  LCP = lcpParPlcp(input, n, SA);
+}
+
 /*
 proc computeUniqueK(input: [], const n: input.domain.idxType) {
   if !(input.domain.rank == 1 &&

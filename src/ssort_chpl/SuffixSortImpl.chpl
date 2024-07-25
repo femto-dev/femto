@@ -155,11 +155,23 @@ record prefixAndSampleRanks : writeSerializable {
   }
 }
 
+// helpers for a param divide while rounding up
 inline proc myDivCeil(x: integral, param y: integral) {
   return (x + y - 1) / y;
 }
 inline proc myDivCeil(param x: integral, param y: integral) param {
   return (x + y - 1) / y;
+}
+
+// helper to allow handling integer offsets or offsetAndCached.
+proc offset(a: integral) {
+  return a;
+}
+proc offset(a: offsetAndCached(?)) {
+  return a.offset;
+}
+proc offset(a: prefixAndSampleRanks(?)) {
+  return a.offset;
 }
 
 
@@ -1465,6 +1477,59 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     return SA;
   }
 }
+
+/* Compute and return the LCP array based on the input text and suffix array.
+   This is based upon "Fast Parallel Computation of Longest Common Prefixes"
+   by Julian Shun.
+
+ */
+proc lcpParPlcp(thetext: [], const n: thetext.domain.idxType, const SA: []) {
+  const nTasks = computeNumTasks();
+
+  type offsetType = (offset(SA[0])).type;
+
+  var PLCP: [SA.domain] offsetType;
+  {
+    var PHI: [SA.domain] offsetType;
+
+    PHI[offset(SA[0])] = -1;
+    forall i in 1..<n {
+      PHI[offset(SA[i])] = offset(SA[i-1]);
+    }
+
+    const blockSize = divCeil(n, nTasks);
+    coforall j in 0..<nTasks {
+      var taskStart = j * blockSize;
+      var h = 0;
+      for i in taskStart..#blockSize {
+        if i >= n {
+          break;
+        }
+
+        if PHI[i] == -1 {
+          h = 0;
+        } else {
+          var k = PHI[i];
+          while i+h < n && k+h < n && thetext[i+h] == thetext[k+h] {
+            h += 1;
+          }
+        }
+        PLCP[i] = h;
+        h = max(h-1, 0);
+      }
+    }
+
+    // deallocate PHI as it is no longer needed
+  }
+
+  var LCP: [SA.domain] offsetType;
+  forall i in 0..<n {
+    LCP[i] = PLCP[offset(SA[i])];
+  }
+
+  return LCP;
+}
+
 
 
 }

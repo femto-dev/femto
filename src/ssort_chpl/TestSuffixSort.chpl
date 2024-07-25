@@ -76,6 +76,22 @@ private proc checkOffsets(got: [], expect: [] int) {
   }
 }
 
+private proc checkLCP(got: [], expect: [] int) {
+  if got.size != expect.size {
+    halt("got size ", got.size, " but expected size ", expect.size);
+  }
+
+  for (g, e, i) in zip(got, expect, got.domain) {
+    if g != e {
+      writeln("FAILURE, LCP array mismatch");
+      writeln("Expect LCP ", expect);
+      writeln("Got LCP    ", got);
+
+      halt("at i=", i, " got ", g, " but expected ", e);
+    }
+  }
+}
+
 private proc checkCached(got: [] offsetAndCached, expect: []) {
   if got.size != expect.size {
     halt("got size ", got.size, " but expected size ", expect.size);
@@ -547,17 +563,17 @@ private proc testSeeresses() {
     seeresses
     012345678
 
-    here is the suffix array:
-
-    eeresses  1
-    eresses   2
-    es        7
-    esses     4
-    resses    3
-    s         8
-    seeresses 0
-    ses       6
-    sses      5
+    here is the suffix array and LCP:
+              SA         LCP
+    eeresses  1          0
+    eresses   2          1
+    es        7          1
+    esses     4          2
+    resses    3          0
+    s         8          0
+    seeresses 0          1
+    ses       6          2
+    sses      5          1
 
     here are the sampled suffixes for DC3
 
@@ -682,6 +698,20 @@ private proc testSeeresses() {
   checkSeeressesCase(offsetType=int, cachedDataType=nothing,
                      loadWordType=uint,
                      inputArr, n, 3, expectOffsets);
+
+  testLCP("seeresses", expectOffsets, [0,1,1,2,0,0,1,2,1]);
+}
+
+proc testLCP(inputArr: [], n: int, expectSA: [] int, expectLCP: [] int) {
+  var LCP = lcpParPlcp(inputArr, n, expectSA);
+  checkLCP(LCP, expectLCP);
+}
+
+proc testLCP(input: string, expectSA: [] int, expectLCP: [] int) {
+  const n = input.size;
+  const inputArr = bytesToArray(input);
+  var LCP = lcpParPlcp(inputArr, n, expectSA);
+  checkLCP(LCP, expectLCP);
 }
 
 proc testOtherCase(input: string, expectSA: [] int,
@@ -763,19 +793,21 @@ proc testOthers() {
 
 
   /*
-   i           10
-   ippi        7
-   issippi     4
-   ississippi  1
-   mississippi 0
-   pi          9
-   ppi         8
-   sippi       6
-   sissippi    3
-   ssippi      5
-   ssissippi   2
+               SA     LCP
+   i           10     0
+   ippi        7      1
+   issippi     4      1
+   ississippi  1      4
+   mississippi 0      0
+   pi          9      0
+   ppi         8      1
+   sippi       6      0
+   sissippi    3      2
+   ssippi      5      1
+   ssissippi   2      3
    */
   testOther("mississippi", [10,7,4,1,0,9,8,6,3,5,2]);
+  testLCP("mississippi", [10,7,4,1,0,9,8,6,3,5,2], [0,1,1,4,0,0,1,0,2,1,3]);
 
   /*
    aaaacaaaacaaaab with DC3
@@ -827,6 +859,9 @@ proc testOthers() {
 
   */
   testOther("aaaacaaaacaaaab", [10,5,0,11,6,1,12,7,2,13,8,3,14,9,4]);
+
+  testOther("banana$", [6,5,3,1,0,4,2]);
+  testLCP("banana$", [6,5,3,1,0,4,2], [0,0,1,3,0,0,2]);
 }
 
 proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
@@ -860,6 +895,10 @@ proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
     writeln("Got SA    ", SA);
   }
   checkOffsets(SA, expectSA);
+
+  // check also the LCP
+  var expectLCP: [0..<n] int = 0..<n;
+  testLCP(inputArr, n, expectSA, expectLCP);
 }
 
 proc testRepeats() {
