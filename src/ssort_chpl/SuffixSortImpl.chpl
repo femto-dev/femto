@@ -28,6 +28,7 @@ use IO;
 use Sort;
 import Random;
 import BitOps;
+import Reflection;
 
 import SuffixSort.DEFAULT_PERIOD;
 import SuffixSort.ENABLE_CACHED_TEXT;
@@ -576,6 +577,18 @@ proc charactersInCommon(const cfg:ssortConfig(?), const a, const b): int
   return bitsInCommon / numBits(cfg.characterType);
 }
 
+// this is a compatability function to allow this code to compile
+// before and after PR #25636.
+proc sortRegion(ref A: [], comparator, region: range(?)) {
+  if Reflection.canResolve("sort", A, comparator, region) {
+    sort(A, comparator, region);
+  } else {
+    compilerWarning("Falling back on sort with array view; " +
+                    "please update to a Chapel version including PR #25636");
+    sort(A[region], comparator);
+  }
+}
+
 /**
   Sort suffixes that we have already initialized in A
   by the first maxPrefix character values.
@@ -600,7 +613,7 @@ proc sortSuffixesByPrefix(const cfg:ssortConfig(?),
     }
   }
 
-  sort(A, new myPrefixComparator1(), region=region);
+  sortRegion(A, new myPrefixComparator1(), region=region);
 }
 
 // similar to above but we know lower and upper bounds
@@ -640,7 +653,7 @@ proc sortSuffixesByPrefixBounded(const cfg:ssortConfig(?),
     }
   }
 
-  sort(A, new myPrefixComparator2(), region=region);
+  sortRegion(A, new myPrefixComparator2(), region=region);
 }
 
 
@@ -1092,7 +1105,7 @@ proc sortSuffixesCompletely(const cfg:ssortConfig(?),
   // TODO: consider sorting each non-sample suffix position (with radix sort)
   // and then doing a multi-way merge.
 
-  sort(A, new finalComparator1(), region=region);
+  sortRegion(A, new finalComparator1(), region=region);
 }
 
 proc sortSuffixesCompletelyBounded(
@@ -1145,7 +1158,7 @@ proc sortSuffixesCompletelyBounded(
   // TODO: consider sorting each non-sample suffix position (with radix sort)
   // and then doing a multi-way merge.
 
-  sort(A, new finalComparator2(), region=region);
+  sortRegion(A, new finalComparator2(), region=region);
 }
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
