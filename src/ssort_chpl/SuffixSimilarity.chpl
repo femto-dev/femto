@@ -23,6 +23,7 @@ module SuffixSimilarity {
 import SuffixSort.INPUT_PADDING;
 import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.computeSuffixArray;
+import SuffixSort.computeSuffixArrayAndLCP;
 import SuffixSortImpl.offsetAndCached;
 
 import Partitioning.computeNumTasks;
@@ -35,10 +36,11 @@ import Time;
 import Math.divCeil;
 
 // this size * the number of files = the window size
+config const STRATEGY="adaptive-lcp";
 config const WINDOW_SIZE_RATIO = 2.5;
 config const WINDOW_SIZE_OVERRIDE = 0;
-config const NSIMILAR_TO_OUTPUT = 20;
-
+config const NSIMILAR_TO_OUTPUT = 200;
+config const MAX_BLOCK_SIZE = 1000;
 
 // helpers to make this code work with suffix array storing offsetAndCached
 proc offset(a: integral) {
@@ -92,7 +94,7 @@ proc offsetToFileIdx(const fileStarts: [] int, offset: int) {
   return fileIdx;
 }
 
-proc printSuffix(offset: int, thetext: [], fileStarts: [] int) {
+proc printSuffix(offset: int, thetext: [], fileStarts: [] int, lcp: int) {
   const end = min(offset + 10, thetext.size);
   for i in offset..<end {
     var ch = thetext[i];
@@ -104,7 +106,7 @@ proc printSuffix(offset: int, thetext: [], fileStarts: [] int) {
     writef("%c", ch);
   }
   const fileIdx = offsetToFileIdx(fileStarts, offset);
-  writef(" % 8i f%i\n", offset, fileIdx);
+  writef(" % 8i f%i lcp%i\n", offset, fileIdx, lcp);
 }
 
 proc printWindow(windowCounts: [] int) {
@@ -155,7 +157,8 @@ proc slidingWindowPop(ref AllPairsSimilarity: [] int,
   //printWindow(windowCounts);
 }
 
-proc computeSimilaritySlidingWindow(SA: [], fileStarts: [] int, thetext: []) {
+proc computeSimilaritySlidingWindow(SA: [], fileStarts: [] int, thetext: [],
+                                    out windowSize: int) {
   const n = SA.size;
   const nFiles = fileStarts.size;
   var AllPairsSimilarity:[0..<nFiles, 0..<nFiles] int;
@@ -164,9 +167,12 @@ proc computeSimilaritySlidingWindow(SA: [], fileStarts: [] int, thetext: []) {
     printSuffix(offset(SA[i]), thetext, fileStarts);
   }*/
 
-  const windowSize = if WINDOW_SIZE_OVERRIDE > 1
-                     then WINDOW_SIZE_OVERRIDE
-                     else (WINDOW_SIZE_RATIO * nFiles):int;
+  windowSize = 2;
+  if WINDOW_SIZE_OVERRIDE > 1 {
+    windowSize = WINDOW_SIZE_OVERRIDE;
+  } else
+    windowSize = (WINDOW_SIZE_RATIO * nFiles):int;
+
   const nTasks = computeNumTasks();
   writeln("nTasks is ", nTasks);
   writeln("windowSize is ", windowSize);
@@ -190,7 +196,7 @@ proc computeSimilaritySlidingWindow(SA: [], fileStarts: [] int, thetext: []) {
         //writeln("warmup ", offset(SA[i]));
         slidingWindowPush(windowCounts, offset(SA[i]), fileStarts);
       }
-      
+
       for i in taskStart..taskEnd {
         slidingWindowPop(AllPairsSimilarity, windowCounts,
                          offset(SA[i-windowSize]),
@@ -213,6 +219,234 @@ proc computeSimilaritySlidingWindow(SA: [], fileStarts: [] int, thetext: []) {
 
   return AllPairsSimilarity;
 }
+
+// This strategy doesn't work well in testing. It seems to avoid too many
+// correlations.
+/*proc computeSimilarityAdjacentLCP(SA: [], LCP: [], thetext: [], fileStarts: [] int)
+{
+  const n = SA.size;
+  const nFiles = fileStarts.size;
+  var CooccurenceCounts:[0..<nFiles, 0..<nFiles] int;
+  var TermCounts:[0..<nFiles] int;
+
+  forall i in SA.domain with (+ reduce CooccurenceCounts,
+                              + reduce TermCounts) {
+    if 0 < i && i < n - 1 {
+      const startLCP = LCP[i];
+      const nextLCP = LCP[i+1];
+      if startLCP > 0 && nextLCP < startLCP {
+        // there is a common prefix of startLCP characters
+        // between i-1 and i, and the next common prefix between i and i+1
+        // is smaller. Consider this a term.
+
+        const prevFileIdx = offsetToFileIdx(fileStarts, offset(SA[i-1]));
+        const fileIdx = offsetToFileIdx(fileStarts, offset(SA[i]));
+        // sort the two so we have docA < docB
+        const docA = min(fileIdx, prevFileIdx);
+        const docB = max(fileIdx, prevFileIdx);
+        // add the contribution to the denominator
+        TermCounts[docA] += 1;
+        TermCounts[docB] += 1;
+        // add the contribution to the numerator
+        CooccurenceCounts[docA, docB] += 1;
+      }
+    }
+  }
+
+  var AllPairsSimilarity:[0..<nFiles, 0..<nFiles] real;
+
+  // Combine AllPairsSimilarity with SumSqTermCounts to form
+  // the cosine similarity.
+  forall (elt, (docA, docB)) in zip(AllPairsSimilarity,
+                                    AllPairsSimilarity.domain) {
+    if docA < docB {
+      const numerator = CooccurenceCounts[docA, docB]: real;
+      const denominatorA = sqrt(TermCounts[docA]: real);
+      const denominatorB = sqrt(TermCounts[docB]: real);
+      elt = numerator / denominatorA / denominatorB;
+    }
+  }
+
+  return AllPairsSimilarity;
+}
+*/
+
+proc computeSimilarityAdjacentNoLCP(SA: [], thetext: [], fileStarts: [] int)
+{
+  const n = SA.size;
+  const nFiles = fileStarts.size;
+  var CooccurenceCounts:[0..<nFiles, 0..<nFiles] int;
+  var TermCounts:[0..<nFiles] int;
+
+  forall i in SA.domain with (+ reduce CooccurenceCounts,
+                              + reduce TermCounts) {
+    if 0 < i && i < n - 1 {
+      // assume that there is a common prefix between i-1 and i
+      // that we are considering a term.
+      const prevFileIdx = offsetToFileIdx(fileStarts, offset(SA[i-1]));
+      const fileIdx = offsetToFileIdx(fileStarts, offset(SA[i]));
+      // sort the two so we have docA < docB
+      const docA = min(fileIdx, prevFileIdx);
+      const docB = max(fileIdx, prevFileIdx);
+      // add the contribution to the denominator
+      TermCounts[docA] += 1;
+      TermCounts[docB] += 1;
+      // add the contribution to the numerator
+      CooccurenceCounts[docA, docB] += 1;
+    }
+  }
+
+  var AllPairsSimilarity:[0..<nFiles, 0..<nFiles] real;
+
+  // Combine AllPairsSimilarity with SumSqTermCounts to form
+  // the cosine similarity.
+  forall (elt, (docA, docB)) in zip(AllPairsSimilarity,
+                                    AllPairsSimilarity.domain) {
+    if docA < docB {
+      const numerator = CooccurenceCounts[docA, docB]: real;
+      const denominatorA = sqrt(TermCounts[docA]: real);
+      const denominatorB = sqrt(TermCounts[docB]: real);
+      elt = sqrt(numerator / denominatorA / denominatorB);
+    }
+  }
+
+  return AllPairsSimilarity;
+}
+
+
+proc computeSimilarityAdaptiveLCP(SA: [], LCP: [], thetext: [],
+                                  fileStarts: [] int)
+{
+  const n = SA.size;
+  const nFiles = fileStarts.size;
+
+  // this function uses cosine similarity
+
+  // sum of products of term counts for terms common to docs A and B
+  var AllPairsSimilarity:[0..<nFiles, 0..<nFiles] real;
+
+  // sum of squares of term counts for each document
+  // (used in denominator of cosine similarity)
+  var SumSqTermCounts:[0..<nFiles] real;
+
+  /*for i in SA.domain {
+    printSuffix(offset(SA[i]), thetext, fileStarts, LCP[i]);
+  }*/
+
+  const nTasks = computeNumTasks();
+  writeln("nTasks is ", nTasks);
+  const blockSize = divCeil(n, nTasks);
+  const nBlocks = divCeil(n, blockSize);
+
+  coforall tid in 0..<nTasks with (+ reduce AllPairsSimilarity,
+                                   + reduce SumSqTermCounts) {
+    var taskStart = tid * blockSize;
+    var taskEnd = min(taskStart + blockSize - 1, n - 1); // inclusive
+    if taskStart < taskEnd {
+      var DocToCountsThisBlock:[0..<nFiles] int;
+
+      var cur = taskStart;
+      while cur <= taskEnd {
+        //writeln("in main loop cur is ", cur);
+        // pass any positions with LCP == 0
+        while cur <= taskEnd && LCP[cur] == 0 {
+          cur += 1;
+        }
+        //writeln("skipped zeros, cur is ", cur);
+
+        // consider the LCP. There are two cases:
+        // 1. There are too many things starting with this prefix.
+        //    In that case, just advance to the next prefix with an LCP
+        //    that is larger that the current one. The current
+        //    prefix is too common to be considered a term.
+        // 2. There are a small number of things starting with this prefix.
+        //    We can consider it to be a term because it is not too common.
+        //    Gather term frequencies for the region until the LCP is smaller.
+        const startLCP = LCP[cur];
+        var t = 1;
+        var lastEqual = cur;
+        while cur+t <= taskEnd && t < MAX_BLOCK_SIZE {
+          //writeln("in loop with t ", t);
+          const curLCP = LCP[cur+t];
+          if curLCP < startLCP {
+            break; // we found the end of the prefix
+          }
+          if curLCP == startLCP {
+            lastEqual = cur + t;
+          }
+          t += 1;
+        }
+        if t >= MAX_BLOCK_SIZE {
+          //writeln("reached MAX_BLOCK_SIZE");
+
+          // we have reached case 1. continue past any with equal LCP
+          cur = lastEqual;
+          while cur <= taskEnd && startLCP == LCP[cur] {
+            cur += 1;
+          }
+          // and continue the outer while loop
+        } else {
+          // cur+t had LCP < startLCP, so go until cur+t-1.
+          var end = min(cur+t-1, n-1);
+          //writeln("considering block ", cur-1..end, " with LCP ", startLCP);
+
+          // consider the block cur..cur+t
+          // with the corresponding documents in SA[cur-1..cur+t]
+          // these all start with at least startLCP characters.
+
+          const block = cur-1..end;
+          cur = end+1;
+
+          // count the occurrences within each document
+          foreach doc in 0..<nFiles {
+            DocToCountsThisBlock[doc] = 0;
+          }
+
+          for i in block {
+            //printSuffix(offset(SA[i]), thetext, fileStarts, LCP[i]);
+            const fileIdx = offsetToFileIdx(fileStarts, offset(SA[i]));
+            DocToCountsThisBlock[fileIdx] += 1;
+          }
+
+          // compute the contribution to the denominator
+          foreach doc in 0..<nFiles {
+            const count = (DocToCountsThisBlock[doc]):real;
+            SumSqTermCounts[doc] += count*count;
+          }
+
+          // compute the contribution to the numerator
+          for docA in 0..<nFiles {
+            const countA = DocToCountsThisBlock[docA];
+            if countA > 0 {
+              for docB in docA+1..<nFiles {
+                const countB = DocToCountsThisBlock[docB];
+                if countB > 0 {
+                  const countAr = countA:real;
+                  const countBr = countB:real;
+                  AllPairsSimilarity[docA, docB] += countAr * countBr;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  var SqrtSumSqTermCounts:[0..<nFiles] real = sqrt(SumSqTermCounts);
+
+  // Combine AllPairsSimilarity with SumSqTermCounts to form
+  // the cosine similarity.
+  forall (elt, (docA, docB)) in zip(AllPairsSimilarity,
+                                    AllPairsSimilarity.domain) {
+    if docA < docB {
+      elt /= SqrtSumSqTermCounts[docA] * SqrtSumSqTermCounts[docB];
+    }
+  }
+
+  return AllPairsSimilarity;
+}
+
 
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);
@@ -272,31 +506,61 @@ proc main(args: [] string) throws {
   var fileStarts:[0..nInputFiles] int;
   fileStarts[0] = 0;
   fileStarts[1..nInputFiles] = fileEnds;
-  
+
   var t: Time.stopwatch;
 
   writeln("Computing suffix array");
   t.reset();
   t.start();
-  var SA = computeSuffixArray(thetext, totalSize);
+  //var SA = computeSuffixArray(thetext, totalSize);
+  const SA, LCP;
+  computeSuffixArrayAndLCP(thetext, totalSize, SA, LCP);
   t.stop();
 
   writeln("suffix array construction took of ", totalSize, " bytes ",
           "took ", t.elapsed(), " seconds");
   writeln(totalSize / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
 
-  const SimilarityInts = computeSimilaritySlidingWindow(SA, fileStarts, thetext);
+  var ok = false;
+  if STRATEGY == "window" || STRATEGY == "w" {
+    ok=handleSlidingStrategies(SA, thetext, fileSizes, fileStarts, inputFiles);
+    if !ok then throw new Error("Unknown strategy '" + STRATEGY + "'");
+  } else {
+    ok=handleCosineStrategies(SA, LCP, thetext, fileStarts, inputFiles);
+    if !ok then throw new Error("Unknown strategy '" + STRATEGY + "'");
+  }
+
+  return 0;
+}
+
+proc handleSlidingStrategies(SA: [], thetext: [],
+                             fileSizes: [] int, fileStarts: [] int,
+                             inputFiles: [] string) {
+  const nInputFiles = fileSizes.size;
+  var windowSize = 2;
+  const SimilarityInts;
+  if STRATEGY == "window" || STRATEGY == "w" {
+    SimilarityInts = computeSimilaritySlidingWindow(SA, fileStarts, thetext,
+                                                    windowSize);
+  } else {
+    return false;
+  }
+
   const total = (+ reduce SimilarityInts) : real;
   record similarity {
     var i: int;
     var j: int;
+    var rawScore: int;
     var score: real;
   }
   var SimilarityScores: [0..nInputFiles*nInputFiles] similarity;
   forall (i, j) in SimilarityInts.domain {
     if i < j && i < nInputFiles && j < nInputFiles {
+      const maximumCount = max(1, min(fileSizes[i], fileSizes[j]));
+      const denom = maximumCount * windowSize;
       SimilarityScores[i*nInputFiles + j] =
-        new similarity(i, j, SimilarityInts[i,j] / total);
+        new similarity(i, j, SimilarityInts[i,j],
+                       SimilarityInts[i,j]:real / denom);
     }
   }
   record similarityComparator {
@@ -309,10 +573,61 @@ proc main(args: [] string) throws {
   const nprint = min(SimilarityScores.size, NSIMILAR_TO_OUTPUT);
   for elt in SimilarityScores[0..<nprint] {
     if elt.score > 0 {
+      writeln(inputFiles[elt.i], " vs ", inputFiles[elt.j], " : ", elt.score,
+              "  (raw: ", elt.rawScore, ")");
+    }
+  }
+
+  return true;
+}
+
+proc handleCosineStrategies(SA: [], LCP: [], thetext: [],  fileStarts: [] int,
+                            inputFiles: [] string) {
+  const nFiles = inputFiles.size;
+
+  const AllPairsSimilarity;
+
+  if STRATEGY == "adaptive-lcp" {
+    AllPairsSimilarity =
+      computeSimilarityAdaptiveLCP(SA, LCP, thetext, fileStarts);
+  /*} else if STRATEGY == "adjacent-lcp" {
+    AllPairsSimilarity =
+      computeSimilarityAdjacentLCP(SA, LCP, thetext, fileStarts);*/
+  } else if STRATEGY == "adjacent-nolcp" {
+    AllPairsSimilarity =
+      computeSimilarityAdjacentNoLCP(SA, thetext, fileStarts);
+
+  } else {
+    return false;
+  }
+
+  record similarity2 {
+    var i: int;
+    var j: int;
+    var score: real;
+  }
+  var SimilarityScores: [0..nFiles*nFiles] similarity2;
+  forall (i, j) in AllPairsSimilarity.domain {
+    if i < j && i < nFiles && j < nFiles {
+      SimilarityScores[i*nFiles + j] =
+        new similarity2(i, j, AllPairsSimilarity[i,j]);
+    }
+  }
+  record similarityComparator2 {
+    proc key(a: similarity2) {
+      return -a.score;
+    }
+  }
+  Sort.sort(SimilarityScores, comparator=new similarityComparator2());
+  // output the top 20 or so
+  const nprint = min(SimilarityScores.size, NSIMILAR_TO_OUTPUT);
+  for elt in SimilarityScores[0..<nprint] {
+    if elt.score > 0 {
       writeln(inputFiles[elt.i], " vs ", inputFiles[elt.j], " : ", elt.score);
     }
   }
-  return 0;
+
+  return true;
 }
 
 
