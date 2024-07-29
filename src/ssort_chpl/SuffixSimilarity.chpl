@@ -45,7 +45,7 @@ config const NSIMILAR_TO_OUTPUT = 200;
 
 // these control adaptive-lcp and block-lcp
 config const MAX_BLOCK_SIZE = 1000;
-config const MIN_COMMON = 8;
+config const MIN_COMMON = 60;
 config const TARGET_BLOCK_SIZE = 1000;
 
 // helpers to make this code work with suffix array storing offsetAndCached
@@ -222,20 +222,20 @@ proc computeSimilarityAdaptiveLCP(ref Similarity: [] similarity,
           var blockLCP = startLCP;
           var minFileIdx = max(int);
           var maxFileIdx = min(int);
-          writeln("Block has startLCP=", startLCP);
+          //writeln("Block has startLCP=", startLCP);
           for i in block {
             const off = offset(SA[i]);
             const fileIdx = offsetToFileIdx(fileStarts, off);
             minFileIdx = min(minFileIdx, fileIdx);
             maxFileIdx = max(maxFileIdx, fileIdx);
 
-            printSuffix(off, thetext, fileStarts, LCP[i], blockLCP+1);
+            //printSuffix(off, thetext, fileStarts, LCP[i], blockLCP+1);
             // if the match goes beyond a file, limit blockLCP
             // to keep everything within a file
             const nextFileStarts = fileStarts[fileIdx+1];
             if off + blockLCP > nextFileStarts - 1 {
               blockLCP = nextFileStarts - off - 1;
-              writeln("reducing blockLCP from ", startLCP, " to ", blockLCP);
+              //writeln("reducing blockLCP from ", startLCP, " to ", blockLCP);
             }
           }
 
@@ -335,10 +335,23 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
   // the minimum LCP value within a window.
 
   // The scoring in this function is working with
-  // ratios of the conceptual suffix array containing both files
-  // that are in common.
-  // The conceptual suffix array has size n(n+1)/2 where
-  // n here is fileSizeA+fileSizeB.
+  // cosine similarity with notional term frequencies per document.
+  // The term frequency for a common substring of C characters is:
+  //   C * Count / DocSufArrSize
+  // Where an n-character document's suffix array size is n(n+1)/2.
+  //
+  // When adding up scores, we are working with two documents which
+  // have different lengths, so we use
+  //
+  //   C * CountA / DocSufArrSizeA + C * CountB / DocSufArrSizeB
+  //
+  // To avoid dividing on each addition, we put these with a common
+  // denominator:
+  //
+  //   C * CountA * DocSufArrSizeB + C * CountB * DocSufArrSizeA
+  //   ---------------------------------------------------------
+  //   DocSufArrSizeA * DocSufArrSizeB
+
 
   const nFiles = fileStarts.size-1;
   const n = SA.size;
@@ -374,11 +387,13 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
   // (used in denominator of cosine similarity)
   var SumSqTermCounts:[0..<nFiles] real;
 
-  var SqFileSize:[0..<nFiles] real;
+  var FileSufArrSize:[0..<nFiles] real;
   forall doc in 0..<nFiles {
     const fileSize = (fileStarts[doc+1] - fileStarts[doc]): real;
-    SqFileSize[doc] = fileSize * fileSize;
+    FileSufArrSize[doc] = fileSize * (fileSize+1.0) / 2.0;
   }
+
+  writeln("Examining Blocks");
 
   // consider each block, including the potentially short 0th
   // and nBlock'th blocks.
@@ -387,7 +402,7 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
     const blockStart = Boundaries[blockIdx] + 1;
     const blockEnd = Boundaries[blockIdx+1] - 1; // inclusive
     const block = blockStart..blockEnd;
-    writeln("Working on block ", blockIdx, " with range ", block);
+    //writeln("Working on block ", blockIdx, " with range ", block);
 
     // compute the minimum LCP in this block
     var minLCP = min reduce LCP[blockStart..blockEnd];
@@ -403,13 +418,14 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
 
     var DocToCountsThisBlock:[0..<nFiles] int = 0;
 
-    writeln("Block has minLCP=", minLCP);
+    /*writeln("Block has minLCP=", minLCP);
     for i in blockStart-1..blockEnd+1 {
       if 0 <= i && i < n {
         write("i", i, " ");
         printSuffix(offset(SA[i]), thetext, fileStarts, LCP[i], minLCP+1);
       }
-    }
+    }*/
+
     // Loop over the block to
     //  1. Count the number of times each file occurs in the block
     //  2. Compute the score contribution from adjacent suffixes
@@ -439,7 +455,8 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
         const lcpR = curLCP: real;
         //const score = SqFileSize[docB] * lcpR + SqFileSize[docA] * lcpR;
         //const score = lcpR * (SqFileSize[docA] + SqFileSize[docB]);
-        const score = lcpR;
+        //const score = lcpR;
+        const score = lcpR * (FileSufArrSize[docB] + FileSufArrSize[docA]);
         var amt: similarity;
         amt.docA = docA;
         amt.docB = docB;
@@ -482,7 +499,9 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
               //              lcpR * countB * SqFileSize[docA];
               //const score = lcpR * (countA * SqFileSize[docB] +
               //                      countB * SqFileSize[docA]);
-              const score = lcpR * (countA + countB);
+              //const score = lcpR * (countA + countB);
+              const score = lcpR * (countA * FileSufArrSize[docB] +
+                                    countB * FileSufArrSize[docA]);
               var amt: similarity;
               amt.docA = docA;
               amt.docB = docB;
@@ -500,6 +519,8 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
     }
   }
 
+  writeln("Computing Score");
+
   // Combine AccumCoOccurences with SumSqTermCounts to form
   // the cosine similarity and store that in Similarity.
   var SqrtSumSqTermCounts:[0..<nFiles] real = sqrt(min(1, SumSqTermCounts));
@@ -512,10 +533,11 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
     const fileSizeA = (fileStarts[docA+1] - fileStarts[docA]):real;
     const fileSizeB = (fileStarts[docB+1] - fileStarts[docB]):real;
     const sumSizes = fileSizeA + fileSizeB;
-    const denom = (sumSizes * (sumSizes+1)) / 2.0;
+    //const denom = (sumSizes * (sumSizes+1)) / 2.0;
     //const denom = SqFileSize[docA] * SqFileSize[docB];
+    const denom = 2.0 * FileSufArrSize[docA] * FileSufArrSize[docB];
     elt.score = sqrt(cooScore.score / denom);
-    elt.score = cooScore.score / denom;
+    //elt.score = cooScore.score / denom;
     elt.numPrefixes = cooScore.numPrefixes;
     elt.minPrefix = cooScore.minPrefix;
     elt.maxPrefix = cooScore.maxPrefix;
