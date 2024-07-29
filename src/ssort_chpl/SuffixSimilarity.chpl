@@ -33,12 +33,12 @@ import IO;
 import List;
 import Sort;
 import Time;
-import Math.divCeil;
+import Math.{divCeil, log};
 
 use Utility;
 
 // this size * the number of files = the window size
-config const STRATEGY="block-lcp";
+config const STRATEGY="recursive-lcp";
 config const WINDOW_SIZE_RATIO = 2.5;
 config const WINDOW_SIZE_OVERRIDE = 0;
 config const NSIMILAR_TO_OUTPUT = 200;
@@ -46,6 +46,7 @@ config const NSIMILAR_TO_OUTPUT = 200;
 // these control adaptive-lcp and block-lcp
 config const MAX_BLOCK_SIZE = 1000;
 config const MIN_COMMON = 60;
+config const MAX_OCCURRENCES = 1000;
 config const TARGET_BLOCK_SIZE = 1000;
 
 // helpers to make this code work with suffix array storing offsetAndCached
@@ -545,6 +546,312 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
   }
 }
 
+inline proc computeScore(minLCP: int,
+                         docA: int, docB: int,
+                         countA: int, countB: int,
+                         const ref FileSufArrSize: [] real) {
+  const lcpR = minLCP : real;
+  //const score = lcpR * countA * SqFileSize[docB] +
+  //              lcpR * countB * SqFileSize[docA];
+  //const score = lcpR * (countA * SqFileSize[docB] +
+  //                      countB * SqFileSize[docA]);
+  //const score = lcpR * (countA + countB);
+  //const score = lcpR * (countA * FileSufArrSize[docB] +
+  //                      countB * FileSufArrSize[docA]);
+  const score = lcpR * (countA * FileSufArrSize[docB] +
+                        countB * FileSufArrSize[docA]);
+
+  var amt: similarity;
+  amt.docA = docA;
+  amt.docB = docB;
+  amt.score = score;
+  amt.numPrefixes = min(countA, countB);
+  amt.minPrefix = minLCP;
+  amt.maxPrefix = minLCP;
+  amt.sumPrefixes = minLCP;
+
+  return amt;
+}
+
+proc computeSimilarityRecursive(block: range,
+                                ref AccumCoOccurences: [] similarity,
+                                const ref FileSufArrSize: [] real,
+                                minLCP: int,
+                                SA: [], LCP: [], thetext: [],
+                                fileStarts: [] int) {
+
+  /*writeln("computeSimilarityRecursive(", block, ", minLCP=", minLCP, ")");
+  {
+    var blockStart = block.low;
+    var blockEnd = block.high;
+    const n = SA.size;
+    var nPrint = min(minLCP+1, 10);
+    for i in blockStart-1..blockEnd+1 {
+      if 0 <= i && i < n {
+        write("i", i, " ");
+        if !block.contains(i) {
+          write("|");
+          var lcp = if LCP.domain.contains(i) then LCP[i] else 0;
+          printSuffix(offset(SA[i]), thetext, fileStarts, lcp, nPrint);
+        } else {
+          printSuffix(offset(SA[i]), thetext, fileStarts, LCP[i], nPrint);
+        }
+      }
+    }
+  }*/
+
+  const nFiles = fileStarts.size-1;
+
+  // base case: block size is 0
+  if block.size == 0 {
+    return;
+  }
+
+  // base case: block size is 1
+  if block.size == 1 {
+    const i = block.low;
+    const offA = offset(SA[i - 1]);
+    const docA = offsetToFileIdx(fileStarts, offA);
+    const offB = offset(SA[i]);
+    const docB = offsetToFileIdx(fileStarts, offB);
+
+    if docA != docB && minLCP >= MIN_COMMON {
+      if EXTRA_CHECKS {
+        assert(minLCP == LCP[block.low]);
+      }
+
+      var nUniqueDocsThisBlock = 2;
+      const amt = computeScore(minLCP, docA, docB, 1, 1, FileSufArrSize);
+      AccumCoOccurences[flattenTriangular(docA, docB)] += amt;
+    }
+    return;
+  }
+
+  // #### loop over the block to gather information ####
+  //  1. Find the next smallest LCP for recursion
+  //  2. Count the number of times each file occurs in the block
+  var splitLCP = max(int);
+  var DocToCountsThisBlock:[0..<nFiles] int = 0;
+
+  // since block is in LCP entries, which indicate commonality
+  // between SA[i-1] and SA[i], the first common thing is actually
+  // SA[block.low-1] so count that first
+  if block.size > 0 {
+    const curOff = offset(SA[block.low - 1]);
+    const curDoc = offsetToFileIdx(fileStarts, curOff);
+    // Count the number of times each file occurs in the block
+    DocToCountsThisBlock[curDoc] += 1;
+  }
+
+  for i in block {
+    // LCP indicates the common prefix between SA[i-1] and SA[i]
+
+    // compute the next smallest LCP and its position for recursion
+    const curLCP = LCP[i];
+    if curLCP > minLCP && curLCP < splitLCP {
+      splitLCP = curLCP;
+    }
+
+    const curOff = offset(SA[i]);
+    const curDoc = offsetToFileIdx(fileStarts, curOff);
+    // Count the number of times each file occurs in the block
+    DocToCountsThisBlock[curDoc] += 1;
+  }
+
+  var nUniqueDocsThisBlock = 0;
+  for count in DocToCountsThisBlock {
+    if count > 0 {
+      nUniqueDocsThisBlock += 1;
+    }
+  }
+
+  // ### accumulate score information for being together in the block ###
+  if nUniqueDocsThisBlock >= 2 &&
+     minLCP >= MIN_COMMON &&
+     block.size <= MAX_OCCURRENCES {
+    // compute the contribution to the numerator
+    for docA in 0..<nFiles {
+      const countA = DocToCountsThisBlock[docA];
+      if countA > 0 {
+        for docB in docA+1..<nFiles {
+          const countB = DocToCountsThisBlock[docB];
+          if countB > 0 {
+            const amt = computeScore(minLCP, docA, docB, countA, countB,
+                                     FileSufArrSize);
+            AccumCoOccurences[flattenTriangular(docA, docB)] += amt;
+          }
+        }
+      }
+    }
+  }
+
+  // #### recurse with sub-blocks with LCP >= splitLCP ####
+
+  if splitLCP != max(int) && splitLCP > minLCP {
+    var cur = block.low;
+    var end = block.high+1;
+    while cur < end {
+      // pass any with LCP < splitLCP
+      while cur < end && LCP[cur] < splitLCP {
+        cur += 1;
+      }
+
+      if cur < end && LCP[cur] >= splitLCP {
+        // pass any with LCP >= splitLCP
+        var count = 0;
+        while cur+count < end && LCP[cur+count] >= splitLCP {
+          count += 1;
+        }
+        // now we can recurse on cur..#count
+        computeSimilarityRecursive(cur..#count, AccumCoOccurences,
+                                   FileSufArrSize, splitLCP,
+                                   SA, LCP, thetext, fileStarts);
+        // now consider the next region
+        cur = cur + count;
+      }
+    }
+  }
+}
+
+
+proc computeSimilarityRecursiveLCP(ref Similarity: [] similarity,
+                                   SA: [], LCP: [], thetext: [],
+                                   fileStarts: [] int)
+{
+  writeln("in computeSimilarityRecursiveLCP");
+  // The idea of this function is to account for long similar
+  // sequences as well as shorter ones.
+  //
+  // It works by finding blocks in the SA / LCP arrays that
+  // represent common substrings (suffixes with a common prefix)
+  // and then it considers the LCP relationships between the
+  // files in that block.
+  //
+  // In the first phase, the block boundaries are determined as
+  // the minimum LCP value within a window. This enables
+  // parallel processing in the later phases and enforces
+  // that only substrings with up to MAX_OCCURENCES are considered.
+
+  // The scoring in this function is working with
+  // cosine similarity with notional term frequencies per document.
+  // The term frequency for a common substring of C characters is:
+  //   C * Count / DocSufArrSize
+  // Where an n-character document's suffix array size is n(n+1)/2.
+  //
+  // When adding up scores, we are working with two documents which
+  // have different lengths, so we use
+  //
+  //   C * CountA / DocSufArrSizeA + C * CountB / DocSufArrSizeB
+  //
+  // To avoid dividing on each addition, we put these with a common
+  // denominator:
+  //
+  //   C * CountA * DocSufArrSizeB + C * CountB * DocSufArrSizeA
+  //   ---------------------------------------------------------
+  //   DocSufArrSizeA * DocSufArrSizeB
+
+
+  const nFiles = fileStarts.size-1;
+  const n = SA.size;
+  const nBlocks = divCeil(n, 2*MAX_OCCURRENCES);
+  const blockSize = divCeil(n, nBlocks);
+  var Boundaries:[0..nBlocks+1] int;
+  forall blockIdx in 0..<nBlocks {
+    const blockStart = blockIdx * blockSize;
+    const blockEnd = min(blockStart + blockSize - 1, n - 1); // inclusive
+
+    // find the index of the minimum LCP value in blockStart..blockEnd
+    const (minVal, minIdx) =
+      minloc reduce zip(LCP[blockStart..blockEnd], blockStart..blockEnd);
+
+    // store it in Boundaries
+    Boundaries[blockIdx+1] = max(1, minIdx);
+  }
+  Boundaries[0] = 1;
+  // Boundaries[1] ... Boundaries[nBlocks] computed above
+  Boundaries[nBlocks+1] = n;
+
+
+  writeln("Computed Boundaries");
+
+  // Initialize arrays to store the scores
+
+  // sum of products of term counts for terms common to docs A and B
+  // information about substrings common to docs A and B
+  // uses AccumCoOccurences[flattenTriangular(docA, docB)]
+  var AccumCoOccurences:[Similarity.domain] similarity = Similarity;
+
+  // sum of squares of term counts for each document
+  // (used in denominator of cosine similarity)
+  var SumSqTermCounts:[0..<nFiles] real;
+
+  var FileSufArrSize:[0..<nFiles] real;
+  forall doc in 0..<nFiles {
+    const fileSize = (fileStarts[doc+1] - fileStarts[doc]): real;
+    FileSufArrSize[doc] = fileSize * (fileSize+1.0) / 2.0;
+  }
+
+  writeln("Examining Blocks");
+
+  // consider each block, including the potentially short 0th
+  // and nBlock'th blocks.
+  forall blockIdx in 0..nBlocks with (+ reduce AccumCoOccurences,
+                                      + reduce SumSqTermCounts) {
+    const blockStart = Boundaries[blockIdx] + 1;
+    const blockEnd = Boundaries[blockIdx+1] - 1; // inclusive
+    const block = blockStart..blockEnd;
+    //writeln("Working on block ", blockIdx, " with range ", block);
+
+    // Compute the full LCP for this block and limit anything
+    // crossing file boundaries
+    const biggerEnd = min(blockEnd+1, n-1);
+    const ext = blockStart-1..biggerEnd;
+    var BlockLCP:[ext] int;
+    for (blockLCPElt, saElt, lcpElt) in zip(BlockLCP, SA[ext], LCP[ext]) {
+      const off = offset(saElt);
+      const doc = offsetToFileIdx(fileStarts, off);
+      const nextFileStarts = fileStarts[doc+1];
+      blockLCPElt = min(lcpElt, nextFileStarts - off - 1);
+    }
+
+    var DocToCountsThisBlock:[0..<nFiles] int = 0;
+
+    // compute the minimum LCP in this block
+    var minLCP = min reduce LCP[block];
+    minLCP = max(0, minLCP);
+
+    computeSimilarityRecursive(block, AccumCoOccurences,
+                               FileSufArrSize, minLCP,
+                               SA, BlockLCP, thetext, fileStarts);
+  }
+
+  writeln("Computing Score");
+
+  // Combine AccumCoOccurences with SumSqTermCounts to form
+  // the cosine similarity and store that in Similarity.
+  var SqrtSumSqTermCounts:[0..<nFiles] real = sqrt(min(1, SumSqTermCounts));
+
+  forall (elt, cooScore) in zip(Similarity, AccumCoOccurences) {
+    assert(elt.docA == cooScore.docA);
+    assert(elt.docB == cooScore.docB);
+    const docA = elt.docA;
+    const docB = elt.docB;
+    const fileSizeA = (fileStarts[docA+1] - fileStarts[docA]):real;
+    const fileSizeB = (fileStarts[docB+1] - fileStarts[docB]):real;
+    const sumSizes = fileSizeA + fileSizeB;
+    //const denom = (sumSizes * (sumSizes+1)) / 2.0;
+    //const denom = SqFileSize[docA] * SqFileSize[docB];
+    //writeln("Raw score between f", docA, ", f", docB, " ", cooScore);
+    const denom = 2.0 * FileSufArrSize[docA] * FileSufArrSize[docB];
+    elt.score = sqrt(cooScore.score / denom);
+    //elt.score = cooScore.score / denom;
+    elt.numPrefixes = cooScore.numPrefixes;
+    elt.minPrefix = cooScore.minPrefix;
+    elt.maxPrefix = cooScore.maxPrefix;
+    elt.sumPrefixes = cooScore.sumPrefixes;
+  }
+}
+
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);
 
@@ -601,13 +908,14 @@ proc main(args: [] string) throws {
     }
   }
 
-  if STRATEGY == "block-lcp" {
+  if STRATEGY == "recursive-lcp" {
+    computeSimilarityRecursiveLCP(Similarity, SA, LCP, allData, fileStarts);
+  } else if STRATEGY == "block-lcp" {
     computeSimilarityBlockLCP(Similarity, SA, LCP, allData, fileStarts);
   } else if STRATEGY == "adaptive-lcp" {
     computeSimilarityAdaptiveLCP(Similarity, SA, LCP, allData, fileStarts);
   } else if STRATEGY == "adjacent-nolcp" {
     computeSimilarityAdjacentNoLCP(Similarity, SA, allData, fileStarts);
-
   } else {
     return false;
   }
