@@ -31,9 +31,10 @@ import Utility.computeNumTasks;
 import FileSystem;
 import IO;
 import List;
+import Math.{divCeil, log};
+import Path;
 import Sort;
 import Time;
-import Math.{divCeil, log};
 
 use Utility;
 
@@ -202,10 +203,15 @@ proc main(args: [] string) throws {
           "took ", t.elapsed(), " seconds");
   writeln(totalSize / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
 
-  writeln("Computing unique");
+  writeln("Computing unique substrings");
+  t.reset();
+  t.start();
   var MinUnique = findUnique(SA, LCP, allData, fileStarts);
-
+  t.stop();
+  writeln("finding unique substrings took ", t.elapsed(), " seconds");
+ 
   // compute statistics for each file
+  writeln("Computing substring statistics");
   const nFiles = allPaths.size;
   var fileStats:[0..<nFiles] uniqueStats;
 
@@ -237,6 +243,31 @@ proc main(args: [] string) throws {
               " min ", stats.minLength,
               " avg ", stats.sumLengths:real / stats.count,
               " max ", stats.maxLength);
+    }
+  }
+
+  writeln("Outputting minuniq files");
+  forall (path, doc, stats) in zip(allPaths, allPaths.domain, fileStats) {
+    if stats.count > 0 {
+      const docStart = fileStarts[doc];
+      const docEnd = fileStarts[doc+1];
+      var pathDotUnique = Path.replaceExt(path, ".unique");
+      writeln("Writing unique substrings from ", path, " to ", pathDotUnique);
+      var w = IO.openWriter(pathDotUnique);
+      if isFastaFile(path) {
+        assert(MinUnique.eltType == uint(8)); // otherwise, update below code
+        for i in docStart..<docEnd-1 { // don't write the trailing null byte
+          // write > according to the input to help keep
+          // the file aligned with the genome data
+          if allData[i] == ">".toByte() {
+            w.writeByte(">".toByte());
+          } else {
+            w.writeByte(MinUnique[i]);
+          }
+        }
+      } else {
+        w.writeBinary(MinUnique[docStart..<docEnd]);
+      }
     }
   }
 
