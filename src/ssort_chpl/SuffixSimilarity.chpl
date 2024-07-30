@@ -888,7 +888,7 @@ proc main(args: [] string) throws {
   writeln("Computing suffix array with ", computeNumTasks(), " tasks");
   t.reset();
   t.start();
-  //var SA = computeSuffixArray(thetext, totalSize);
+  //var SA = computeSuffixArray(allData, totalSize);
   const SA, LCP;
   computeSuffixArrayAndLCP(allData, totalSize, SA, LCP);
   t.stop();
@@ -909,6 +909,9 @@ proc main(args: [] string) throws {
     }
   }
 
+  t.reset();
+  t.start();
+
   if STRATEGY == "recursive-lcp" {
     computeSimilarityRecursiveLCP(Similarity, SA, LCP, allData, fileStarts);
   } else if STRATEGY == "block-lcp" {
@@ -922,6 +925,11 @@ proc main(args: [] string) throws {
   }
 
   Sort.sort(Similarity, comparator=new similarityComparator());
+
+  t.stop();
+
+  writeln("similarity computation took ", t.elapsed(), " seconds");
+
 
   // output the top 20 or so
   const nprint = min(Similarity.size, NSIMILAR_TO_OUTPUT);
