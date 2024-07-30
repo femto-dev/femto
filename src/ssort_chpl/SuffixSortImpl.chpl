@@ -22,6 +22,7 @@ module SuffixSortImpl {
 
 use DifferenceCovers;
 use Partitioning;
+import Utility.computeNumTasks;
 
 use Math;
 use IO;

@@ -26,7 +26,7 @@ import SuffixSort.computeSuffixArray;
 import SuffixSort.computeSuffixArrayAndLCP;
 import SuffixSortImpl.offsetAndCached;
 
-import Partitioning.computeNumTasks;
+import Utility.computeNumTasks;
 
 import FileSystem;
 import IO;
