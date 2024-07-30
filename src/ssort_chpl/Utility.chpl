@@ -29,6 +29,23 @@ import List.list;
 import Sort.{sort,isSorted};
 import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING};
 
+/* Compute the number of tasks to be used for a data parallel operation */
+proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
+  if __primitive("task_get_serial") {
+    return 1;
+  }
+
+  const tasksPerLocale = dataParTasksPerLocale;
+  const ignoreRunning = dataParIgnoreRunningTasks;
+  var nTasks = if tasksPerLocale > 0 then tasksPerLocale else here.maxTaskPar;
+  if !ignoreRunning {
+    const otherTasks = here.runningTasks() - 1; // don't include self
+    nTasks = if otherTasks < nTasks then (nTasks-otherTasks):int else 1;
+  }
+
+  return nTasks;
+}
+
 /* This function gives the size of an array of triangular indices
    for use with flattenTriangular.
  */

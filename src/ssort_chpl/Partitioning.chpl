@@ -25,6 +25,7 @@ module Partitioning {
 
 import SuffixSort.EXTRA_CHECKS;
 
+import Utility.computeNumTasks;
 import Reflection.canResolveMethod;
 import Sort.{sort, defaultComparator};
 import Math.{log2, divCeil};
@@ -33,23 +34,6 @@ import CTypes.c_array;
 // These settings control the sample sort and classification process
 param classifyUnrollFactor = 7;
 const equalBucketThreshold = 5;
-
-// helper function to compute the number of tasks available
-proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
-  if __primitive("task_get_serial") {
-    return 1;
-  }
-
-  const tasksPerLocale = dataParTasksPerLocale;
-  const ignoreRunning = dataParIgnoreRunningTasks;
-  var nTasks = if tasksPerLocale > 0 then tasksPerLocale else here.maxTaskPar;
-  if !ignoreRunning {
-    const otherTasks = here.runningTasks() - 1; // don't include self
-    nTasks = if otherTasks < nTasks then (nTasks-otherTasks):int else 1;
-  }
-
-  return nTasks;
-}
 
 // compute logarithm base 2 rounded down
 proc log2int(n: int) {
