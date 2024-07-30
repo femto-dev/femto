@@ -20,11 +20,31 @@
 module Utility {
 
 
-import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING};
-import Sort.{sort,isSorted};
+import CTypes.{c_int};
+import FileSystem;
 import FileSystem.{isFile, isDir, findFiles, getFileSize};
-import List.list;
 import IO;
+import OS.EofError;
+import List.list;
+import Sort.{sort,isSorted};
+import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING};
+
+/* Compute the number of tasks to be used for a data parallel operation */
+proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
+  if __primitive("task_get_serial") {
+    return 1;
+  }
+
+  const tasksPerLocale = dataParTasksPerLocale;
+  const ignoreRunning = dataParIgnoreRunningTasks;
+  var nTasks = if tasksPerLocale > 0 then tasksPerLocale else here.maxTaskPar;
+  if !ignoreRunning {
+    const otherTasks = here.runningTasks() - 1; // don't include self
+    nTasks = if otherTasks < nTasks then (nTasks-otherTasks):int else 1;
+  }
+
+  return nTasks;
+}
 
 /* This function gives the size of an array of triangular indices
    for use with flattenTriangular.
@@ -102,6 +122,132 @@ proc gatherFiles(ref files: list(string), path: string) throws {
   }
 }
 
+private const fastaExtensions = [".fasta", ".fas", ".fa", ".fna",
+                                 ".ffn", ".faa", ".mpfa", ".frn"];
+
+/* Returns 'true' if 'path' refers to a fasta file */
+proc isFastaFile(path: string): bool throws {
+  var foundExt = false;
+  for ext in fastaExtensions {
+    if path.toLower().endsWith(ext) {
+      foundExt = true;
+    }
+  }
+
+  if foundExt {
+    var r = IO.openReader(path, region=0..1);
+    return r.readByte() == ">".toByte();
+  }
+
+  return false;
+}
+
+/* Computes the size of the nucleotide data that will
+   be read by readFastaFileSequence */
+proc computeFastaFileSize(path: string) throws {
+  extern proc isspace(c: c_int): c_int;
+
+  // compute the file size without > lines or whitespace
+  var r = IO.openReader(path);
+  var inDescLine = false;
+  var count = 0;
+  while true {
+    try {
+      var byte = r.readByte();
+      if byte == ">".toByte() {
+        inDescLine = true;
+        count += 1;
+      } else if byte == "\n".toByte() && inDescLine {
+        inDescLine = false;
+      }
+      if isspace(byte) == 0 && !inDescLine {
+        count += 1;
+      }
+    } catch e: EofError {
+      break;
+    }
+  }
+  return count;
+}
+
+/* Reads a the sequence portion of a fasta file into a region of an array.
+   The resulting array elements will contain a > at the start of each sequence
+   followed by the nucleotide data. The whitespace and sequence
+   descriptions are removed.
+   The region size should match 'computeFastaFileSize'. */
+proc readFastaFileSequence(path: string,
+                           ref data: [] uint(8),
+                           region: range) throws
+{
+  extern proc isspace(c: c_int): c_int;
+
+  if region.strides != strideKind.one {
+    compilerError("Range should be stride one");
+  }
+  var dataStart = region.low;
+  var n = region.size;
+  var r = IO.openReader(path);
+  var inDescLine = false;
+  var count = 0;
+  var desc = "";
+  while true {
+    try {
+      var byte = r.readByte();
+      if byte == ">".toByte() {
+        inDescLine = true;
+        if count < n {
+          data[dataStart + count] = byte;
+        }
+        desc = "";
+        count += 1;
+      } else if byte == "\n".toByte() && inDescLine {
+        inDescLine = false;
+        writeln("Reading sequence ", desc);
+      }
+      if inDescLine {
+        desc.appendCodepointValues(byte);
+      } else if isspace(byte) == 0 {
+        if count < n {
+          data[dataStart + count] = byte;
+        }
+        count += 1;
+      }
+    } catch e: EofError {
+      break;
+    }
+  }
+
+  if n != count {
+    // region does not match the file
+    throw new Error("count mismatch in readFastaFileSequence");
+  }
+}
+
+/* Computes the size of a file. Handles fasta files specially to compute the
+   size of the nucleotide data only. */
+proc computeFileSize(path: string) throws {
+  if isFastaFile(path) {
+    return computeFastaFileSize(path);
+  } else {
+    return getFileSize(path);
+  }
+}
+
+/* Read the data in a file into a portion of an array. Handles fasta
+   files specially to read only the nucleotide data.
+   The region should match the file size. */
+proc readFileData(path: string,
+                  ref data: [] uint(8),
+                  region: range) throws
+{
+  if isFastaFile(path) {
+    readFastaFileSequence(path, data, region);
+  } else {
+    var r = IO.openReader(path);
+    r.readAll(data[region]);
+  }
+}
+
 /*
  Given a list of files, read in all files into a single array
  and produce several related data items:
@@ -129,7 +275,7 @@ proc readAllFiles(const ref files: list(string),
   // compute the size for the concatenated input
   var sizes: [paths.domain] int;
   forall (path, sz) in zip(paths, sizes) {
-    sz = getFileSize(path);
+    sz = computeFileSize(path);
     sz += 1; // add a null byte to separate files
   }
 
@@ -140,9 +286,9 @@ proc readAllFiles(const ref files: list(string),
 
   // read each file
   forall (path, sz, end) in zip(paths, sizes, fileEnds) {
-    var f = IO.open(path, IO.ioMode.r);
     const start = end - sz;
-    f.reader().readAll(thetext[start..#sz]);
+    const count = sz - 1; // we added a null byte above
+    readFileData(path, thetext, start..#count);
   }
 
   // compute fileStarts
@@ -170,7 +316,7 @@ proc printSuffix(offset: int, thetext: [], fileStarts: [] int, lcp: int, amt: in
   const end = min(offset + amt, thetext.size);
   for i in offset..<end {
     var ch = thetext[i];
-    if 32 <= ch && ch <= 126 {
+    if 32 <= ch && ch <= 126 { // note: 32 is ' ' and 126 is ~
       // char is OK
     } else {
       ch = 46; // .
@@ -179,211 +325,6 @@ proc printSuffix(offset: int, thetext: [], fileStarts: [] int, lcp: int, amt: in
   }
   const fileIdx = offsetToFileIdx(fileStarts, offset);
   writef(" % 8i f%i lcp%i\n", offset, fileIdx, lcp);
-}
-
-/*
-class ArrayMinReduceOp: ReduceScanOp {
-  /* the type of the elements to be reduced -- expecting [] int */
-  type eltType;
-
-  /* task-private accumulator/reduction state */
-  var value: eltType;
-
-  /* identity w.r.t. the reduction operation */
-  proc identity {
-    var ret: eltType;
-    ret = max(ret.eltType);
-    return ret;
-  }
-
-  /* accumulate a single element onto the accumulator */
-  proc accumulate(elm)  {
-    foreach (vElt, aElt) in zip(value, elm) {
-      vElt = min(vElt, aElt);
-    }
-  }
-
-  /* accumulate a single element onto the state */
-  proc accumulateOntoState(ref state, elm)  {
-    foreach (sElt, aElt) in zip(state, elm) {
-      sElt = min(sElt, aElt);
-    }
-  }
-
-  // Note: 'this' can be accessed by multiple calls to combine()
-  // concurrently. The Chapel implementation serializes such calls
-  // with a lock on 'this'.
-  // 'other' will not be accessed concurrently.
-  /* combine the accumulations in 'this' and 'other' */
-  proc combine(other: borrowed ArrayMinReduceOp(?)) {
-    foreach (vElt, aElt) in zip(value, other.value) {
-      vElt = min(vElt, aElt);
-    }
-  }
-
-  /* Convert the accumulation into the value of the reduction
-     that is reported to the user. */
-  proc generate()    do return value;
-
-  /* produce a new instance of this class */
-  proc clone()       do return new unmanaged ArrayMinReduceOp(eltType=eltType);
-}
-
-class ArrayMaxReduceOp: ReduceScanOp {
-  /* the type of the elements to be reduced -- expecting [] int */
-  type eltType;
-
-  /* task-private accumulator/reduction state */
-  var value: eltType;
-
-  /* identity w.r.t. the reduction operation */
-  proc identity {
-    var ret: eltType;
-    ret = min(ret.eltType);
-    return ret;
-  }
-
-  /* accumulate a single element onto the accumulator */
-  proc accumulate(elm)  {
-    foreach (vElt, aElt) in zip(value, elm) {
-      vElt = max(vElt, aElt);
-    }
-  }
-
-  /* accumulate a single element onto the state */
-  proc accumulateOntoState(ref state, elm)  {
-    foreach (sElt, aElt) in zip(state, elm) {
-      sElt = max(sElt, aElt);
-    }
-  }
-
-  // Note: 'this' can be accessed by multiple calls to combine()
-  // concurrently. The Chapel implementation serializes such calls
-  // with a lock on 'this'.
-  // 'other' will not be accessed concurrently.
-  /* combine the accumulations in 'this' and 'other' */
-  proc combine(other: borrowed ArrayMaxReduceOp(?)) {
-    foreach (vElt, aElt) in zip(value, other.value) {
-      vElt = max(vElt, aElt);
-    }
-  }
-
-  /* Convert the accumulation into the value of the reduction
-     that is reported to the user. */
-  proc generate()    do return value;
-
-  /* produce a new instance of this class */
-  proc clone()       do return new unmanaged ArrayMaxReduceOp(eltType=eltType);
-}
-*/
-
-proc testTriangles() {
-  writeln("testTriangles");
-
-  assert(triangleSize(0) == 0);
-  assert(triangleSize(1) == 0);
-
-  /*
-     - -
-     0 -
-   */
-  assert(triangleSize(2) == 1);
-  assert(flattenTriangular(1,0) == 0);
-  assert(flattenTriangular(0,1) == 0);
- 
-  /*
-     - - -
-     0 - -
-     1 2 -
-   */
-  assert(triangleSize(3) == 3);
-  assert(flattenTriangular(1,0) == 0);
-  assert(flattenTriangular(0,1) == 0);
-
-  assert(flattenTriangular(2,0) == 1);
-  assert(flattenTriangular(0,2) == 1);
-  assert(flattenTriangular(2,1) == 2);
-  assert(flattenTriangular(1,2) == 2);
-
-  /*
-     - - - -
-     0 - - -
-     1 2 - -
-     3 4 5 -
-   */
-
-  assert(triangleSize(4) == 6);
-  assert(flattenTriangular(1,0) == 0);
-  assert(flattenTriangular(0,1) == 0);
-
-  assert(flattenTriangular(2,0) == 1);
-  assert(flattenTriangular(0,2) == 1);
-  assert(flattenTriangular(2,1) == 2);
-  assert(flattenTriangular(1,2) == 2);
-
-  assert(flattenTriangular(3,0) == 3);
-  assert(flattenTriangular(0,3) == 3);
-  assert(flattenTriangular(3,1) == 4);
-  assert(flattenTriangular(1,3) == 4);
-  assert(flattenTriangular(3,2) == 5);
-  assert(flattenTriangular(2,3) == 5);
-}
-
-proc testBsearch() {
-  writeln("testBsearch");
-
-  assert(bsearch([1], 0) == -1);
-  assert(bsearch([1], 1) == 0);
-  assert(bsearch([1], 2) == 0);
-
-  assert(bsearch([1,3], 0) == -1);
-  assert(bsearch([1,3], 1) == 0);
-  assert(bsearch([1,3], 2) == 0);
-  assert(bsearch([1,3], 3) == 1);
-  assert(bsearch([1,3], 4) == 1);
-}
-
-/*proc testArrayMinReduce() {
-  writeln("testArrayMinReduce");
-
-  var TupA = ([2, 3, 9, 1, 7, 4],
-              [4, 2, 2, 9, 2, 4],
-              [0, 5, 8, 3, 6, 1]);
-  var Expect= [0, 2, 2, 1, 2, 1]; 
-
-  var State:[TupA[0].domain] int = max(int);
-
-  forall i in 0..<TupA.size with (ArrayMinReduceOp reduce State) {
-    State reduce= TupA[i]; 
-  }
-
-  writeln(State);
-
-  assert(&& reduce (State == Expect));
-}
-
-proc testArrayMaxReduce() {
-  writeln("testArrayMaxReduce");
-
-  var TupA = ([2, 3, 9, 1, 7, 4],
-              [4, 2, 2, 9, 2, 4],
-              [0, 5, 8, 3, 6, 1]);
-  var Expect= [4, 5, 9, 9, 7, 4]; 
-
-  var State:[TupA[0].domain] int = min(int);
-
-  forall i in 0..<TupA.size with (ArrayMaxReduceOp reduce State) {
-    State reduce= TupA[i]; 
-  }
-
-  assert(&& reduce (State == Expect));
-}*/
-
-proc main() {
-  testTriangles();
-  testBsearch();
-  /*testArrayMinReduce();
-  testArrayMaxReduce();*/
 }
 
 

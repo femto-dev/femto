@@ -26,7 +26,7 @@ import SuffixSort.computeSuffixArray;
 import SuffixSort.computeSuffixArrayAndLCP;
 import SuffixSortImpl.offsetAndCached;
 
-import Partitioning.computeNumTasks;
+import Utility.computeNumTasks;
 
 import FileSystem;
 import IO;
@@ -753,7 +753,8 @@ proc computeSimilarityRecursiveLCP(ref Similarity: [] similarity,
 
   const nFiles = fileStarts.size-1;
   const n = SA.size;
-  const nBlocks = divCeil(n, 2*MAX_OCCURRENCES);
+  const nBlocks = divCeil(n, MAX_OCCURRENCES/2);
+  // minimum-to-minimum blocks are < MAX_OCCURENCES long
   const blockSize = divCeil(n, nBlocks);
   var Boundaries:[0..nBlocks+1] int;
   forall blockIdx in 0..<nBlocks {
