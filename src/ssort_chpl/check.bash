@@ -13,5 +13,12 @@ do
   rm a.out
 done
 
+# also check that we can compile a few tools
+echo checking that a few other tools compile
+chpl SuffixSimilarity.chpl -o a.out
+chpl SuffixSort.chpl -o a.out
+chpl FindUnique.chpl -o a.out
+rm a.out
+
 echo
 echo OK
