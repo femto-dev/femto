@@ -26,7 +26,7 @@ import SuffixSort.computeSuffixArray;
 import SuffixSort.computeSuffixArrayAndLCP;
 import SuffixSortImpl.offsetAndCached;
 
-import Partitioning.computeNumTasks;
+import Utility.computeNumTasks;
 
 import FileSystem;
 import IO;
@@ -48,24 +48,6 @@ proc offset(a: integral) {
 }
 proc offset(a: offsetAndCached(?)) {
   return a.offset;
-}
-
-record hit {
-  var start: int;
-  var size: int;
-}
-
-record hits {
-  var lst: List.list(hit);
-}
-
-// allow + reduce on hits
-operator +(x: hits, y: hits) {
-  var ret: hits;
-
-  ret.lst.pushBack(x.lst);
-  ret.lst.pushBack(y.lst);
-  return ret;
 }
 
 // compute an LCP value while considering file boundaries
@@ -118,8 +100,63 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int)
     }
   }
 
+  // Set MinUnique[i] = 0 if MinUnique[i] > MinUnique[i+1]
+  {
+    var nTasks = computeNumTasks();
+    // Divide the input into nTasks chunks.
+    const blockSize = divCeil(n, nTasks);
+    const nBlocks = divCeil(n, blockSize);
+
+    // save MinUnique[i] values for final comparison of each task
+    var NextTaskValue:[0..<nTasks] MinUniqueElt;
+    forall tid in 0..<nTasks {
+      var nextTaskStart = (tid+1) * blockSize;
+      if nextTaskStart <= n {
+        NextTaskValue[tid] = MinUnique[nextTaskStart];
+      }
+    }
+
+    coforall tid in 0..<nTasks {
+      var taskStart = tid * blockSize;
+      var taskEnd = min(taskStart + blockSize - 1, n); // an inclusive bound
+
+      // handle the portion entirely within this task
+      for i in taskStart..<taskEnd {
+        if MinUnique[i] > MinUnique[i+1] {
+          MinUnique[i] = 0;
+        }
+      }
+
+      // handle the final element
+      if MinUnique[taskEnd] > NextTaskValue[tid] {
+        MinUnique[taskEnd] = 0;
+      }
+    }
+  }
+
   return MinUnique;
 }
+
+record uniqueStats {
+  // default values for these are the identity for accumulating
+  var count: int = 0;
+  var minLength: int = max(int);
+  var maxLength: int = min(int);
+  var sumLengths: int = 0;
+}
+
+// this operator + allows + reduce on arrays of uniqueStats
+// as a workaround for https://github.com/chapel-lang/chapel/issues/25658 .
+operator +(x: uniqueStats, y: uniqueStats) {
+  var ret: uniqueStats;
+  ret.count = x.count + y.count;
+  ret.minLength = min(x.minLength, y.minLength);
+  ret.maxLength = max(x.maxLength, y.maxLength);
+  ret.sumLengths = x.sumLengths + y.sumLengths;
+
+  return ret;
+}
+
 
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);
@@ -165,11 +202,45 @@ proc main(args: [] string) throws {
           "took ", t.elapsed(), " seconds");
   writeln(totalSize / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
 
-  const nFiles = allPaths.size;
-
   writeln("Computing unique");
   var MinUnique = findUnique(SA, LCP, allData, fileStarts);
 
+  // compute statistics for each file
+  const nFiles = allPaths.size;
+  var fileStats:[0..<nFiles] uniqueStats;
+
+  forall (elt,i) in zip(MinUnique, MinUnique.domain) with (+ reduce fileStats) {
+    if elt > 0 {
+      var amt: uniqueStats;
+      amt.count = 1;
+      amt.minLength = elt;
+      amt.maxLength = elt;
+      amt.sumLengths = elt;
+
+      const offset = i;
+      const doc = offsetToFileIdx(fileStarts, offset);
+      const docStart = fileStarts[doc];
+      const docEnd = fileStarts[doc+1];
+      const docOffset = offset - docStart;
+      if offset + elt < docEnd {
+        fileStats[doc] += amt;
+      }
+    }
+  }
+
+  for (path,stats) in zip(allPaths, fileStats) {
+    writeln(path);
+    if stats.count == 0 {
+      writeln("  found 0 unique substrings");
+    } else {
+      writeln("  found ", stats.count, " unique substrings with lengths:",
+              " min ", stats.minLength,
+              " avg ", stats.sumLengths:real / stats.count,
+              " max ", stats.maxLength);
+    }
+  }
+
+  /*
   var curDoc = -1;
   for i in 0..<SA.size {
     const offset = i;
@@ -204,7 +275,7 @@ proc main(args: [] string) throws {
         }
       }
     }
-  }
+  }*/
 
   return true;
 }
