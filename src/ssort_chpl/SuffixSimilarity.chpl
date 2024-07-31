@@ -38,7 +38,7 @@ import Math.{divCeil, log};
 use Utility;
 
 // this size * the number of files = the window size
-config const STRATEGY="recursive-lcp";
+config const STRATEGY="block-lcp";
 config const WINDOW_SIZE_RATIO = 2.5;
 config const WINDOW_SIZE_OVERRIDE = 0;
 config const NSIMILAR_TO_OUTPUT = 200;
