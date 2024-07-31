@@ -870,17 +870,19 @@ proc main(args: [] string) throws {
 
   const allData; //: [] uint(8);
   const allPaths; //: [] string;
+  const concisePaths; //: [] string;
   const fileSizes; //: [] int;
   const fileStarts; //: [] int;
   const totalSize: int;
   readAllFiles(inputFilesList,
                allData=allData,
                allPaths=allPaths,
+               concisePaths=concisePaths,
                fileSizes=fileSizes,
                fileStarts=fileStarts,
                totalSize=totalSize);
 
-  writeln("Files are: ", allPaths);
+  writeln("Files are: ", concisePaths);
   writeln("FileStarts are: ", fileStarts);
 
   var t: Time.stopwatch;
@@ -935,8 +937,8 @@ proc main(args: [] string) throws {
   const nprint = min(Similarity.size, NSIMILAR_TO_OUTPUT);
   for elt in Similarity[0..<nprint] {
     if elt.score > 0 {
-      const docAName = allPaths[elt.docA];
-      const docBName = allPaths[elt.docB];
+      const docAName = concisePaths[elt.docA];
+      const docBName = concisePaths[elt.docB];
       writeln(docAName, " vs ", docBName, " : ", elt.score);
       if elt.numPrefixes {
         writeln("  found ", elt.numPrefixes, " common substrings with lengths:",

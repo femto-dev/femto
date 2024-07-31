@@ -21,12 +21,14 @@ module Utility {
 
 
 import CTypes.{c_int};
-import FileSystem;
 import FileSystem.{isFile, isDir, findFiles, getFileSize};
+import FileSystem;
 import IO;
-import OS.EofError;
 import List.list;
+import OS.EofError;
+import Path;
 import Sort.{sort,isSorted};
+
 import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING};
 
 /* Compute the number of tasks to be used for a data parallel operation */
@@ -248,6 +250,20 @@ proc readFileData(path: string,
   }
 }
 
+/* This function trims away the common portions of the paths
+   to make output using the paths more consise. It modifies the 'paths'
+   array.
+ */
+proc trimPaths(ref paths:[] string) {
+  var common: string = Path.commonPath(paths);
+  if common != "" && !common.endsWith("/") then common += "/";
+  for p in paths {
+    if p.startsWith(common) {
+      p = p[common.size..];
+    }
+  }
+}
+
 /*
  Given a list of files, read in all files into a single array
  and produce several related data items:
@@ -260,10 +276,14 @@ proc readFileData(path: string,
 proc readAllFiles(const ref files: list(string),
                   out allData: [] uint(8),
                   out allPaths: [] string,
+                  out concisePaths: [] string,
                   out fileSizes: [] int,
                   out fileStarts: [] int,
                   out totalSize: int) throws {
   var paths = files.toArray();
+  for p in paths {
+    p = Path.normPath(p);
+  }
   sort(paths);
 
   const nFiles = paths.size;
@@ -296,9 +316,14 @@ proc readAllFiles(const ref files: list(string),
   starts[0] = 0;
   starts[1..nFiles] = fileEnds;
 
+  // compute trimmed paths
+  var tPaths = paths;
+  trimPaths(tPaths);
+
   // return various values
   allData = thetext;
   allPaths = paths;
+  concisePaths = tPaths;
   fileSizes = sizes;
   fileStarts = starts;
   totalSize = total;

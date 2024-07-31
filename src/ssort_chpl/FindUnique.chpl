@@ -38,6 +38,9 @@ import Time;
 
 use Utility;
 
+/* the output directory */
+config const output="";
+
 config const MAX_OCCURRENCES = 100;
 config const MIN_K = 1;
 config const MAX_K = 100;
@@ -174,19 +177,26 @@ proc main(args: [] string) throws {
     return 1;
   }
 
+  if output == "" {
+    writeln("please specify an output directory with --output <dirname>");
+    return 1;
+  }
+
   const allData; //: [] uint(8);
   const allPaths; //: [] string;
+  const concisePaths; // : [] string
   const fileSizes; //: [] int;
   const fileStarts; //: [] int;
   const totalSize: int;
   readAllFiles(inputFilesList,
                allData=allData,
                allPaths=allPaths,
+               concisePaths=concisePaths,
                fileSizes=fileSizes,
                fileStarts=fileStarts,
                totalSize=totalSize);
 
-  writeln("Files are: ", allPaths);
+  writeln("Files are: ", concisePaths);
   writeln("FileStarts are: ", fileStarts);
 
   var t: Time.stopwatch;
@@ -234,7 +244,7 @@ proc main(args: [] string) throws {
     }
   }
 
-  for (path,stats) in zip(allPaths, fileStats) {
+  for (path,stats) in zip(concisePaths, fileStats) {
     writeln(path);
     if stats.count == 0 {
       writeln("  found 0 unique substrings");
@@ -246,15 +256,35 @@ proc main(args: [] string) throws {
     }
   }
 
-  writeln("Outputting minuniq files");
-  forall (path, doc, stats) in zip(allPaths, allPaths.domain, fileStats) {
+  writeln();
+  writeln("Outputting minuniq files to ", output);
+  if !FileSystem.exists(output) {
+    writeln("Creating ", output);
+    FileSystem.mkdir(output, parents=true);
+  }
+  // create the directories for the output
+  for shortPath in concisePaths {
+    var upath = Path.normPath(output + "/" + shortPath + ".unique");
+    var dir = Path.dirname(upath);
+    if dir != "" && dir != "." && dir != "/" {
+      if !FileSystem.exists(dir) {
+        writeln("Creating ", dir);
+        FileSystem.mkdir(output, parents=true);
+      }
+    }
+  }
+
+  forall (shortPath, fullPath, doc, stats) in
+      zip(concisePaths, allPaths, concisePaths.domain, fileStats)
+  {
     if stats.count > 0 {
       const docStart = fileStarts[doc];
       const docEnd = fileStarts[doc+1];
-      var pathDotUnique = Path.replaceExt(path, ".unique");
-      writeln("Writing unique substrings from ", path, " to ", pathDotUnique);
-      var w = IO.openWriter(pathDotUnique);
-      if isFastaFile(path) {
+
+      var upath = Path.normPath(output + "/" + shortPath + ".unique");
+      writeln("Writing unique substrings from ", fullPath, " to ", upath);
+      var w = IO.openWriter(upath);
+      if isFastaFile(fullPath) {
         assert(MinUnique.eltType == uint(8)); // otherwise, update below code
         for i in docStart..<docEnd-1 { // don't write the trailing null byte
           // write > according to the input to help keep
