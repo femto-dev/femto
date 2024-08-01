@@ -69,17 +69,19 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int)
 {
   const n = SA.size;
   type MinUniqueElt = uint(8);
+  // We always compare i vs i+1 so we allocate an extra element in MinUnique
   var MinUnique:[0..n] MinUniqueElt;
   param MAX_STORE = max(MinUniqueElt);
+  const numFiles = fileStarts.size-1;
 
   forall i in SA.domain with (ref MinUnique) {
-    if 0 < i && i < n - 1 {
-      // What is j such that SA[i..j] refers to a range
-      // of suffixes that come from only one file?
-      const off = offset(SA[i]);
-      const doc = offsetToFileIdx(fileStarts, off);
+    // What is j such that SA[i..j] refers to a range
+    // of suffixes that come from only one file?
+    const off = offset(SA[i]);
+    const doc = offsetToFileIdx(fileStarts, off);
 
-      var countSameDocument = 1;
+    var countSameDocument = 1;
+    if numFiles > 1 {
       while countSameDocument < MAX_OCCURRENCES && i + countSameDocument < n {
         const nextOff = offset(SA[i+countSameDocument]);
         const nextDoc = offsetToFileIdx(fileStarts, nextOff);
@@ -88,19 +90,19 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int)
         }
         countSameDocument += 1;
       }
-      var j = i + countSameDocument - 1;
+    }
+    var j = i + countSameDocument - 1;
 
-      // what prefix length would match SA[i-1] or SA[j+1]
-      // in addition to SA[i..j] ?
-      const curLcp = boundaryLCP(offset(SA[i]), LCP[i], fileStarts);
-      const nextLcp = if j+1 < n
-                      then boundaryLCP(offset(SA[j+1]), LCP[j+1], fileStarts)
-                      else 0;
-      const uniqueLen = max(curLcp, nextLcp) + 1;
+    // what prefix length would match SA[i-1] or SA[j+1]
+    // in addition to SA[i..j] ?
+    const curLcp = boundaryLCP(offset(SA[i]), LCP[i], fileStarts);
+    const nextLcp = if j+1 < n
+                    then boundaryLCP(offset(SA[j+1]), LCP[j+1], fileStarts)
+                    else 0;
+    const uniqueLen = max(curLcp, nextLcp) + 1;
 
-      if uniqueLen <= MAX_STORE {
-        MinUnique[offset(SA[i])] = uniqueLen:MinUniqueElt;
-      }
+    if uniqueLen <= MAX_STORE {
+      MinUnique[offset(SA[i])] = uniqueLen:MinUniqueElt;
     }
   }
 
