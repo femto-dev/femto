@@ -321,7 +321,9 @@ proc computeSimilarityAdaptiveLCP(ref Similarity: [] similarity,
 
 proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
                                SA: [], LCP: [], thetext: [],
-                               fileStarts: [] int)
+                               fileStarts: [] int,
+                               targetBlockSize: int,
+                               minCommonStrLen: int)
 {
   writeln("in computeSimilarityBlockLCP");
   // The idea of this function is to account for long similar
@@ -356,7 +358,7 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
 
   const nFiles = fileStarts.size-1;
   const n = SA.size;
-  const nBlocks = divCeil(n, TARGET_BLOCK_SIZE);
+  const nBlocks = divCeil(n, targetBlockSize);
   const blockSize = divCeil(n, nBlocks);
   var Boundaries:[0..nBlocks+1] int;
   forall blockIdx in 0..<nBlocks {
@@ -449,7 +451,7 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
       // Limit curLCP to avoid crossing file boundaries
       curLCP = min(curLCP, curDocEnds - curOff - 1, prevDocEnds - prevOff - 1);
 
-      if curLCP > minLCP && curLCP >= MIN_COMMON && curDoc != prevDoc {
+      if curLCP > minLCP && curLCP >= minCommonStrLen && curDoc != prevDoc {
         // ### accumulate score information for adjacent suffixes ###
         const docA = min(curDoc, prevDoc);
         const docB = max(curDoc, prevDoc);
@@ -477,7 +479,7 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
     }
 
     // ### accumulate score information for being together in the block ###
-    if minLCP >= MIN_COMMON {
+    if minLCP >= minCommonStrLen {
       // compute the contribution to the denominator
       /*foreach doc in 0..<nFiles {
         const count = DocToCountsThisBlock[doc];
@@ -853,6 +855,30 @@ proc computeSimilarityRecursiveLCP(ref Similarity: [] similarity,
   }
 }
 
+/* Compute all-to-all similarity and return an array representing it.
+   The returned array should be accessed with flattenTriangular(i,j)
+   for i and j in 0..<fileStarts.size-1 */
+proc computeSimilarity(SA: [], LCP: [], thetext: [],
+                       fileStarts: [] int,
+                       targetBlockSize: int = TARGET_BLOCK_SIZE,
+                       minCommonStrLen: int = MIN_COMMON) {
+  const nFiles = fileStarts.size-1;
+  var Similarity:[0..<triangleSize(nFiles)] similarity;
+  forall (i, j) in {0..<nFiles,0..<nFiles} {
+    if i < j {
+      ref sim = Similarity[flattenTriangular(i,j)];
+      sim.docA = i;
+      sim.docB = j;
+      // other fields start at 0
+    }
+  }
+
+  computeSimilarityBlockLCP(Similarity, SA, LCP, thetext, fileStarts,
+                            targetBlockSize, minCommonStrLen);
+
+  return Similarity;
+}
+
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);
 
@@ -917,7 +943,8 @@ proc main(args: [] string) throws {
   if STRATEGY == "recursive-lcp" {
     computeSimilarityRecursiveLCP(Similarity, SA, LCP, allData, fileStarts);
   } else if STRATEGY == "block-lcp" {
-    computeSimilarityBlockLCP(Similarity, SA, LCP, allData, fileStarts);
+    computeSimilarityBlockLCP(Similarity, SA, LCP, allData, fileStarts,
+                              TARGET_BLOCK_SIZE, MIN_COMMON);
   } else if STRATEGY == "adaptive-lcp" {
     computeSimilarityAdaptiveLCP(Similarity, SA, LCP, allData, fileStarts);
   } else if STRATEGY == "adjacent-nolcp" {
