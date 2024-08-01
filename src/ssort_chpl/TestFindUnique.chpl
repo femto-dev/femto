@@ -59,6 +59,7 @@ module TestFindUnique {
     */
     const thetext : [0..15] uint(8) = bytesToArray('abaababa');
     const fileStarts = [0, 9];
+    const ignoreDocs = [false];
     // const SA, LCP;
     // computeSuffixArrayAndLCP(thetext, n=8, SA, LCP);
 
@@ -77,7 +78,7 @@ module TestFindUnique {
     }
 
     // Call the function
-    var result = findUnique(SA, LCP, thetext, fileStarts);
+    var result = findUnique(SA, LCP, thetext, fileStarts, ignoreDocs);
     if debugOutput {
       writeln("Result: ", result);
     }
@@ -102,6 +103,7 @@ module TestFindUnique {
 
       const thetext = bytesToArray(input);
       const fileStarts = [0, input.size];
+      const ignoreDocs = [false];
       const SA, LCP;
       computeSuffixArrayAndLCP(thetext, n = input.size, SA, LCP);
 
@@ -114,7 +116,7 @@ module TestFindUnique {
         writeln("expectedMinUnique: ", expected);
       }
 
-      var result = findUnique(SA, LCP, thetext, fileStarts);
+      var result = findUnique(SA, LCP, thetext, fileStarts, ignoreDocs);
       if debugOutput {
         writeln("Result: ", result);
       }

@@ -25,6 +25,7 @@ import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.computeSuffixArray;
 import SuffixSort.computeSuffixArrayAndLCP;
 import SuffixSortImpl.offsetAndCached;
+import SuffixSimilarity;
 
 import Utility.computeNumTasks;
 
@@ -42,6 +43,11 @@ use Utility;
 config const output="";
 
 config const MAX_OCCURRENCES = 100; // max number of occurences within a doc
+config const MIN_UNIQUE = 10; // discard some near-duplicates if there
+                              // aren't this many per file
+config const MAX_DUPLICATE_STEPS = 10;
+config const MAX_SIMILAR = 0.98; // maximum similarity score to allow
+                                 // when processing near-duplicates
 config const HISTOGRAM_WIDTH = 50; // how wide to make histogram chart
 param HISTOGRAM_MIN = 0;
 param HISTOGRAM_MAX = 255;
@@ -64,8 +70,11 @@ inline proc boundaryLCP(offset: int, lcp: int, fileStarts: [] int) {
 /* Find substrings that are unique to a document.
    Returns a 'record hits' which needs to be sorted
    to remove unnecessary hits.
+
+   If IgnoreDocs[doc] is true, entries from that file will be ignored.
  */
-proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int)
+proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
+                IgnoreDocs: [] bool)
 {
   const n = SA.size;
   type MinUniqueElt = uint(8);
@@ -80,29 +89,31 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int)
     const off = offset(SA[i]);
     const doc = offsetToFileIdx(fileStarts, off);
 
-    var countSameDocument = 1;
-    if numFiles > 1 {
-      while countSameDocument < MAX_OCCURRENCES && i + countSameDocument < n {
-        const nextOff = offset(SA[i+countSameDocument]);
-        const nextDoc = offsetToFileIdx(fileStarts, nextOff);
-        if nextDoc != doc {
-          break;
+    if !IgnoreDocs[doc] {
+      var countSameDocument = 1;
+      if numFiles > 1 {
+        while countSameDocument < MAX_OCCURRENCES && i + countSameDocument < n {
+          const nextOff = offset(SA[i+countSameDocument]);
+          const nextDoc = offsetToFileIdx(fileStarts, nextOff);
+          if nextDoc != doc && !IgnoreDocs[nextDoc] {
+            break;
+          }
+          countSameDocument += 1;
         }
-        countSameDocument += 1;
       }
-    }
-    var j = i + countSameDocument - 1;
+      var j = i + countSameDocument - 1;
 
-    // what prefix length would match SA[i-1] or SA[j+1]
-    // in addition to SA[i..j] ?
-    const curLcp = boundaryLCP(offset(SA[i]), LCP[i], fileStarts);
-    const nextLcp = if j+1 < n
-                    then boundaryLCP(offset(SA[j+1]), LCP[j+1], fileStarts)
-                    else 0;
-    const uniqueLen = max(curLcp, nextLcp) + 1;
+      // what prefix length would match SA[i-1] or SA[j+1]
+      // in addition to SA[i..j] ?
+      const curLcp = boundaryLCP(offset(SA[i]), LCP[i], fileStarts);
+      const nextLcp = if j+1 < n
+                      then boundaryLCP(offset(SA[j+1]), LCP[j+1], fileStarts)
+                      else 0;
+      const uniqueLen = max(curLcp, nextLcp) + 1;
 
-    if uniqueLen <= MAX_STORE {
-      MinUnique[offset(SA[i])] = uniqueLen:MinUniqueElt;
+      if uniqueLen <= MAX_STORE {
+        MinUnique[offset(SA[i])] = uniqueLen:MinUniqueElt;
+      }
     }
   }
 
@@ -179,6 +190,146 @@ proc ref uniqueStats.add(length: int) {
   histogram[bin] += 1;
 }
 
+// Returns MinUnique
+// OutputUniqueForFile[doc] is true if unique strings should be output
+// for that file.
+// NumUnique has the number of unique substrings for each document.
+proc runFindUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
+                   concisePaths: [] string,
+                   ref IgnoreDocs: [0..<concisePaths.size] bool,
+                   ref NumUnique: [0..<concisePaths.size] int) {
+  // initially, IgnoreDocs[doc] is false for all docs
+
+  writeln("Computing unique substrings");
+
+  var t: Time.stopwatch;
+  t.reset();
+  t.start();
+  const MinUnique = findUnique(SA, LCP, thetext, fileStarts, IgnoreDocs);
+  t.stop();
+  writeln("finding unique substrings took ", t.elapsed(), " seconds");
+
+  // compute statistics for each file
+  writeln("Computing substring statistics");
+  const nFiles = concisePaths.size;
+  var fileStats:[0..<nFiles] uniqueStats;
+
+  forall (elt,i) in zip(MinUnique, MinUnique.domain) with (+ reduce fileStats)
+  {
+    if elt > 0 {
+      const offset = i;
+      const doc = offsetToFileIdx(fileStarts, offset);
+      const docStart = fileStarts[doc];
+      const docEnd = fileStarts[doc+1];
+      const docOffset = offset - docStart;
+      if offset + elt < docEnd {
+        fileStats[doc].add(elt);
+      }
+    }
+  }
+
+  NumUnique = max(int); // to make it easy to check numUnique < MIN_UNIQUE
+                        // this way, ignored documents arent near-duplicate
+
+  for (path,stats,ignore,nUnique) in
+      zip(concisePaths, fileStats, IgnoreDocs, NumUnique) {
+
+    if !ignore {
+      nUnique = stats.count;
+
+      writeln(path);
+      if stats.count == 0 {
+        writeln("  found 0 unique substrings");
+      } else {
+        writeln("  found ", stats.count, " unique substrings with lengths:",
+                " min ", stats.minLength,
+                " avg ", stats.sumLengths:real / stats.count,
+                " max ", stats.maxLength);
+
+        var lastPrintedPercent = 0.0;
+        var accum = 0;
+        const countR = stats.count: real;
+        param nBins = stats.histogram.size;
+        for bin in 0..<nBins-1 {
+          accum += stats.histogram[bin];
+          var ratio = accum / countR;
+          var percent = 100.0 * ratio;
+          if percent > lastPrintedPercent + 1.0 {
+            var nStars = round(ratio*HISTOGRAM_WIDTH):int;
+            writef("    len < %3i ", bin);
+            for i in 0..<nStars {
+              write("*");
+            }
+            writef("  %{##.##}%%\n", percent);
+            lastPrintedPercent = percent;
+          }
+        }
+        writeln();
+      }
+    }
+  }
+
+  writeln();
+
+  return MinUnique;
+}
+
+proc writeOutput(MinUnique: [], IgnoreDocs: [],
+                 allData: [], allPaths: [],
+                 concisePaths: [], fileStarts: []) throws {
+  if output == "" {
+    writeln("Not saving the unique substrings since " +
+            "an output directory was not provided.");
+    writeln("You can specify an output directory with --output <dirname>");
+    return;
+  }
+
+  writeln("Outputting minuniq files to ", output);
+  if !FileSystem.exists(output) {
+    writeln("Creating ", output);
+    FileSystem.mkdir(output, parents=true);
+  }
+  // create the directories for the output
+  for (shortPath, ignoreDoc) in zip(concisePaths, IgnoreDocs) {
+    if !ignoreDoc {
+      var upath = Path.normPath(output + "/" + shortPath + ".unique");
+      var dir = Path.dirname(upath);
+      if dir != "" && dir != "." && dir != "/" {
+        if !FileSystem.exists(dir) {
+          writeln("Creating ", dir);
+          FileSystem.mkdir(output, parents=true);
+        }
+      }
+    }
+  }
+
+  forall (shortPath, fullPath, doc, ignoreDoc) in
+      zip(concisePaths, allPaths, concisePaths.domain, IgnoreDocs)
+  {
+    if !ignoreDoc {
+      const docStart = fileStarts[doc];
+      const docEnd = fileStarts[doc+1];
+
+      var upath = Path.normPath(output + "/" + shortPath + ".unique");
+      writeln("Writing unique substrings from ", fullPath, " to ", upath);
+      var w = IO.openWriter(upath);
+      if isFastaFile(fullPath) {
+        assert(MinUnique.eltType == uint(8)); // otherwise, update below code
+        for i in docStart..<docEnd-1 { // don't write the trailing null byte
+          // write > according to the input to help keep
+          // the file aligned with the genome data
+          if allData[i] == ">".toByte() {
+            w.writeByte(">".toByte());
+          } else {
+            w.writeByte(MinUnique[i]);
+          }
+        }
+      } else {
+        w.writeBinary(MinUnique[docStart..<docEnd]);
+      }
+    }
+  }
+}
 
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);
@@ -226,118 +377,103 @@ proc main(args: [] string) throws {
           "took ", t.elapsed(), " seconds");
   writeln(totalSize / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
 
-  writeln("Computing unique substrings");
-  t.reset();
-  t.start();
-  var MinUnique = findUnique(SA, LCP, allData, fileStarts);
-  t.stop();
-  writeln("finding unique substrings took ", t.elapsed(), " seconds");
+  const nFiles = concisePaths.size;
+  var IgnoreDocs: [0..<nFiles] bool;
+  var NumUnique: [0..<nFiles] int;
+  {
+    const MinUnique =
+      runFindUnique(SA, LCP, allData, fileStarts, concisePaths, IgnoreDocs,
+                    NumUnique);
 
-  // compute statistics for each file
-  writeln("Computing substring statistics");
-  const nFiles = allPaths.size;
-  var fileStats:[0..<nFiles] uniqueStats;
-
-  forall (elt,i) in zip(MinUnique, MinUnique.domain) with (+ reduce fileStats) {
-    if elt > 0 {
-      const offset = i;
-      const doc = offsetToFileIdx(fileStarts, offset);
-      const docStart = fileStarts[doc];
-      const docEnd = fileStarts[doc+1];
-      const docOffset = offset - docStart;
-      if offset + elt < docEnd {
-        fileStats[doc].add(elt);
-      }
+    const nNearDuplicates = + reduce ((NumUnique < MIN_UNIQUE):int);
+    if nNearDuplicates == 0 {
+      writeOutput(MinUnique, IgnoreDocs,
+                  allData, allPaths, concisePaths, fileStarts);
+      return 0;
     }
   }
 
-  for (path,stats) in zip(concisePaths, fileStats) {
-    writeln(path);
-    if stats.count == 0 {
-      writeln("  found 0 unique substrings");
-    } else {
-      writeln("  found ", stats.count, " unique substrings with lengths:",
-              " min ", stats.minLength,
-              " avg ", stats.sumLengths:real / stats.count,
-              " max ", stats.maxLength);
+  // compute document similarity
+  writeln("Computing similarity to help removing near duplicates");
+  const Similarity =
+    SuffixSimilarity.computeSimilarity(SA, LCP, allData, fileStarts);
 
-      var lastPrintedPercent = 0.0;
-      var accum = 0;
-      const countR = stats.count: real;
-      param nBins = stats.histogram.size;
-      for bin in 0..<nBins-1 {
-        accum += stats.histogram[bin];
-        var ratio = accum / countR;
-        var percent = 100.0 * ratio;
-        if percent > lastPrintedPercent + 1.0 {
-          var nStars = round(ratio*HISTOGRAM_WIDTH):int;
-          writef("    len < %3i ", bin);
-          for i in 0..<nStars {
-            write("*");
+  for retry in 2..MAX_DUPLICATE_STEPS {
+    // remove some of the near duplicates
+    writeln();
+    writeln("Removing some near duplicates");
+    writeln();
+
+    var MaximumNearDuplicateScore: [0..<nFiles] (real, int, int);
+    // stores (score, doc, otherDoc)
+
+    forall (tup, nu, doc, ignore) in
+        zip(MaximumNearDuplicateScore, NumUnique, 0..<nFiles, IgnoreDocs) {
+      if nu < MIN_UNIQUE && !ignore {
+        var myScore = 0.0;
+        var otherDocHighestScore = doc;
+        for otherDoc in 0..<nFiles {
+          if doc != otherDoc && !IgnoreDocs[otherDoc] {
+            const ref sim = Similarity[flattenTriangular(doc,otherDoc)];
+            if sim.score > myScore {
+              myScore = sim.score;
+              otherDocHighestScore = otherDoc;
+            }
           }
-          writef("  %{##.##}%%\n", percent);
-          lastPrintedPercent = percent;
         }
+        tup[0] = myScore;
+        tup[1] = doc;
+        tup[2] = otherDocHighestScore;
+      }
+    }
+
+    writeln("MNDS ", MaximumNearDuplicateScore);
+    Sort.sort(MaximumNearDuplicateScore, new Sort.ReverseComparator());
+    writeln("MNDS ", MaximumNearDuplicateScore);
+
+    var nNearDuplicates = + reduce ((NumUnique < MIN_UNIQUE):int);
+    writeln("We have ", nNearDuplicates, " near duplicates");
+    var half = nNearDuplicates/2;
+    half = max(1, half);
+    writeln("Attempting to remove ", half,
+            " near duplicates with highest similarity");
+    var nRemoved = 0;
+    // ignore the other doc for the first half of MaximumNearDuplicateScore.
+    for i in 0..<half {
+      var (score, doc, otherDoc) = MaximumNearDuplicateScore[i];
+      if doc != otherDoc &&
+         NumUnique[doc] < MIN_UNIQUE {
+        writeln("Ignoring near duplicate ", concisePaths[doc],
+                " because it has the highest similarity score (", score,
+                ") with ", concisePaths[otherDoc]);
+        IgnoreDocs[otherDoc] = true;
+        nRemoved += 1;
+      }
+    }
+
+    // compute the minimal unique substrings with the new IgnoreDocs
+    const MinUnique =
+      runFindUnique(SA, LCP, allData, fileStarts, concisePaths, IgnoreDocs,
+                    NumUnique);
+
+    // output if appropriate
+    nNearDuplicates = + reduce ((NumUnique < MIN_UNIQUE):int);
+    writeln("Now we have ", nNearDuplicates, " near duplicates");
+    if nNearDuplicates == 0 || nRemoved == 0 || retry == MAX_DUPLICATE_STEPS {
+
+      for (doc, ignore, shortPath) in
+          zip(IgnoreDocs.domain, IgnoreDocs, concisePaths) {
+        writeln("REMOVED AS NEAR DUPLICATE: ", shortPath);
       }
       writeln();
+
+      writeOutput(MinUnique, IgnoreDocs,
+                  allData, allPaths, concisePaths, fileStarts);
+      return 0;
     }
   }
 
-
-  writeln();
-
-  if output == "" {
-    writeln("Not saving the unique substrings since " +
-            "an output directory was not provided.");
-    writeln("You can specify an output directory with --output <dirname>");
-    return 0;
-  }
-
-  writeln("Outputting minuniq files to ", output);
-  if !FileSystem.exists(output) {
-    writeln("Creating ", output);
-    FileSystem.mkdir(output, parents=true);
-  }
-  // create the directories for the output
-  for shortPath in concisePaths {
-    var upath = Path.normPath(output + "/" + shortPath + ".unique");
-    var dir = Path.dirname(upath);
-    if dir != "" && dir != "." && dir != "/" {
-      if !FileSystem.exists(dir) {
-        writeln("Creating ", dir);
-        FileSystem.mkdir(output, parents=true);
-      }
-    }
-  }
-
-  forall (shortPath, fullPath, doc, stats) in
-      zip(concisePaths, allPaths, concisePaths.domain, fileStats)
-  {
-    if stats.count > 0 {
-      const docStart = fileStarts[doc];
-      const docEnd = fileStarts[doc+1];
-
-      var upath = Path.normPath(output + "/" + shortPath + ".unique");
-      writeln("Writing unique substrings from ", fullPath, " to ", upath);
-      var w = IO.openWriter(upath);
-      if isFastaFile(fullPath) {
-        assert(MinUnique.eltType == uint(8)); // otherwise, update below code
-        for i in docStart..<docEnd-1 { // don't write the trailing null byte
-          // write > according to the input to help keep
-          // the file aligned with the genome data
-          if allData[i] == ">".toByte() {
-            w.writeByte(">".toByte());
-          } else {
-            w.writeByte(MinUnique[i]);
-          }
-        }
-      } else {
-        w.writeBinary(MinUnique[docStart..<docEnd]);
-      }
-    }
-  }
-
-  return true;
+  return 0;
 }
 
 
