@@ -41,10 +41,10 @@ use Utility;
 /* the output directory */
 config const output="";
 
-config const MAX_OCCURRENCES = 100;
-config const MIN_K = 1;
-config const MAX_K = 100;
-config const SHOW_MATCHES = true;
+config const MAX_OCCURRENCES = 100; // max number of occurences within a doc
+config const HISTOGRAM_WIDTH = 50; // how wide to make histogram chart
+param HISTOGRAM_MIN = 0;
+param HISTOGRAM_MAX = 255;
 
 // helpers to make this code work with suffix array storing offsetAndCached
 proc offset(a: integral) {
@@ -147,6 +147,8 @@ record uniqueStats {
   var minLength: int = max(int);
   var maxLength: int = min(int);
   var sumLengths: int = 0;
+  // histogram of lengths
+  var histogram: HISTOGRAM_MAX * int;
 }
 
 // this operator + allows + reduce on arrays of uniqueStats
@@ -157,8 +159,22 @@ operator +(x: uniqueStats, y: uniqueStats) {
   ret.minLength = min(x.minLength, y.minLength);
   ret.maxLength = max(x.maxLength, y.maxLength);
   ret.sumLengths = x.sumLengths + y.sumLengths;
+  ret.histogram += x.histogram + y.histogram;
 
   return ret;
+}
+
+// accumulate histogram information
+proc ref uniqueStats.add(length: int) {
+  this.count += 1;
+  this.minLength = min(length, this.minLength);
+  this.maxLength = max(length, this.maxLength);
+  this.sumLengths += length;
+
+  // add 1 to the appropriate histogram bin
+  param nBins = this.histogram.size;
+  var bin = min(length, nBins-1);
+  histogram[bin] += 1;
 }
 
 
@@ -174,11 +190,6 @@ proc main(args: [] string) throws {
 
   if inputFilesList.size == 0 {
     writeln("please specify input files and directories");
-    return 1;
-  }
-
-  if output == "" {
-    writeln("please specify an output directory with --output <dirname>");
     return 1;
   }
 
@@ -219,7 +230,7 @@ proc main(args: [] string) throws {
   var MinUnique = findUnique(SA, LCP, allData, fileStarts);
   t.stop();
   writeln("finding unique substrings took ", t.elapsed(), " seconds");
- 
+
   // compute statistics for each file
   writeln("Computing substring statistics");
   const nFiles = allPaths.size;
@@ -227,19 +238,13 @@ proc main(args: [] string) throws {
 
   forall (elt,i) in zip(MinUnique, MinUnique.domain) with (+ reduce fileStats) {
     if elt > 0 {
-      var amt: uniqueStats;
-      amt.count = 1;
-      amt.minLength = elt;
-      amt.maxLength = elt;
-      amt.sumLengths = elt;
-
       const offset = i;
       const doc = offsetToFileIdx(fileStarts, offset);
       const docStart = fileStarts[doc];
       const docEnd = fileStarts[doc+1];
       const docOffset = offset - docStart;
       if offset + elt < docEnd {
-        fileStats[doc] += amt;
+        fileStats[doc].add(elt);
       }
     }
   }
@@ -253,10 +258,39 @@ proc main(args: [] string) throws {
               " min ", stats.minLength,
               " avg ", stats.sumLengths:real / stats.count,
               " max ", stats.maxLength);
+
+      var lastPrintedPercent = 0.0;
+      var accum = 0;
+      const countR = stats.count: real;
+      param nBins = stats.histogram.size;
+      for bin in 0..<nBins-1 {
+        accum += stats.histogram[bin];
+        var ratio = accum / countR;
+        var percent = 100.0 * ratio;
+        if percent > lastPrintedPercent + 1.0 {
+          var nStars = round(ratio*HISTOGRAM_WIDTH):int;
+          writef("    len < %3i ", bin);
+          for i in 0..<nStars {
+            write("*");
+          }
+          writef("  %{##.##}%%\n", percent);
+          lastPrintedPercent = percent;
+        }
+      }
+      writeln();
     }
   }
 
+
   writeln();
+
+  if output == "" {
+    writeln("Not saving the unique substrings since " +
+            "an output directory was not provided.");
+    writeln("You can specify an output directory with --output <dirname>");
+    return 0;
+  }
+
   writeln("Outputting minuniq files to ", output);
   if !FileSystem.exists(output) {
     writeln("Creating ", output);
@@ -300,43 +334,6 @@ proc main(args: [] string) throws {
       }
     }
   }
-
-  /*
-  var curDoc = -1;
-  for i in 0..<SA.size {
-    const offset = i;
-    var sz = MinUnique[i];
-    if MinUnique[i] > MinUnique[i+1] {
-      sz = 0;
-    }
-
-    if sz > 0 {
-      const doc = offsetToFileIdx(fileStarts, offset);
-      const docStart = fileStarts[doc];
-      const docEnd = fileStarts[doc+1];
-      const docOffset = offset - docStart;
-      if offset + sz < docEnd {
-        if curDoc != doc {
-          writeln(allPaths[doc]);
-          curDoc = doc;
-        }
-        writeln("  ", sz, " unique chars at offset ", docOffset);
-        if SHOW_MATCHES {
-          write("    ");
-          for i in offset..#sz {
-            var ch = allData[i];
-            if 32 <= ch && ch <= 126 {
-              // char is OK
-            } else {
-              ch = 46; // .
-            }
-            writef("%c", ch);
-          }
-          writeln();
-        }
-      }
-    }
-  }*/
 
   return true;
 }
