@@ -225,7 +225,7 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
       for i in taskStart..<taskEnd {
         if MinUnique[i] > MinUnique[i+1] {
           MinUnique[i] = 0;
-        } else if numFiles > 1 {
+        } else if numFiles > 1 && i < n {
           // TODO: binary search not necessary here
           const doc = offsetToFileIdx(fileStarts, i);
           MinUnique[i] = adjustForFileBoundaries(MinUnique[i], i+1, doc,
@@ -236,7 +236,7 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
       // handle the final element
       if MinUnique[taskEnd] > NextTaskValue[tid] {
         MinUnique[taskEnd] = 0;
-      } else if numFiles > 1 {
+      } else if numFiles > 1 && taskEnd < n {
         const doc = offsetToFileIdx(fileStarts, taskEnd);
         MinUnique[taskEnd] =
           adjustForFileBoundaries(MinUnique[taskEnd], taskEnd+1, doc,

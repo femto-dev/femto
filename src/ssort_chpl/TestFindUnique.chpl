@@ -190,11 +190,20 @@ module TestFindUnique {
     }
   }
 
-  // Run the tests
-  proc main() {
+  proc runTests() {
     testAbaababa();
     testDifferentInputs();
     testMultipleFiles();
+  }
+
+
+  // Run the tests
+  proc main() {
+    serial {
+      runTests();
+    }
+
+    runTests();
 
     writeln("OK");
   }
