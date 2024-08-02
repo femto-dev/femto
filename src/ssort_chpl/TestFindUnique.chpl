@@ -92,6 +92,29 @@ module TestFindUnique {
   proc testDifferentInputs() {
     writeln("testDifferentInputs()");
 
+    /*
+      banana
+      012345
+
+             SA  LCP  1+max(LCP[i],LCP[i+1])
+      a      5   0    2
+      ana    3   1    4
+      anana  1   3    4
+      banana 0   0    1
+      na     4   0    3
+      nana   2   2    3
+
+      last column permuted to input positions (row i sets MinUnique[SA[i]])
+
+      143431 (MinUnique)
+      012345 (offsets)
+
+      setting elts to 0 when MinUnique[i] > MinUnique[i+1]
+
+      103000 (MinUnique)
+      012345 (offsets)
+     */
+
     const testCases = [
       ("banana", [1, 0, 3, 0, 0, 0, 0]),
       ("abcdefg", [1, 1, 1, 1, 1, 1, 0, 0]),
@@ -132,6 +155,8 @@ module TestFindUnique {
   proc main() {
     testAbaababa();
     testDifferentInputs();
+    //testMultipleFiles();
+
     writeln("OK");
   }
 }

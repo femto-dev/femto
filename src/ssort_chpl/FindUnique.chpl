@@ -42,7 +42,6 @@ use Utility;
 /* the output directory */
 config const output="";
 
-config const MAX_OCCURRENCES = 100; // max number of occurences within a doc
 config const MIN_UNIQUE = 10; // discard some near-duplicates if there
                               // aren't this many per file
 config const MAX_DUPLICATE_STEPS = 10;
@@ -60,11 +59,14 @@ proc offset(a: offsetAndCached(?)) {
   return a.offset;
 }
 
-// compute an LCP value while considering file boundaries
-inline proc boundaryLCP(offset: int, lcp: int, fileStarts: [] int) {
-  const doc = offsetToFileIdx(fileStarts, offset);
+// Consider the range offset..#count which refer to positions in thetext,
+// where we have already computed that 'offset' is contained within 'doc'.
+// Return a new 'count' such that offset..#count does not cross any file
+// boundaries.
+inline proc adjustForFileBoundaries(count: int, offset: int, doc: int,
+                                    fileStarts: [] int) {
   const docEnd = fileStarts[doc+1];
-  return min(lcp, docEnd - offset - 1);
+  return min(count, docEnd - offset);
 }
 
 /* Find substrings that are unique to a document.
@@ -74,14 +76,40 @@ inline proc boundaryLCP(offset: int, lcp: int, fileStarts: [] int) {
    If IgnoreDocs[doc] is true, entries from that file will be ignored.
  */
 proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
-                IgnoreDocs: [] bool)
+                IgnoreDocs: [] bool, type MinUniqueEltType=uint(8))
 {
   const n = SA.size;
-  type MinUniqueElt = uint(8);
   // We always compare i vs i+1 so we allocate an extra element in MinUnique
-  var MinUnique:[0..n] MinUniqueElt;
-  param MAX_STORE = max(MinUniqueElt);
-  const numFiles = fileStarts.size-1;
+  var MinUnique:[0..n] MinUniqueEltType;
+  param MAX_STORE = max(MinUniqueEltType);
+  const nIgnore = + reduce (IgnoreDocs:int);
+  const numFiles = fileStarts.size - 1;
+  const numFilesNotIgnored = numFiles - nIgnore;
+
+  // This algorithm is based on MinUnique-LeftEnd from
+  // "Minimum Unique Substring and Maximum Repeats" by Ilie and Smyth,
+  // with four modifications:
+  //  1. It is parallel
+  //  2. When there are multiple documents, it considers something a
+  //     unique substring only if it occurs in only one document,
+  //     which it achieves by ignoring matches within a document
+  //  3. It can ignore certain documents
+  //  4. It truncates LCP entries to the document boundaries
+
+  // The MinUnique-LeftEnd algorithm works by computing the
+  // MinUnique[SA[i]] = 1 + maximum common prefix shared by another suffix
+  //                  = 1 + max(LCP[i], LCP[i+1])
+  //
+  // Here we extend this idea to consider the longest common prefix shared by
+  // SA[prev],SA[i] or SA[i],SA[next], with prev < i and i < next.
+  // Here 'prev' is the nearest earlier suffix array position referring
+  // to a different document from SA[i]; and similarly 'next' is the
+  // nearest later suffix array position referring to a different document from
+  // SA[i].
+
+  // If the number of files considered (and not ignored) is <= 1,
+  // it uses prev=i-1 and next=i+1 to find the minimal unique substrings
+  // as described in Illie & Smyth.
 
   forall i in SA.domain with (ref MinUnique) {
     // What is j such that SA[i..j] refers to a range
@@ -90,29 +118,75 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
     const doc = offsetToFileIdx(fileStarts, off);
 
     if !IgnoreDocs[doc] {
-      var countSameDocument = 1;
-      if numFiles > 1 {
-        while countSameDocument < MAX_OCCURRENCES && i + countSameDocument < n {
-          const nextOff = offset(SA[i+countSameDocument]);
-          const nextDoc = offsetToFileIdx(fileStarts, nextOff);
-          if nextDoc != doc && !IgnoreDocs[nextDoc] {
-            break;
-          }
-          countSameDocument += 1;
+      // Find the position of the previous entry for a different document
+      var prev = i-1;
+      var prevOffset = -1;
+      var prevDoc = -1;
+      while prev >= 0 {
+        prevOffset = offset(SA[prev]);
+        prevDoc = offsetToFileIdx(fileStarts, prevOffset);
+        if prevDoc != doc && !IgnoreDocs[prevDoc] {
+          break; // found another doc we aren't ignoring
         }
+        if numFilesNotIgnored <= 1 {
+          break; // don't consider multiple documents in this case
+        }
+        prev -= 1;
       }
-      var j = i + countSameDocument - 1;
+      // note: now, prev, prevOffset, and prevDoc might be -1
 
-      // what prefix length would match SA[i-1] or SA[j+1]
-      // in addition to SA[i..j] ?
-      const curLcp = boundaryLCP(offset(SA[i]), LCP[i], fileStarts);
-      const nextLcp = if j+1 < n
-                      then boundaryLCP(offset(SA[j+1]), LCP[j+1], fileStarts)
-                      else 0;
-      const uniqueLen = max(curLcp, nextLcp) + 1;
+      // Find the position of the next entry for a different document
+      var next = i+1;
+      var nextOffset = n;
+      var nextDoc = numFiles;
+      while next < n {
+        nextOffset = offset(SA[next]);
+        nextDoc = offsetToFileIdx(fileStarts, nextOffset);
+        if nextDoc != doc && !IgnoreDocs[nextDoc] {
+          break; // found another doc we aren't ignoring
+        }
+        if numFilesNotIgnored <= 1 {
+          break; // don't consider multiple documents in this case
+        }
+        next += 1;
+      }
+      // note: now, next,nextOffset might be n, and nextDoc might be numFiles
 
+      // compute the longest common prefix between prev and i
+      // this is the minimum value of LCP[prev+1..i]
+      // (because the LCP array stores the longest common prefix between
+      //  SA[i-1] and SA[i])
+      var prevPrefix = max(int);
+      for j in prev+1..i {
+        prevPrefix = min(prevPrefix, LCP[j]);
+      }
+      // reduce prevPrefix to account for file boundaries
+      prevPrefix = adjustForFileBoundaries(prevPrefix, prevOffset, prevDoc,
+                                           fileStarts);
+
+      // compute the longest common prefix between i and next
+      // this is the minimum value of LCP[i+1..next]
+      var nextPrefix = max(int);
+      for j in i+1..next {
+        const nextLCP = if j < n then LCP[j] else 0;
+        nextPrefix = min(nextPrefix, nextLCP);
+      }
+      // reduce nextPrefix to account for file boundaries
+      if nextDoc < numFiles && nextOffset < n {
+        nextPrefix = adjustForFileBoundaries(nextPrefix, nextOffset, nextDoc,
+                                             fileStarts);
+      }
+
+      // compute the maximum the two prefixes
+      var commonPrefix = max(prevPrefix, nextPrefix);
+
+      // reduce commonPrefix to account for file boundaries
+      commonPrefix = adjustForFileBoundaries(commonPrefix, off, doc,
+                                             fileStarts);
+
+      const uniqueLen = commonPrefix + 1;
       if uniqueLen <= MAX_STORE {
-        MinUnique[offset(SA[i])] = uniqueLen:MinUniqueElt;
+        MinUnique[offset(SA[i])] = uniqueLen:MinUniqueEltType;
       }
     }
   }
@@ -125,7 +199,7 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
     const nBlocks = divCeil(n, blockSize);
 
     // save MinUnique[i] values for final comparison of each task
-    var NextTaskValue:[0..<nTasks] MinUniqueElt;
+    var NextTaskValue:[0..<nTasks] MinUniqueEltType;
     forall tid in 0..<nTasks {
       var nextTaskStart = (tid+1) * blockSize;
       if nextTaskStart <= n {
