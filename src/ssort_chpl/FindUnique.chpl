@@ -42,8 +42,10 @@ use Utility;
 /* the output directory */
 config const output="";
 
+config const REMOVE_NEAR_DUPLICATES = false;
 config const MIN_UNIQUE = 10; // discard some near-duplicates if there
                               // aren't this many per file
+
 config const MAX_DUPLICATE_STEPS = 10;
 config const MAX_SIMILAR = 0.98; // maximum similarity score to allow
                                  // when processing near-duplicates
@@ -291,7 +293,8 @@ proc ref uniqueStats.add(length: int) {
 proc runFindUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
                    concisePaths: [] string,
                    ref IgnoreDocs: [0..<concisePaths.size] bool,
-                   ref NumUnique: [0..<concisePaths.size] int) {
+                   ref NumUnique: [0..<concisePaths.size] int,
+                   ref FileStats: [0..<concisePaths.size] uniqueStats) {
   // initially, IgnoreDocs[doc] is false for all docs
 
   writeln("Computing unique substrings");
@@ -304,11 +307,11 @@ proc runFindUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
   writeln("finding unique substrings took ", t.elapsed(), " seconds");
 
   // compute statistics for each file
-  writeln("Computing substring statistics");
   const nFiles = concisePaths.size;
-  var fileStats:[0..<nFiles] uniqueStats;
+  // reset FileStats
+  FileStats = new uniqueStats();
 
-  forall (elt,i) in zip(MinUnique, MinUnique.domain) with (+ reduce fileStats)
+  forall (elt,i) in zip(MinUnique, MinUnique.domain) with (+ reduce FileStats)
   {
     if elt > 0 {
       const offset = i;
@@ -317,20 +320,30 @@ proc runFindUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
       const docEnd = fileStarts[doc+1];
       const docOffset = offset - docStart;
       if offset + elt < docEnd {
-        fileStats[doc].add(elt);
+        FileStats[doc].add(elt);
       }
     }
   }
 
+  // reset NumUnique
   NumUnique = max(int); // to make it easy to check numUnique < MIN_UNIQUE
                         // this way, ignored documents arent near-duplicate
 
-  for (path,stats,ignore,nUnique) in
-      zip(concisePaths, fileStats, IgnoreDocs, NumUnique) {
-
+  // Set NumUnique
+  forall (stats,ignore,nUnique) in zip(FileStats, IgnoreDocs, NumUnique) {
     if !ignore {
       nUnique = stats.count;
+    }
+  }
 
+  return MinUnique;
+}
+
+proc printStats(concisePaths: [] string,
+                IgnoreDocs: [0..<concisePaths.size] bool,
+                FileStats: [0..<concisePaths.size] uniqueStats) {
+  for (path,stats,ignore) in zip(concisePaths, FileStats, IgnoreDocs) {
+    if !ignore {
       writeln(path);
       if stats.count == 0 {
         writeln("  found 0 unique substrings");
@@ -364,13 +377,14 @@ proc runFindUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
   }
 
   writeln();
-
-  return MinUnique;
 }
 
-proc writeOutput(MinUnique: [], IgnoreDocs: [],
+proc writeOutput(MinUnique: [], IgnoreDocs: [], FileStats: [],
                  allData: [], allPaths: [],
                  concisePaths: [], fileStarts: []) throws {
+
+  printStats(concisePaths, IgnoreDocs, FileStats);
+
   if output == "" {
     writeln("Not saving the unique substrings since " +
             "an output directory was not provided.");
@@ -425,6 +439,9 @@ proc writeOutput(MinUnique: [], IgnoreDocs: [],
   }
 }
 
+proc niaveClustering() {
+}
+
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);
 
@@ -474,30 +491,41 @@ proc main(args: [] string) throws {
   const nFiles = concisePaths.size;
   var IgnoreDocs: [0..<nFiles] bool;
   var NumUnique: [0..<nFiles] int;
+  var FileStats: [0..<nFiles] uniqueStats;
   {
     const MinUnique =
-      runFindUnique(SA, LCP, allData, fileStarts, concisePaths, IgnoreDocs,
-                    NumUnique);
+      runFindUnique(SA, LCP, allData, fileStarts, concisePaths,
+                    IgnoreDocs, NumUnique, FileStats);
 
     const nNearDuplicates = + reduce ((NumUnique < MIN_UNIQUE):int);
-    if nNearDuplicates == 0 {
-      writeOutput(MinUnique, IgnoreDocs,
+    if nNearDuplicates== 0 || MAX_DUPLICATE_STEPS==1 || !REMOVE_NEAR_DUPLICATES
+    {
+      writeOutput(MinUnique, IgnoreDocs, FileStats,
                   allData, allPaths, concisePaths, fileStarts);
       return 0;
     }
   }
 
   // compute document similarity
-  writeln("Computing similarity to help removing near duplicates");
+  writeln("Computing similarity to help ignoring near duplicates");
+  t.reset();
+  t.start();
   const Similarity =
     SuffixSimilarity.computeSimilarity(SA, LCP, allData, fileStarts);
+  t.stop();
+  writeln("computing similarity took ", t.elapsed(), " seconds");
 
   for retry in 2..MAX_DUPLICATE_STEPS {
     // remove some of the near duplicates
     writeln();
-    writeln("Removing some near duplicates");
-    writeln();
+    var nNearDuplicates = + reduce ((NumUnique < MIN_UNIQUE):int);
+    writeln("Ignoring some of the ", nNearDuplicates, " near duplicates");
 
+    // Gather the document with the maximum score (and the maximum score)
+    // for each near duplicate. When doing this, don't consider near
+    // duplicates (since, it might be that two near duplicates are
+    // causing each other not to have any unique substrings, but removing
+    // one of them will resolve the situation)
     var MaximumNearDuplicateScore: [0..<nFiles] (real, int, int);
     // stores (score, doc, otherDoc)
 
@@ -507,7 +535,10 @@ proc main(args: [] string) throws {
         var myScore = 0.0;
         var otherDocHighestScore = doc;
         for otherDoc in 0..<nFiles {
-          if doc != otherDoc && !IgnoreDocs[otherDoc] {
+          if doc != otherDoc && !IgnoreDocs[otherDoc] &&
+             NumUnique[otherDoc] >= MIN_UNIQUE {
+            // gather information for other docs we aren't ignoring
+            // that aren't near-duplicates
             const ref sim = Similarity[flattenTriangular(doc,otherDoc)];
             if sim.score > myScore {
               myScore = sim.score;
@@ -521,47 +552,53 @@ proc main(args: [] string) throws {
       }
     }
 
-    writeln("MNDS ", MaximumNearDuplicateScore);
     Sort.sort(MaximumNearDuplicateScore, new Sort.ReverseComparator());
-    writeln("MNDS ", MaximumNearDuplicateScore);
 
-    var nNearDuplicates = + reduce ((NumUnique < MIN_UNIQUE):int);
-    writeln("We have ", nNearDuplicates, " near duplicates");
     var half = nNearDuplicates/2;
     half = max(1, half);
-    writeln("Attempting to remove ", half,
-            " near duplicates with highest similarity");
     var nRemoved = 0;
     // ignore the other doc for the first half of MaximumNearDuplicateScore.
     for i in 0..<half {
       var (score, doc, otherDoc) = MaximumNearDuplicateScore[i];
-      if doc != otherDoc &&
-         NumUnique[doc] < MIN_UNIQUE {
+      if doc != otherDoc {
         writeln("Ignoring near duplicate ", concisePaths[doc],
-                " because it has the highest similarity score (", score,
-                ") with ", concisePaths[otherDoc]);
-        IgnoreDocs[otherDoc] = true;
+                " (with only ", NumUnique[doc], " unique substrings)",
+                " because it is closely related to ", concisePaths[otherDoc],
+                " (similarity score ", score, ")");
+        IgnoreDocs[doc] = true;
         nRemoved += 1;
       }
     }
 
+    if nRemoved == 0 {
+      // remove one of the near duplicates with the lowest number of unique
+      // strings
+      const (minVal, minIdx) = minloc reduce zip(NumUnique, NumUnique.domain);
+      writeln("Ignoring one near duplicate ", concisePaths[minIdx],
+              " (with ", NumUnique[minIdx], " unique substrings)");
+      IgnoreDocs[minIdx] = true;
+      nRemoved += 1;
+    }
+
     // compute the minimal unique substrings with the new IgnoreDocs
-    const MinUnique =
-      runFindUnique(SA, LCP, allData, fileStarts, concisePaths, IgnoreDocs,
-                    NumUnique);
+    const MinUnique = runFindUnique(SA, LCP, allData, fileStarts, concisePaths,
+                                    IgnoreDocs, NumUnique, FileStats);
 
     // output if appropriate
     nNearDuplicates = + reduce ((NumUnique < MIN_UNIQUE):int);
-    writeln("Now we have ", nNearDuplicates, " near duplicates");
     if nNearDuplicates == 0 || nRemoved == 0 || retry == MAX_DUPLICATE_STEPS {
+
+      writeln();
 
       for (doc, ignore, shortPath) in
           zip(IgnoreDocs.domain, IgnoreDocs, concisePaths) {
-        writeln("REMOVED AS NEAR DUPLICATE: ", shortPath);
+        if ignore {
+          writeln("Ignored near duplicate ", shortPath);
+        }
       }
       writeln();
 
-      writeOutput(MinUnique, IgnoreDocs,
+      writeOutput(MinUnique, IgnoreDocs, FileStats,
                   allData, allPaths, concisePaths, fileStarts);
       return 0;
     }
