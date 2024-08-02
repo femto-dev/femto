@@ -63,10 +63,10 @@ proc offset(a: offsetAndCached(?)) {
 // where we have already computed that 'offset' is contained within 'doc'.
 // Return a new 'count' such that offset..#count does not cross any file
 // boundaries.
-inline proc adjustForFileBoundaries(count: int, offset: int, doc: int,
+inline proc adjustForFileBoundaries(count, offset: int, doc: int,
                                     fileStarts: [] int) {
   const docEnd = fileStarts[doc+1];
-  return min(count, docEnd - offset);
+  return (min(count:int, docEnd - offset)):count.type;
 }
 
 /* Find substrings that are unique to a document.
@@ -191,6 +191,16 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
     }
   }
 
+  if numFiles > 1 {
+    // Assume there is a padding byte at the end of each document.
+    // we should not exceed the padding byte in terms of min unique strings.
+    // We set this to 1 so that the next step doesn't rule out a preceding
+    // unique byte.
+    forall doc in 0..<numFiles {
+      MinUnique[fileStarts[doc+1]-1] = 1;
+    }
+  }
+
   // Set MinUnique[i] = 0 if MinUnique[i] > MinUnique[i+1]
   {
     var nTasks = computeNumTasks();
@@ -215,12 +225,22 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
       for i in taskStart..<taskEnd {
         if MinUnique[i] > MinUnique[i+1] {
           MinUnique[i] = 0;
+        } else if numFiles > 1 {
+          // TODO: binary search not necessary here
+          const doc = offsetToFileIdx(fileStarts, i);
+          MinUnique[i] = adjustForFileBoundaries(MinUnique[i], i+1, doc,
+                                                 fileStarts);
         }
       }
 
       // handle the final element
       if MinUnique[taskEnd] > NextTaskValue[tid] {
         MinUnique[taskEnd] = 0;
+      } else if numFiles > 1 {
+        const doc = offsetToFileIdx(fileStarts, taskEnd);
+        MinUnique[taskEnd] =
+          adjustForFileBoundaries(MinUnique[taskEnd], taskEnd+1, doc,
+                                  fileStarts);
       }
     }
   }

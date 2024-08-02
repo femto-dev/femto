@@ -150,12 +150,51 @@ module TestFindUnique {
     }
   }
 
+  proc testMultipleFiles() {
+    writeln("testMultipleFiles()");
 
-  // Run the test
+    const testCases = [
+      ("aaa0bbb0", [0, 4, 8], [1, 1, 1, 0, 1, 1, 1, 0, 0]),
+      ("aba0bab0", [0, 4, 8], [3, 0, 0, 0, 3, 0, 0, 0, 0]),
+      ("aab0bba0", [0, 4, 8], [2, 2, 0, 0, 2, 2, 0, 0, 0]),
+      ("aaaa0aaab0abab0", [0, 5, 10, 15], [4,0,0,0,0,0,3,0,0,0,0,2,0,0,0,0]),
+    ];
+
+    for (input, fileStarts, expected) in testCases {
+      writeln("  ", input);
+
+      const thetext = bytesToArray(input);
+      const ignoreDocs:[0..<fileStarts.size-1] bool = false;
+
+      const SA, LCP;
+      computeSuffixArrayAndLCP(thetext, n = input.size, SA, LCP);
+
+      if debugOutput {
+        writeln("Input: ", input);
+        writeln("SA: ", SA);
+        writeln("LCP: ", LCP);
+        writeln("thetext: ", thetext);
+        writeln("fileStarts: ", fileStarts);
+        writeln("expectedMinUnique: ", expected);
+      }
+
+      var result = findUnique(SA, LCP, thetext, fileStarts, ignoreDocs);
+
+      if debugOutput {
+        writeln("Result: ", result);
+      }
+
+      for i in 0..#result.size {
+        assert(result[i] == expected[i], "Test failed for input " + input + " at index " + i:string);
+      }
+    }
+  }
+
+  // Run the tests
   proc main() {
     testAbaababa();
     testDifferentInputs();
-    //testMultipleFiles();
+    testMultipleFiles();
 
     writeln("OK");
   }
