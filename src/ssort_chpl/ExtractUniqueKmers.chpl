@@ -25,8 +25,7 @@ module ExtractUniqueKmers {
 config const INPUT:string;
 config const UNIQUE:string;
 config const REPLACE_FILENAME:string;
-config const K: int = 60;
-config const PRINT_MIN_SUBSTRING = false;
+config const K: int = 0;
 
 use Utility;
 
@@ -125,22 +124,16 @@ proc main() throws {
       // OK, now emit the unique substrings
       for i in 0..<contigLen {
         const len = MinUnique[textOffset + i]: int;
-        if len > 0 && len <= K {
-          if PRINT_MIN_SUBSTRING {
-            write("# ");
-            for j in 0..<len {
-              writef("%c", Text[textOffset + i + j]);
-            }
-            writeln();
-          }
-          const amtBefore = (K-len)/2;
+        if len > 0 && (K == 0 || len <= K) {
+          const useK = if K == 0 then len else K;
+          const amtBefore = (useK-len)/2;
           var startOffset = textOffset + i - amtBefore; 
           // but don't let start offset be earlier than the contig start
           startOffset = max(startOffset, textOffset);
 
           // output the kmer
-          if startOffset + K <= contigEnd {
-            for j in 0..<K {
+          if startOffset + useK <= contigEnd {
+            for j in 0..<useK {
               writef("%c", Text[startOffset + j]);
             }
           }
