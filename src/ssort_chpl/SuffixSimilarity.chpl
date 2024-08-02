@@ -20,6 +20,20 @@
 module SuffixSimilarity {
 
 
+// this size * the number of files = the window size
+config const STRATEGY="block-lcp";
+config const WINDOW_SIZE_RATIO = 2.5;
+config const WINDOW_SIZE_OVERRIDE = 0;
+config const NSIMILAR_TO_OUTPUT = 200;
+config const MIN_SCORE_TO_OUTPUT = 0.0;
+
+// these control adaptive-lcp and block-lcp
+config const MAX_BLOCK_SIZE = 1000;
+config const MIN_COMMON = 60;
+config const MAX_OCCURRENCES = 1000;
+config const TARGET_BLOCK_SIZE = 1000;
+
+
 import SuffixSort.INPUT_PADDING;
 import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.computeSuffixArray;
@@ -36,19 +50,6 @@ import Time;
 import Math.{divCeil, log};
 
 use Utility;
-
-// this size * the number of files = the window size
-config const STRATEGY="block-lcp";
-config const WINDOW_SIZE_RATIO = 2.5;
-config const WINDOW_SIZE_OVERRIDE = 0;
-config const NSIMILAR_TO_OUTPUT = 200;
-config const MIN_SCORE_TO_OUTPUT = 0.0;
-
-// these control adaptive-lcp and block-lcp
-config const MAX_BLOCK_SIZE = 1000;
-config const MIN_COMMON = 60;
-config const MAX_OCCURRENCES = 1000;
-config const TARGET_BLOCK_SIZE = 1000;
 
 // helpers to make this code work with suffix array storing offsetAndCached
 proc offset(a: integral) {
