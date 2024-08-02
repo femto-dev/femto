@@ -201,6 +201,116 @@ proc testPartitionSingleSplitter(n: int) {
   assert(total == n);
 }
 
+proc checkArrayMatches(got: [], expect: []) {
+  assert(got.domain == expect.domain);
+  for (g, e, i) in zip(got, expect, expect.domain) {
+    assert(g == e);
+  }
+}
+
+proc testSplitters() {
+  writeln("testSplitters");
+  {
+    writeln("  sorted");
+    var sample = [1, 1, 1, 5,  7,  9, 11, 32];
+    var expect = [1, 5, 7, 9, 11, 32, 32, 32];
+    var s = new splitters(sample,
+                          requestedNumBuckets=9,
+                          myDefaultComparator,
+                          sortLevel.fully);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+
+  {
+    writeln("  unsorted");
+    var sample = [1, 5, 7, 9, 11,  1, 32,  1];
+    // sorts to  [1, 1, 1, 5,  7,  9, 11, 32];
+    var expect = [1, 5, 7, 9, 11, 32, 32, 32];
+    var s = new splitters(sample,
+                          requestedNumBuckets=9,
+                          myDefaultComparator,
+                          sortLevel.unsorted);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+  {
+    writeln("  approx sorted");
+    var sample = [1, 5, 7, 9, 11,  1, 32, 1];
+    var expect = [1, 5, 7, 9, 11, 32, 32, 32];
+    var s = new splitters(sample,
+                          requestedNumBuckets=8,
+                          myDefaultComparator,
+                          sortLevel.approximately);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+
+  {
+    writeln("  checking span 2/16");
+    var sample = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    var expect = [8, 8];
+    var s = new splitters(sample,
+                          requestedNumBuckets=2,
+                          myDefaultComparator,
+                          sortLevel.fully);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+
+  {
+    writeln("  checking span 4/16");
+    var sample = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    var expect = [4, 8, 12, 12];
+    var s = new splitters(sample,
+                          requestedNumBuckets=4,
+                          myDefaultComparator,
+                          sortLevel.fully);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+
+  {
+    writeln("  checking span 8/16");
+    var sample = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    var expect = [2, 4, 6, 8, 10, 12, 14, 14];
+    var s = new splitters(sample,
+                          requestedNumBuckets=8,
+                          myDefaultComparator,
+                          sortLevel.fully);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+
+  {
+    writeln("  checking span 16/16");
+    var sample = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    var expect = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15];
+    var s = new splitters(sample,
+                          requestedNumBuckets=16,
+                          myDefaultComparator,
+                          sortLevel.fully);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+
+  {
+    writeln("  checking span 4/15");
+    var sample = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+    var expect = [3, 6, 10, 10];
+    var s = new splitters(sample,
+                          requestedNumBuckets=4,
+                          myDefaultComparator,
+                          sortLevel.fully);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+
+  {
+    writeln("  checking span 4/11");
+    var sample = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    var expect = [2, 4, 7, 7];
+    var s = new splitters(sample,
+                          requestedNumBuckets=4,
+                          myDefaultComparator,
+                          sortLevel.fully);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+
+}
+
 proc testPartitions() {
   testPartition(10, 4, false, 1);
   testPartition(10, 4, true, 1);
@@ -230,6 +340,9 @@ proc testPartitions() {
 
   // test that creating a single splitter works OK
   testPartitionSingleSplitter(10);
+
+  // test creating splitters in other cases
+  testSplitters();
 }
 
 proc main() {
