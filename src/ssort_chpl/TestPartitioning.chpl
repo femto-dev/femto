@@ -25,10 +25,12 @@ import SuffixSort.TRACE;
 
 use Partitioning;
 
-import Sort.{defaultComparator,isSorted};
+import Sort.{isSorted, DefaultComparator};
 import Random;
 import Math;
 import Map;
+
+const myDefaultComparator = new DefaultComparator();
 
 // nSplit positive: create that many splitters
 // nSplit negative: create a sample from the Input array
@@ -62,7 +64,7 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
                       randNums.next(SplittersSampleDom, 0, n-1)) {
       x = r;
     }
-    sp = new splitters(SplittersSample, abs(nSplit), defaultComparator,
+    sp = new splitters(SplittersSample, abs(nSplit), myDefaultComparator,
                        howSorted=sortLevel.unsorted);
   }
 
@@ -72,7 +74,7 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
   const counts =
-    partition(Input, Output, sp, defaultComparator, 0, n-1, nTasks);
+    partition(Input, Output, sp, myDefaultComparator, 0, n-1, nTasks);
   assert(counts.size == nBuckets);
 
   const ends = + scan counts;
@@ -137,14 +139,14 @@ proc testPartitionsEven(n: int, nSplit: int) {
   var Output: [0..<n] int = -1;
 
   var Sample = Input;
-  const sp = new splitters(Sample, nSplit, defaultComparator,
+  const sp = new splitters(Sample, nSplit, myDefaultComparator,
                            howSorted=sortLevel.unsorted);
   assert(isSorted(sp.sortedStorage));
 
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
-  const counts = partition(Input, Output, sp, defaultComparator, 0, n-1, 1);
+  const counts = partition(Input, Output, sp, myDefaultComparator, 0, n-1, 1);
   assert(counts.size == nBuckets);
 
   var minSize = max(int);
@@ -176,7 +178,7 @@ proc testPartitionSingleSplitter(n: int) {
   var Output: [0..<n] int = -1;
 
   var Sample = [n/2, n/2, n/2, n/2, n/2, n/2];
-  const sp = new splitters(Sample, 100, defaultComparator,
+  const sp = new splitters(Sample, 100, myDefaultComparator,
                            howSorted=sortLevel.unsorted);
   assert(isSorted(sp.sortedStorage));
 
@@ -184,7 +186,7 @@ proc testPartitionSingleSplitter(n: int) {
   assert(sp.hasEqualityBuckets);
   assert(nBuckets == 3); // < == and > buckets
 
-  const counts = partition(Input, Output, sp, defaultComparator, 0, n-1, 1);
+  const counts = partition(Input, Output, sp, myDefaultComparator, 0, n-1, 1);
   assert(counts.size == nBuckets);
 
   var total = 0;

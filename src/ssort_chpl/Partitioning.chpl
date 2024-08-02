@@ -27,7 +27,7 @@ import SuffixSort.EXTRA_CHECKS;
 
 import Utility.computeNumTasks;
 import Reflection.canResolveMethod;
-import Sort.{sort, defaultComparator};
+import Sort.{sort, DefaultComparator};
 import Math.{log2, divCeil};
 import CTypes.c_array;
 
@@ -48,7 +48,8 @@ private inline proc mycompare(a, b, comparator) {
   if canResolveMethod(comparator, "key", a) &&
      canResolveMethod(comparator, "key", b) {
     // Use the default comparator to compare the integer keys
-    return defaultComparator.compare(comparator.key(a), comparator.key(b));
+    const d = new DefaultComparator();
+    return d.compare(comparator.key(a), comparator.key(b));
   // Use comparator.compare(a, b) if is defined by user
   } else if canResolveMethod(comparator, "compare", a, b) {
     return comparator.compare(a ,b);
