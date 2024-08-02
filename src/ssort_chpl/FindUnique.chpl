@@ -20,6 +20,20 @@
 module FindUnique {
 
 
+/* the output directory */
+config const output="";
+
+config const REMOVE_NEAR_DUPLICATES = false;
+config const MIN_UNIQUE = 10; // discard some near-duplicates if there
+                              // aren't this many per file
+
+config const MAX_DUPLICATE_STEPS = 10;
+config const MAX_SIMILAR = 0.98; // maximum similarity score to allow
+                                 // when processing near-duplicates
+config const HISTOGRAM_WIDTH = 50; // how wide to make histogram chart
+param HISTOGRAM_MIN = 0;
+param HISTOGRAM_MAX = 255;
+
 import SuffixSort.INPUT_PADDING;
 import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.computeSuffixArray;
@@ -39,19 +53,6 @@ import Time;
 
 use Utility;
 
-/* the output directory */
-config const output="";
-
-config const REMOVE_NEAR_DUPLICATES = false;
-config const MIN_UNIQUE = 10; // discard some near-duplicates if there
-                              // aren't this many per file
-
-config const MAX_DUPLICATE_STEPS = 10;
-config const MAX_SIMILAR = 0.98; // maximum similarity score to allow
-                                 // when processing near-duplicates
-config const HISTOGRAM_WIDTH = 50; // how wide to make histogram chart
-param HISTOGRAM_MIN = 0;
-param HISTOGRAM_MAX = 255;
 
 // helpers to make this code work with suffix array storing offsetAndCached
 proc offset(a: integral) {

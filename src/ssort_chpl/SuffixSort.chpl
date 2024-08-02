@@ -41,9 +41,11 @@ include private module TestDifferenceCovers;
 
 public use DifferenceCovers;
 private use SuffixSortImpl;
+private use Utility;
 
 private import IO;
 private import Time;
+private import List;
 
 proc computeSuffixArray(input: [], const n: input.domain.idxType) {
   if !(input.domain.rank == 1 &&
@@ -95,26 +97,45 @@ proc computeUniqueK(input: [], const n: input.domain.idxType) {
   minUniqueK(cfg, input, n, DEFAULT_K);
 }*/
 
-config const input:string;
+proc main(args: [] string) throws {
+  var inputFilesList: List.list(string);
 
-proc main() throws {
-  if input == "" {
-    writeln("please use --input to specify an input file");
+  for arg in args[1..] {
+    if arg.startsWith("-") {
+      halt("argument not handled ", arg);
+    }
+    gatherFiles(inputFilesList, arg);
+  }
+
+  if inputFilesList.size == 0 {
+    writeln("please specify input files and directories");
     return 1;
   }
 
-  writeln("Reading in ", input);
-  var f = IO.open(input, IO.ioMode.r);
-  const n = f.size;
-  var thetext:[0..<n+INPUT_PADDING] uint(8);
-  f.reader().readAll(thetext);
+  const allData; //: [] uint(8);
+  const allPaths; //: [] string;
+  const concisePaths; // : [] string
+  const fileSizes; //: [] int;
+  const fileStarts; //: [] int;
+  const totalSize: int;
+  readAllFiles(inputFilesList,
+               allData=allData,
+               allPaths=allPaths,
+               concisePaths=concisePaths,
+               fileSizes=fileSizes,
+               fileStarts=fileStarts,
+               totalSize=totalSize);
+
+  const n = totalSize;
+  writeln("Files are: ", concisePaths);
+  writeln("FileStarts are: ", fileStarts);
 
   var t: Time.stopwatch;
 
   writeln("Computing suffix array");
   t.reset();
   t.start();
-  var SA = computeSuffixArray(thetext, n);
+  var SA = computeSuffixArray(allData, totalSize);
   t.stop();
 
   writeln("suffix array construction took of ", n, " bytes ",

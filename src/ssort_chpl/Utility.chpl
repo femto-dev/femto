@@ -179,7 +179,8 @@ proc computeFastaFileSize(path: string) throws {
    The region size should match 'computeFastaFileSize'. */
 proc readFastaFileSequence(path: string,
                            ref data: [] uint(8),
-                           region: range) throws
+                           region: range,
+                           verbose = true) throws
 {
   extern proc isspace(c: c_int): c_int;
 
@@ -204,7 +205,9 @@ proc readFastaFileSequence(path: string,
         count += 1;
       } else if byte == "\n".toByte() && inDescLine {
         inDescLine = false;
-        writeln("Reading sequence ", desc);
+        if verbose {
+          writeln("Reading sequence ", desc);
+        }
       }
       if inDescLine {
         desc.appendCodepointValues(byte);
@@ -240,10 +243,11 @@ proc computeFileSize(path: string) throws {
    The region should match the file size. */
 proc readFileData(path: string,
                   ref data: [] uint(8),
-                  region: range) throws
+                  region: range,
+                  verbose = true) throws
 {
   if isFastaFile(path) {
-    readFastaFileSequence(path, data, region);
+    readFastaFileSequence(path, data, region, verbose);
   } else {
     var r = IO.openReader(path);
     r.readAll(data[region]);
