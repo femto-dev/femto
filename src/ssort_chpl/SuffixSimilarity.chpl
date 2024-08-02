@@ -42,6 +42,7 @@ config const STRATEGY="block-lcp";
 config const WINDOW_SIZE_RATIO = 2.5;
 config const WINDOW_SIZE_OVERRIDE = 0;
 config const NSIMILAR_TO_OUTPUT = 200;
+config const MIN_SCORE_TO_OUTPUT = 0.0;
 
 // these control adaptive-lcp and block-lcp
 config const MAX_BLOCK_SIZE = 1000;
@@ -962,7 +963,13 @@ proc main(args: [] string) throws {
 
   // output the top 20 or so
   const nprint = min(Similarity.size, NSIMILAR_TO_OUTPUT);
-  for elt in Similarity[0..<nprint] {
+  for (elt, count) in zip(Similarity, 0..) {
+    if count > NSIMILAR_TO_OUTPUT {
+      break;
+    }
+    if elt.score < MIN_SCORE_TO_OUTPUT {
+      break;
+    }
     if elt.score > 0 {
       const docAName = concisePaths[elt.docA];
       const docBName = concisePaths[elt.docB];
