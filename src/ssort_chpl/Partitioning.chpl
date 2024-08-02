@@ -106,10 +106,18 @@ private proc computeSplitters(const SortedSample,
   var SortedSplitters:[0..<myNumBuckets] SortedSample.eltType;
 
   var start = perSplitter:int;
+
   for i in 0..<numSplitters {
     var sampleIdx = start + (i*perSplitter):int;
-    if sampleIdx >= SortedSample.size then sampleIdx = SortedSample.size-1;
+    sampleIdx = min(max(sampleIdx, 0), SortedSample.size-1);
     SortedSplitters[i] = SortedSample[sampleIdx];
+  }
+
+  if reSort {
+    sort(SortedSplitters[0..<numSplitters], comparator);
+    if EXTRA_CHECKS {
+      assert(isSorted(SortedSplitters[0..<numSplitters], comparator));
+    }
   }
 
   // check for duplicates.
@@ -122,26 +130,25 @@ private proc computeSplitters(const SortedSample,
 
   // if there are no duplicates, proceed with what we have
   if nDuplicates == 0 {
-    if reSort {
-      sort(SortedSplitters[0..<numSplitters], comparator);
-    }
-    if EXTRA_CHECKS {
-      assert(isSorted(SortedSplitters[0..<numSplitters], comparator));
-    }
-
     useEqualBuckets = false;
     return SortedSplitters;
   }
 
+  // copy the last element to make the following code simpler
+  // (normally we leave space in the last element for use in build())
+  SortedSplitters[numSplitters] = SortedSplitters[numSplitters-1];
+
   // if there were duplicates, reduce the number of splitters accordingly,
   // activate equality buckets, and return a de-duplicated array.
   const nUnique = numSplitters - nDuplicates;
-  myNumBuckets = max(2, 1 << log2int(nUnique));
+  // keep the same number of buckets if there were not too many duplicates
+  const oldNumBuckets = myNumBuckets;
+  myNumBuckets = min(oldNumBuckets, max(2, 1 << (1+log2int(nUnique))));
   numSplitters = myNumBuckets-1;
   var UniqueSplitters:[0..<myNumBuckets] SortedSample.eltType;
   UniqueSplitters[0] = SortedSplitters[0];
   var next = 1;
-  for i in 1..<SortedSplitters.size {
+  for i in 1..<oldNumBuckets {
     if next >= numSplitters then break;
     if mycompare(UniqueSplitters[next-1], SortedSplitters[i], comparator) != 0 {
       UniqueSplitters[next] = SortedSplitters[i];
@@ -154,13 +161,6 @@ private proc computeSplitters(const SortedSample,
   while next < numSplitters {
     UniqueSplitters[next] = UniqueSplitters[next-1];
     next += 1;
-  }
-
-  if reSort {
-    sort(SortedSplitters[0..<numSplitters], comparator);
-  }
-  if EXTRA_CHECKS {
-    assert(isSorted(SortedSplitters[0..<numSplitters], comparator));
   }
 
   useEqualBuckets = true;
