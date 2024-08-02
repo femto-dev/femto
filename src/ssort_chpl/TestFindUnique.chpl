@@ -92,6 +92,29 @@ module TestFindUnique {
   proc testDifferentInputs() {
     writeln("testDifferentInputs()");
 
+    /*
+      banana
+      012345
+
+             SA  LCP  1+max(LCP[i],LCP[i+1])
+      a      5   0    2
+      ana    3   1    4
+      anana  1   3    4
+      banana 0   0    1
+      na     4   0    3
+      nana   2   2    3
+
+      last column permuted to input positions (row i sets MinUnique[SA[i]])
+
+      143431 (MinUnique)
+      012345 (offsets)
+
+      setting elts to 0 when MinUnique[i] > MinUnique[i+1]
+
+      103000 (MinUnique)
+      012345 (offsets)
+     */
+
     const testCases = [
       ("banana", [1, 0, 3, 0, 0, 0, 0]),
       ("abcdefg", [1, 1, 1, 1, 1, 1, 0, 0]),
@@ -127,11 +150,61 @@ module TestFindUnique {
     }
   }
 
+  proc testMultipleFiles() {
+    writeln("testMultipleFiles()");
 
-  // Run the test
-  proc main() {
+    const testCases = [
+      ("aaa0bbb0", [0, 4, 8], [1, 1, 1, 0, 1, 1, 1, 0, 0]),
+      ("aba0bab0", [0, 4, 8], [3, 0, 0, 0, 3, 0, 0, 0, 0]),
+      ("aab0bba0", [0, 4, 8], [2, 2, 0, 0, 2, 2, 0, 0, 0]),
+      ("aaaa0aaab0abab0", [0, 5, 10, 15], [4,0,0,0,0,0,3,0,0,0,0,2,0,0,0,0]),
+    ];
+
+    for (input, fileStarts, expected) in testCases {
+      writeln("  ", input);
+
+      const thetext = bytesToArray(input);
+      const ignoreDocs:[0..<fileStarts.size-1] bool = false;
+
+      const SA, LCP;
+      computeSuffixArrayAndLCP(thetext, n = input.size, SA, LCP);
+
+      if debugOutput {
+        writeln("Input: ", input);
+        writeln("SA: ", SA);
+        writeln("LCP: ", LCP);
+        writeln("thetext: ", thetext);
+        writeln("fileStarts: ", fileStarts);
+        writeln("expectedMinUnique: ", expected);
+      }
+
+      var result = findUnique(SA, LCP, thetext, fileStarts, ignoreDocs);
+
+      if debugOutput {
+        writeln("Result: ", result);
+      }
+
+      for i in 0..#result.size {
+        assert(result[i] == expected[i], "Test failed for input " + input + " at index " + i:string);
+      }
+    }
+  }
+
+  proc runTests() {
     testAbaababa();
     testDifferentInputs();
+    testMultipleFiles();
+  }
+
+
+  // Run the tests
+  proc main() {
+    serial {
+      runTests();
+    }
+
+    runTests();
+
     writeln("OK");
   }
 }
