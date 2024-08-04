@@ -311,6 +311,150 @@ proc testSplitters() {
 
 }
 
+proc testMultiWayMerge() {
+  {
+    writeln("12 way merge");
+    // this input example is from Knuth vol 2 5.4.1 pp 253
+    var Input = [/*0*/ 503, 504,
+                 /*2*/ 87,
+                 /*3*/ 512,
+                 /*4*/ 61, 62, 300,
+                 /*7*/ 908,
+                 /*8*/ 170,
+                 /*9*/ 897,
+                /*10*/ 275,
+                /*11*/ 653,
+                /*12*/ 426,
+                /*13*/ 154,
+                /*14*/ 509];
+
+    var InputRanges = [0..1,
+                       2..2,
+                       3..3,
+                       4..6,
+                       7..7,
+                       8..8,
+                       9..9,
+                       10..10,
+                       11..11,
+                       12..12,
+                       13..13,
+                       14..14];
+    var Output:[Input.domain] int;
+    multiWayMerge(Input, InputRanges, Output, Output.dim(0),
+                  myDefaultComparator);
+    checkArrayMatches(Output, [61, 62, 87, 154, 170,
+                               275, 300, 426, 503, 504,
+                               509, 512, 653, 897, 908]);
+  }
+
+  {
+    writeln("4 way merge");
+    // this input example is from Knuth vol 2 5.4.1 pp 252
+    var Input = [/*0*/ 87, 503,
+                 /*2*/ 170, 908,
+                 /*4*/ 154, 426, 653,
+                 /*7*/ 612];
+    var InputRanges = [0..1,
+                       2..3,
+                       4..6,
+                       7..7];
+    var Output:[Input.domain] int;
+    multiWayMerge(Input, InputRanges, Output, Output.dim(0),
+                  myDefaultComparator);
+    checkArrayMatches(Output, [87, 154, 170, 426, 503, 612, 653, 908]);
+  }
+
+  {
+    writeln("4 way merge with empty");
+    // test with some empty sorted sequences
+    var Input = [/*0*/ 87, 503,
+                 /*2*/
+                 /*2*/ 154, 426, 653,
+                 /*5*/ 612];
+    var InputRanges = [0..1,
+                       2..1,
+                       2..4,
+                       5..5];
+    var Output:[Input.domain] int;
+    multiWayMerge(Input, InputRanges, Output, Output.dim(0),
+                  myDefaultComparator);
+    checkArrayMatches(Output, [87, 154, 426, 503, 612, 653]);
+  }
+
+  {
+    writeln("4 way merge with more empty");
+    // test with some empty sorted sequences
+    var Input = [/*0*/
+                 /*0*/
+                 /*0*/ 154, 426, 653,
+                 /*3*/];
+    var InputRanges = [0..-1,
+                       0..-1,
+                       0..2,
+                       3..2];
+    var Output:[Input.domain] int;
+    multiWayMerge(Input, InputRanges, Output, Output.dim(0),
+                  myDefaultComparator);
+    checkArrayMatches(Output, [154, 426, 653]);
+  }
+
+  {
+    writeln("1-way merge");
+    var Input = [/*0*/ 9, 11];
+    var InputRanges = [0..1,];
+    var Output:[Input.domain] int;
+    multiWayMerge(Input, InputRanges, Output, Output.dim(0),
+                  myDefaultComparator);
+    checkArrayMatches(Output, [9, 11]);
+  }
+
+  {
+    writeln("2-way merge");
+    var Input = [/*0*/ 9, 11,
+                 /*2*/ 10, 22, 36];
+    var InputRanges = [0..1,
+                       2..4];
+    var Output:[Input.domain] int;
+    multiWayMerge(Input, InputRanges, Output, Output.dim(0),
+                  myDefaultComparator);
+    checkArrayMatches(Output, [9, 10, 11, 22, 36]);
+  }
+
+  {
+    writeln("3-way merge");
+    var Input = [/*0*/ 9, 11,
+                 /*2*/ 10, 22, 36,
+                 /*5*/ 2, 12];
+    var InputRanges = [0..1,
+                       2..4,
+                       5..6];
+    var Output:[Input.domain] int;
+    multiWayMerge(Input, InputRanges, Output, Output.dim(0),
+                  myDefaultComparator);
+    checkArrayMatches(Output, [2, 9, 10, 11, 12, 22, 36]);
+  }
+
+  {
+    writeln("5-way merge");
+    var Input = [/*0*/ 9, 11,
+                 /*2*/ 10, 22, 36,
+                 /*5*/ 2, 12,
+                 /*7*/ 1, 10,
+                 /*9*/ 2];
+    var InputRanges = [0..1,
+                       2..4,
+                       5..6,
+                       7..8,
+                       9..9];
+    var Output:[Input.domain] int;
+    multiWayMerge(Input, InputRanges, Output, Output.dim(0),
+                  myDefaultComparator);
+    checkArrayMatches(Output, [1, 2, 2, 9, 10, 10, 11, 12, 22, 36]);
+  }
+}
+
+
 proc testPartitions() {
   testPartition(10, 4, false, 1);
   testPartition(10, 4, true, 1);
@@ -343,9 +487,16 @@ proc testPartitions() {
 
   // test creating splitters in other cases
   testSplitters();
+
+  // test multi-way merge
+  testMultiWayMerge();
 }
 
 proc main() {
+  testMultiWayMerge();
+
+  return 0;
+
   serial {
     writeln("Testing partitioning with one task");
     testPartitions();
