@@ -138,7 +138,7 @@ proc main(args: [] string) throws {
   var SA = computeSuffixArray(allData, totalSize);
   t.stop();
 
-  writeln("suffix array construction took of ", n, " bytes ",
+  writeln("suffix array construction of ", n, " bytes ",
           "took ", t.elapsed(), " seconds");
   writeln(n / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
 

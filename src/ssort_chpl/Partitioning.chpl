@@ -465,12 +465,12 @@ class PerTaskState {
        split.sortedSplitter((numBuckets-2)/2) < elts
 
  */
-proc partition(const Input, ref Output, split:splitters(?), comparator,
+proc partition(const Input, ref Output, split, comparator,
                start: int, end: int,
                nTasks: int = computeNumTasks()) {
 
   // check that the splitters are sorted according to comparator
-  if EXTRA_CHECKS {
+  if EXTRA_CHECKS && isSubtype(split.type,splitters) {
     assert(isSorted(split.sortedStorage[0..<split.myNumBuckets-1], comparator));
   }
 
@@ -638,7 +638,7 @@ proc multiWayMerge(Input: [] ?eltType,
                  // but ExternalNodes[inf] actually exists
 
   proc doCompare(eltA, eltB, addrA, addrB) {
-    writeln("doCompare ", eltA, " ", eltB, " ", addrA, " ", addrB);
+    //writeln("doCompare ", eltA, " ", eltB, " ", addrA, " ", addrB);
     if addrB == inf {
       return -1; // a is less if b is infinity
     }
@@ -650,7 +650,7 @@ proc multiWayMerge(Input: [] ?eltType,
 
   // consider the rows in reverse order; we will compare elements
   for row in 1..<nRows by -1 {
-    writeln("Working on row ", row);
+    //writeln("Working on row ", row);
 
     const rowStart = 1 << row; // e.g., last row in example starts at 16
     const maxRowSize = 1 << row; // e.g. last row could have up to 16 elts
@@ -658,7 +658,7 @@ proc multiWayMerge(Input: [] ?eltType,
     for i in rowStart..#rowSize by 2 {
       // compare element i with element i+1
 
-      writeln("i is ", i);
+      //writeln("i is ", i);
 
       // get a reference to the elements to compare
       const ref eltA = if i < P
@@ -672,23 +672,23 @@ proc multiWayMerge(Input: [] ?eltType,
       // if we are working on an internal node.
       const tmpAddrA = if i < P then InternalNodes[i] else i;
       const tmpAddrB = if i+1 < P then InternalNodes[i+1] else i+1;
-      writeln("tmpAddrA ", tmpAddrA);
-      writeln("tmpAddrB ", tmpAddrB);
+      //writeln("tmpAddrA ", tmpAddrA);
+      //writeln("tmpAddrB ", tmpAddrB);
       const addrA = if ReadPosition[tmpAddrA] <= ReadEnd[tmpAddrA]
                     then tmpAddrA
                     else inf;
       const addrB = if ReadPosition[tmpAddrB] <= ReadEnd[tmpAddrB]
                     then tmpAddrB
                     else inf;
-      writeln("addrA ", addrA);
-      writeln("addrB ", addrB);
+      //writeln("addrA ", addrA);
+      //writeln("addrB ", addrB);
       ref eltDst = InternalNodes[i/2];
-      writeln("Comparing ", addrA, " vs ", addrB);
+      //writeln("Comparing ", addrA, " vs ", addrB);
       if doCompare(eltA, eltB, addrA, addrB) < 0 {
-        writeln("Setting node ", i/2, " to ", addrA);
+        //writeln("Setting node ", i/2, " to ", addrA);
         eltDst = addrA;
       } else {
-        writeln("Setting node ", i/2, " to ", addrB);
+        //writeln("Setting node ", i/2, " to ", addrB);
         eltDst = addrB;
       }
     }
@@ -696,8 +696,8 @@ proc multiWayMerge(Input: [] ?eltType,
   // copy the champion to the top of the tree
   InternalNodes[0] = InternalNodes[1];
 
-  writeln("Winners tree");
-  writeln("InternalNodes ", ExternalNodes[InternalNodes]);
+  //writeln("Winners tree");
+  //writeln("InternalNodes ", ExternalNodes[InternalNodes]);
 
   // change the InternalNodes to store losers rather than winners
   // note that the order in which this loop executes is important
@@ -725,15 +725,15 @@ proc multiWayMerge(Input: [] ?eltType,
     }
   }
 
-  writeln("Loser's tree");
-  writeln("InternalNodes ", ExternalNodes[InternalNodes]);
+  //writeln("Loser's tree");
+  //writeln("InternalNodes ", ExternalNodes[InternalNodes]);
 
 
   var outPos = outputRange.low;
   while true {
-    writeln("looping");
-    writeln("InternalNodes ", InternalNodes);
-    writeln("ExtarnalNodes[InternalNodes] ", ExternalNodes[InternalNodes]);
+    //writeln("looping");
+    //writeln("InternalNodes ", InternalNodes);
+    //writeln("ExtarnalNodes[InternalNodes] ", ExternalNodes[InternalNodes]);
 
     var championAddr = InternalNodes[0]; // index of external node in P..<2*P
     if championAddr == inf {
@@ -741,7 +741,7 @@ proc multiWayMerge(Input: [] ?eltType,
     }
 
     // output the champion
-    writeln("outputting ", ExternalNodes[championAddr]);
+    //writeln("outputting ", ExternalNodes[championAddr]);
     Output[outPos] = ExternalNodes[championAddr] : eltType;
     outPos += 1;
 
@@ -751,7 +751,7 @@ proc multiWayMerge(Input: [] ?eltType,
     if ChampionPos+1 <= ReadEnd[championAddr] {
       ChampionPos += 1;
       ExternalNodes[championAddr] = Input[ChampionPos];
-      writeln("Read ", ExternalNodes[championAddr], " into ", championAddr);
+      //writeln("Read ", ExternalNodes[championAddr], " into ", championAddr);
     } else {
       championAddrOrInf = inf;
     }
@@ -760,7 +760,7 @@ proc multiWayMerge(Input: [] ?eltType,
     // and updating championAddr based on the comparisons
     var i = championAddr / 2; // parent internal node
     while i >= 1 {
-      writeln("Setting Internal Node ", i);
+      //writeln("Setting Internal Node ", i);
       // championAddr is an outer variable loop, updated as needed
       const ref championElt = ExternalNodes[championAddrOrInf];
 
@@ -772,12 +772,12 @@ proc multiWayMerge(Input: [] ?eltType,
         // newElt has won, nothing to do:
         //  * championAddr is still correct
         //  * Loser is still correct
-        writeln("champion beats ", ExternalNodes[otherAddr]);
+        //writeln("champion beats ", ExternalNodes[otherAddr]);
       } else {
         // otherElt has won, update the loser and champion
         Loser = championAddrOrInf;
         championAddrOrInf = otherAddr;
-        writeln("champion lost to ", ExternalNodes[otherAddr]);
+        //writeln("champion lost to ", ExternalNodes[otherAddr]);
       }
 
       i /= 2;
