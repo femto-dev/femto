@@ -21,8 +21,6 @@ module SuffixSort {
 
 
 config param DEFAULT_PERIOD = 133;
-config param DEFAULT_K = 81;
-config param ENABLE_CACHED_TEXT = true;
 config param EXTRA_CHECKS = false;
 config param TRACE = false;
 config type CACHED_DATA_TYPE = nothing;
@@ -75,27 +73,6 @@ proc computeSuffixArrayAndLCP(input: [], const n: input.domain.idxType,
   SA = computeSuffixArray(input, n);
   LCP = lcpParPlcp(input, n, SA);
 }
-
-/*
-proc computeUniqueK(input: [], const n: input.domain.idxType) {
-  if !(input.domain.rank == 1 &&
-       input.domain.low == 0 &&
-       input.domain.high == input.domain.size-1) {
-    halt("computeUniqueK requires 1-d array over 0..n");
-  }
-  if n + INPUT_PADDING > input.size {
-    halt("computeUniqueK needs extra space at the end of the array");
-    // expect it to be zero-padded past n.
-  }
-
-  const cfg = new ssortConfig(idxType = input.idxType,
-                              characterType = input.eltType,
-                              offsetType = input.idxType,
-                              cachedDataType = CACHED_DATA_TYPE,
-                              loadWordType = LOAD_WORD_TYPE,
-                              cover = new differenceCover(DEFAULT_PERIOD));
-  minUniqueK(cfg, input, n, DEFAULT_K);
-}*/
 
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);

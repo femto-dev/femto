@@ -33,7 +33,6 @@ import Reflection;
 import CTypes.c_sizeof;
 
 import SuffixSort.DEFAULT_PERIOD;
-import SuffixSort.ENABLE_CACHED_TEXT;
 import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.TRACE;
 import SuffixSort.INPUT_PADDING;
