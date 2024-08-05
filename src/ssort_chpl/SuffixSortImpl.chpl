@@ -30,6 +30,7 @@ use Sort;
 import Random;
 import BitOps;
 import Reflection;
+import CTypes.c_sizeof;
 
 import SuffixSort.DEFAULT_PERIOD;
 import SuffixSort.ENABLE_CACHED_TEXT;
@@ -42,9 +43,10 @@ import SuffixSort.INPUT_PADDING;
 config const SAMPLE_RATIO = 1.5;
 config const PARTITION_SORT_SAMPLE = true;
 config const PARTITION_SORT_ALL = true;
+config const IMPROVED_SORT_ALL = true;
 config const SEED = 1;
 config const MIN_BUCKETS_PER_TASK = 8;
-config const MIN_BUCKETS = 10_000;
+config const MIN_BUCKETS_SPACE = 2_000_000; // a size in bytes
 
 /**
  This record contains the configuration for the suffix sorting
@@ -1220,20 +1222,25 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
                                  loadWordType=subLoad,
                                  cover=cover);
 
-  var nTasks = computeNumTasks() * thetext.targetLocales().size;
-  var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks, MIN_BUCKETS);
-
-  //writeln("nTasks is ", nTasks);
-
   //// Step 1: Sort Sample Suffixes ////
 
   // begin by computing the input text for the recursive subproblem
   var SampleText:[0..<sampleN+INPUT_PADDING] subCfg.characterType;
   var allSamplesHaveUniqueRanks = false;
+
   // create a sample splitters that can be replaced later
   var unusedSplitter = makePrefixAndSampleRanks(cfg, 0, thetext, n,
                                                 0, SampleText, sampleN,
                                                 charsPerMod);
+
+  // compute number of buckets for sample partition & after recursion partition
+  const splitterSize = c_sizeof(unusedSplitter.type):int;
+  var nTasks = computeNumTasks() * thetext.targetLocales().size;
+  var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks,
+                                MIN_BUCKETS_SPACE / splitterSize);
+
+  //writeln("nTasks is ", nTasks);
+
   // these are initialized below
   const SampleSplitters1; // used if allSamplesHaveUniqueRanks
   const SampleSplitters2; // used otherwise
