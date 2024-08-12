@@ -717,12 +717,22 @@ proc helpSparseLCP(inputArr: [], n: int, expectSA: [] int, expectLCP: [] int,
   for i in SparsePLCP.domain {
     assert(SparsePLCP[i] == PLCP[i*q]);
   }
+
+  // check the lookup function
+  for i in 0 ..<n {
+    var gotLCPi = lookupLCP(inputArr, n, expectSA, SparsePLCP, q, i);
+    assert(gotLCPi == expectLCP[i]);
+  }
 }
 
 proc checkSparseLCP(inputArr: [], n: int, expectSA: [] int, expectLCP: [] int) {
   helpSparseLCP(inputArr, n, expectSA, expectLCP, 1);
   helpSparseLCP(inputArr, n, expectSA, expectLCP, 2);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 3);
   helpSparseLCP(inputArr, n, expectSA, expectLCP, 4);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 5);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 6);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 7);
   helpSparseLCP(inputArr, n, expectSA, expectLCP, 8);
   helpSparseLCP(inputArr, n, expectSA, expectLCP, 16);
   helpSparseLCP(inputArr, n, expectSA, expectLCP, 32);
@@ -973,7 +983,7 @@ proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
 
   // check also the LCP
   var expectLCP: [0..<n] int = 0..<n;
-  testLCPRepeats(inputArr, n, expectSA, expectLCP);
+  testLCP(inputArr, n, expectSA, expectLCP);
 }
 
 proc testRepeats() {

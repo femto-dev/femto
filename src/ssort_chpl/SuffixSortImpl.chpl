@@ -1666,7 +1666,7 @@ proc lcpParPlcp(thetext: [], const n: thetext.domain.idxType, const SA: []) {
   return LCP;
 }
 
-/* Compute and return the sparse LCP array based on the input text and suffix
+/* Compute and return the sparse PLCP array based on the input text and suffix
    array. This is based upon "Permuted Longest-Common-Prefix Array" by Juha
    Kärkkäinen, Giovanni Manzini, and Simon J. Puglisi; and also
    "Fast Parallel Computation of Longest Common Prefixes"
@@ -1681,7 +1681,7 @@ proc computeSparsePLCP(thetext: [], const n: thetext.domain.idxType,
   const nSample = myDivCeil(n, q);
   var PLCP: [0..<nSample] offsetType;
   {
-    writeln("computeSparsePLCP(q=", q, ")");
+    //writeln("computeSparsePLCP(q=", q, ")");
 
     var PHI: [0..<nSample] offsetType;
     forall i in 0..<n {
@@ -1692,7 +1692,7 @@ proc computeSparsePLCP(thetext: [], const n: thetext.domain.idxType,
       }
     }
 
-    writeln("PHI ", PHI);
+    //writeln("PHI ", PHI);
 
     const blockSize = divCeil(nSample, nTasks);
     coforall tid in 0..<nTasks {
@@ -1719,12 +1719,71 @@ proc computeSparsePLCP(thetext: [], const n: thetext.domain.idxType,
     // deallocate PHI as it is no longer needed
   }
 
-  writeln("Computed sparse PLCP (q=", q, ") ", PLCP);
+  //writeln("Computed sparse PLCP (q=", q, ") ", PLCP);
   return PLCP;
 }
 
-proc plcpLookup(thetext: [], const n: thetext.domain.idxType, const SA: [],
-                const sparsePLCP: [], param q) {
+/* Given a sparse PLCP array computed as above in computeSparsePLCP,
+   along with the parameter q and a suffix array position 'i', return
+   LCP[i]. */
+proc lookupLCP(thetext: [], const n: thetext.domain.idxType, const SA: [],
+               const sparsePLCP: [], param q, i: n.type) {
+
+  //writeln("lookupLCP i=", i, " q=", q, " sparsePLCP=", sparsePLCP);
+
+  // handle i==0 here since otherwise we couldn't access SA[i-1] below.
+  if i == 0 {
+    return 0;
+  }
+
+  // if it's a sampled offset, we can return PLCP directly.
+  const sai = offset(SA[i]);
+  if sai % q == 0 { // i.e., SA[i] = qk
+    return sparsePLCP[sai / q]; // i.e., PLCPq[k]
+  }
+
+  // otherwise, let aq + b = SA[i]
+  const a = sai / q;
+  const b = sai % q;
+
+  var lower: int; // where to start comparing
+  var upper: int; // where to stop comparing (inclusive)
+
+  // Lemma 2 from "Permuted Longest-Common-Prefix Array":
+  //   if (a+1)q <= n-1, PLCPq[a] - b <= PLCP[x] <= PLCPq[a+1] + q - b
+  //   else PLCPq[a] - b <= PLCP[x] <= n - x <= q
+
+  if (a + 1) * q <= n - 1 {
+    lower = sparsePLCP[a] - b;
+    upper = sparsePLCP[a+1] + q - b;
+  } else {
+    lower = sparsePLCP[a] - b;
+    upper = n - sai;
+  }
+
+  const saPrev = offset(SA[i-1]);
+
+  lower = max(lower, 0);        // can't have a negative number in common
+  upper = min(upper, n-saPrev); // common can't reach past end of string
+
+  //writeln("lower=", lower, " upper=", upper);
+
+  // we know lower <= PLCP[i] <= upper
+  // compute the rest of PLCP[i] by comparing suffixes SA[i] and SA[i-1].
+  var common = lower;
+  while common < upper {
+    //writeln("in loop, common is ", common);
+    //writeln("comparing ", sai+common, " vs ", saPrev+common);
+    if thetext[sai + common] == thetext[saPrev + common] {
+      common += 1;
+    } else {
+      break;
+    }
+  }
+
+  //writeln("returning ", common);
+
+  return common;
 }
 
 
