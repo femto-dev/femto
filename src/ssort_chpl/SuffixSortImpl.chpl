@@ -42,7 +42,7 @@ import SuffixSort.INPUT_PADDING;
 config const SAMPLE_RATIO = 1.5;
 config const PARTITION_SORT_SAMPLE = true;
 config const PARTITION_SORT_ALL = true;
-config const IMPROVED_SORT_ALL = true;
+config param IMPROVED_SORT_ALL = false; // TODO: fix this and then default
 config const SEED = 1;
 config const MIN_BUCKETS_PER_TASK = 8;
 config const MIN_BUCKETS_SPACE = 2_000_000; // a size in bytes
@@ -1135,6 +1135,11 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     proc keyPart(a: offsetAndCached(?), i: int):(int(8), wordType) {
       param sectionReturned = 0:int(8);
       param sectionEnd = -1:int(8);
+
+      if EXTRA_CHECKS {
+        assert(a.offset % cover.period == phase);
+      }
+
       if i < this.nPrefixWords {
         // compare the prefix for the first nPrefixWords
         return getPrefixKeyPart(cfg, a, i, thetext, n, maxPrefix=cover.period);
