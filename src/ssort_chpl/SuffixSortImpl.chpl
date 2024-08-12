@@ -42,7 +42,7 @@ import SuffixSort.INPUT_PADDING;
 config const sampleRatio = 1.5;
 config const partitionSortSample = true;
 config const partitionSortAll = true;
-config param improvedSortAll = false; // TODO: fix this and then default
+config param improvedSortAll = true;
 config const seed = 1;
 config const minBucketsPerTask = 8;
 config const minBucketsSpace = 2_000_000; // a size in bytes
@@ -1156,7 +1156,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
   }
 
 
-  if !IMPROVED_SORT_ALL {
+  if numBits(wordType) != numBits(cfg.offsetType) || !IMPROVED_SORT_ALL {
     sortRegion(A, new finalComparator(), region=region);
 
   } else {
