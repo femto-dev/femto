@@ -144,8 +144,6 @@ proc main(args: [] string) throws {
           "took ", t.elapsed(), " seconds");
   writeln(n / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
 
-  Time.sleep(20);
-
   return 0;
 }
 

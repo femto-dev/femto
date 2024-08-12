@@ -381,10 +381,10 @@ proc makePrefixAndSampleRanks(const cfg: ssortConfig(?),
   Construct an array of suffixes (not yet sorted)
   for all of the offsets in 0..<n.
  */
-proc buildAllOffsets(const cfg:ssortConfig(?), const text, n: cfg.offsetType) {
-  const Dom = {0..<n};
-  var SA:[Dom] offsetAndCached(cfg.offsetType, cfg.cachedDataType) =
-    forall i in Dom do
+proc buildAllOffsets(const cfg:ssortConfig(?), const text, n: cfg.offsetType,
+                     resultDom: domain(1)) {
+  var SA:[resultDom] offsetAndCached(cfg.offsetType, cfg.cachedDataType) =
+    forall i in resultDom do
       makeOffsetAndCached(cfg, i, text, n);
 
   return SA;
@@ -702,9 +702,10 @@ proc fixTrailingZeros(const text, n:integral, ref A: []) {
   Return an array representing this suffix array.
   */
 proc computeSuffixArrayDirectly(const cfg:ssortConfig(?),
-                                const text, n: cfg.offsetType) {
+                                const text, n: cfg.offsetType,
+                                resultDom:domain(1)) {
   // First, construct the offsetAndCached array that will be sorted.
-  var A = buildAllOffsets(cfg, text, n);
+  var A = buildAllOffsets(cfg, text, n, resultDom);
 
   sortSuffixesByPrefix(cfg, text, n, A, 0..<n,
                        maxPrefix=max(cfg.offsetType));
@@ -1282,8 +1283,9 @@ proc sortSuffixesCompletelyBounded(
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
     referring to 'text'. */
-proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
- : [0..<n] offsetAndCached(cfg.offsetType, cfg.cachedDataType) {
+proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
+              resultDom = {0..<n})
+ : [resultDom] offsetAndCached(cfg.offsetType, cfg.cachedDataType) {
 
   type offsetType = cfg.offsetType;
   type cachedDataType = cfg.cachedDataType;
@@ -1317,7 +1319,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     if TRACE {
       writeln("Base case suffix sort for n=", n);
     }
-    return computeSuffixArrayDirectly(cfg, thetext, n);
+    return computeSuffixArrayDirectly(cfg, thetext, n, resultDom);
   }
 
   // set up information for recursive subproblem
@@ -1507,7 +1509,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
   //// Step 2: Sort everything all together ////
   if !PARTITION_SORT_ALL {
     // simple sort of everything all together
-    var SA = buildAllOffsets(cfg, thetext, n);
+    var SA = buildAllOffsets(cfg, thetext, n, resultDom);
 
     sortSuffixesCompletely(cfg, thetext, n=n, SampleText, charsPerMod,
                            SA, 0..<n);
@@ -1551,7 +1553,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
     const comparator = new finalPartitionComparator();
     const InputProducer = new offsetProducer2();
 
-    var SA: [0..<n] offsetAndCached(offsetType, cachedDataType);
+    var SA: [resultDom] offsetAndCached(offsetType, cachedDataType);
 
     const ref SampleSplitters = if allSamplesHaveUniqueRanks
                                 then SampleSplitters1

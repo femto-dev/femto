@@ -127,10 +127,11 @@ private proc checkSeeressesCase(type offsetType,
                               cover=new differenceCover(period));
 
   if expectCached.type != nothing {
-    const A = buildAllOffsets(cfg, inputArr, n);
+    const A = buildAllOffsets(cfg, inputArr, n, {0..<n});
     checkCached(A, expectCached);
   }
-  const SA = computeSuffixArrayDirectly(cfg, inputArr, n:offsetType);
+  const SA = computeSuffixArrayDirectly(cfg, inputArr, n:offsetType,
+                                        {0..<n:offsetType});
   checkOffsets(SA, expectOffsets);
   assert(SA.eltType.cacheType == cachedDataType);
 
