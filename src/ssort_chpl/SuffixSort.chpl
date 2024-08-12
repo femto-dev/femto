@@ -69,8 +69,10 @@ proc computeSuffixArray(input: [], const n: input.domain.idxType) {
 
 proc computeSuffixArrayAndLCP(input: [], const n: input.domain.idxType,
                               out SA: [],
-                              out LCP: []) {
+                              out LCP) {
+  writeln("computing suffix array");
   SA = computeSuffixArray(input, n);
+  writeln("computing LCP array");
   LCP = lcpParPlcp(input, n, SA);
 }
 

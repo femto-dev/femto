@@ -1622,7 +1622,6 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
  */
 proc lcpParPlcp(thetext: [], const n: thetext.domain.idxType, const SA: []) {
   const nTasks = computeNumTasks();
-
   type offsetType = (offset(SA[0])).type;
 
   var PLCP: [SA.domain] offsetType;
@@ -1667,6 +1666,66 @@ proc lcpParPlcp(thetext: [], const n: thetext.domain.idxType, const SA: []) {
   return LCP;
 }
 
+/* Compute and return the sparse LCP array based on the input text and suffix
+   array. This is based upon "Permuted Longest-Common-Prefix Array" by Juha
+   Kärkkäinen, Giovanni Manzini, and Simon J. Puglisi; and also
+   "Fast Parallel Computation of Longest Common Prefixes"
+   by Julian Shun.
+
+ */
+proc computeSparsePLCP(thetext: [], const n: thetext.domain.idxType,
+                       const SA: [], param q=64) {
+  const nTasks = computeNumTasks();
+  type offsetType = (offset(SA[0])).type;
+
+  const nSample = myDivCeil(n, q);
+  var PLCP: [0..<nSample] offsetType;
+  {
+    writeln("computeSparsePLCP(q=", q, ")");
+
+    var PHI: [0..<nSample] offsetType;
+    forall i in 0..<n {
+      const sai = offset(SA[i]);
+      if sai % q == 0 {
+        const prev = if i > 0 then offset(SA[i-1]) else -1;
+        PHI[sai/q] = prev;
+      }
+    }
+
+    writeln("PHI ", PHI);
+
+    const blockSize = divCeil(nSample, nTasks);
+    coforall tid in 0..<nTasks {
+      var taskStart = tid * blockSize;
+      var h = 0; // called l in "Permuted Longest-Common-Prefix Array" paper
+      for i in taskStart..#blockSize {
+        if i >= nSample {
+          break;
+        }
+
+        var j = PHI[i];
+        if j == -1 {
+          h = 0;
+        } else {
+          while i*q+h < n && j+h < n && thetext[i*q+h] == thetext[j+h] {
+            h += 1;
+          }
+        }
+        PLCP[i] = h;
+        h = max(h-q, 0);
+      }
+    }
+
+    // deallocate PHI as it is no longer needed
+  }
+
+  writeln("Computed sparse PLCP (q=", q, ") ", PLCP);
+  return PLCP;
+}
+
+proc plcpLookup(thetext: [], const n: thetext.domain.idxType, const SA: [],
+                const sparsePLCP: [], param q) {
+}
 
 
 }

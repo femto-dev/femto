@@ -702,16 +702,44 @@ private proc testSeeresses() {
   testLCP("seeresses", expectOffsets, [0,1,1,2,0,0,1,2,1]);
 }
 
+proc helpSparseLCP(inputArr: [], n: int, expectSA: [] int, expectLCP: [] int,
+                   param q) {
+  // compute the expected PLCP array
+  var PLCP:[0..<n] int;
+  forall i in 0..<n {
+    PLCP[expectSA[i]] = expectLCP[i];
+  }
+
+  // compute the sparse PLCP array (which is what we are testing here)
+  const SparsePLCP = computeSparsePLCP(inputArr, n, expectSA, q);
+
+  // check that the sparse PLCP array matches the real PLCP array
+  for i in SparsePLCP.domain {
+    assert(SparsePLCP[i] == PLCP[i*q]);
+  }
+}
+
+proc checkSparseLCP(inputArr: [], n: int, expectSA: [] int, expectLCP: [] int) {
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 1);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 2);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 4);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 8);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 16);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 32);
+  helpSparseLCP(inputArr, n, expectSA, expectLCP, 64);
+}
+
 proc testLCP(inputArr: [], n: int, expectSA: [] int, expectLCP: [] int) {
   var LCP = lcpParPlcp(inputArr, n, expectSA);
   checkLCP(LCP, expectLCP);
+
+  checkSparseLCP(inputArr, n, expectSA, expectLCP);
 }
 
 proc testLCP(input: string, expectSA: [] int, expectLCP: [] int) {
   const n = input.size;
   const inputArr = bytesToArray(input);
-  var LCP = lcpParPlcp(inputArr, n, expectSA);
-  checkLCP(LCP, expectLCP);
+  testLCP(inputArr, n, expectSA, expectLCP);
 }
 
 proc testOtherCase(input: string, expectSA: [] int,
@@ -788,8 +816,32 @@ proc testOthers() {
    6704521   2
    704521    3
 
+
+   resulting suffix array
+
+   01234567890
+   abracadabra
+
+                SA  LCP
+   a            10  0
+   abra         7   1
+   abracadabra  0   4
+   acadabra     3   1
+   adabra       5   1
+   bra          8   0
+   bracadabra   1   3
+   cadabra      4   0
+   dabra        6   0
+   ra           9   0
+   racadabra    2   2
+
+          0 1 2 3 4 5 6 7 8 9 10
+   PHI :  7 8 9 0 1 3 4 A 5 6 -1
+   PLCP1: 4 3 2 1 0 1 0 1 0 0 0
+   PLCP2: 4   2   0   0   0   0
   */
   testOther("abracadabra", [10,7,0,3,5,8,1,4,6,9,2]);
+  testLCP("abracadabra", [10,7,0,3,5,8,1,4,6,9,2], [0,1,4,1,1,0,3,0,0,0,2]);
 
 
   /*
@@ -857,8 +909,31 @@ proc testOthers() {
    caa aacaaaab     4
 
 
+   Suffix Array
+             11111
+   012345678901234
+   aaaacaaaacaaaab
+
+                   SA   LCP
+   aaaab           10   0
+   aaaacaaaab      5    4
+   aaaacaaaacaaaab 0    9
+   aaab            11   3
+   aaacaaaab       6    3
+   aaacaaaacaaaab  1    8
+   aab             12   2
+   aacaaaab        7    2
+   aacaaaacaaaab   2    7
+   ab              13   1
+   acaaaab         8    1
+   acaaaacaaaab    3    6
+   b               14   0
+   caaaab          9    0
+   caaaacaaaab     4    5
   */
   testOther("aaaacaaaacaaaab", [10,5,0,11,6,1,12,7,2,13,8,3,14,9,4]);
+  testLCP("aaaacaaaacaaaab", [10,5,0,11,6,1,12,7,2,13,8,3,14,9,4],
+          [0,4,9,3,3,8,2,2,7,1,1,6,0,0,5]);
 
   testOther("banana$", [6,5,3,1,0,4,2]);
   testLCP("banana$", [6,5,3,1,0,4,2], [0,0,1,3,0,0,2]);
@@ -898,7 +973,7 @@ proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
 
   // check also the LCP
   var expectLCP: [0..<n] int = 0..<n;
-  testLCP(inputArr, n, expectSA, expectLCP);
+  testLCPRepeats(inputArr, n, expectSA, expectLCP);
 }
 
 proc testRepeats() {
