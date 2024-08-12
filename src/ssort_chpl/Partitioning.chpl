@@ -465,12 +465,12 @@ class PerTaskState {
        split.sortedSplitter((numBuckets-2)/2) < elts
 
  */
-proc partition(const Input, ref Output, split:splitters(?), comparator,
+proc partition(const Input, ref Output, split, comparator,
                start: int, end: int,
                nTasks: int = computeNumTasks()) {
 
   // check that the splitters are sorted according to comparator
-  if EXTRA_CHECKS {
+  if EXTRA_CHECKS && isSubtype(split.type,splitters) {
     assert(isSorted(split.sortedStorage[0..<split.myNumBuckets-1], comparator));
   }
 
@@ -552,6 +552,239 @@ proc partition(const Input, ref Output, split:splitters(?), comparator,
   }
 
   return counts;
+}
+
+
+/* Use a tournament tree (tree of losers) to perform multi-way merging.
+   This does P-way merging, assuming that the P ranges in InputRanges
+   represent the P sorted regions. OutputRange represents where the
+   output should be placed in the Output array and should have a matching size.
+
+   The type readEltType will be used for storing the element for comparison
+   in the tournament tree. It might be useful for it to be a different type
+   from eltType (e.g. if eltType are offsets into another array or otherwise
+   pointers, it might be useful to store full records in the tournament tree).
+   If readEltType differs from eltType, this code will cast (with operator : )
+   from eltType to readEltType and back again.
+   */
+proc multiWayMerge(Input: [] ?eltType,
+                   InputRanges: [] range,
+                   ref Output: [] eltType,
+                   outputRange: range,
+                   comparator,
+                   type readEltType=eltType) {
+  const P = InputRanges.size;
+
+  if P <= 1 {
+    // Copy the input ranges to the output
+    var pos = outputRange.low;
+    for r in InputRanges {
+      for i in r {
+        Output[pos] = Input[i];
+        pos += 1;
+      }
+    }
+    return;
+  }
+
+  var InternalNodes: [0..<P] int; // integer indices into ExternalNodes
+                                   // indicating what the loser was,
+                                   // except Losers[0] is the winner of the
+                                   // tournament
+
+  // We will store the tree in the order described in Knuth vol.
+  // Sorting and Searching:
+  //
+  // This is the example of the internal nodes of a 12-node tree,
+  // followed by the external nodes, which start with e, but continue
+  // the numbering:
+  //                              1
+  //                  2                             3
+  //         4                 5               6        7
+  //    8        9        10       11       e12 e13  e14 e15
+  // e16 e17  e18 e19  e20 e21  e22 e23
+
+  // some observations about this way of numbering nodes:
+  //  * for node i, the parent node number can be computed by i / 2
+  //  * for node i, the child nodes are 2*i and 2*i + 1
+  //  * the leftmost node in each row is a power of 2
+  //  * there are always an even number of elements in the bottom row
+
+  // these are numbered P..<2*P to match the external node numbering above
+  // the element 2*P is also included to allow the algorithm to consider
+  // that the "infinity" element without too much fuss.
+  var ExternalNodes: [P..2*P] readEltType; // values that have been read
+  var ReadPosition: [P..2*P] int; // index into Input for each sorted list
+  var ReadEnd: [P..2*P] int; // end position for each Input list (inclusive)
+
+  // Set up ReadPosition and ReadEnd, and read in the initial records
+  for i in 0..<P {
+    ReadPosition[P+i] = InputRanges[i].low;
+    ReadEnd[P+i] = InputRanges[i].high;
+    if ReadPosition[P+i] <= ReadEnd[P+i] {
+      ExternalNodes[P+i] = Input[ReadPosition[P+i]]: readEltType;
+    }
+  }
+  // Position/End for 2*P should represent an invalid range, so that
+  // checks for end-of-sequence on infinity will say it's end-of-sequence.
+  ReadPosition[2*P] = 1;
+  ReadEnd[2*P] = 0;
+
+  // compute the regular tournament tree (storing winners)
+  var nRows = 2 + log2(P); // e.g. 5 rows for the example tree of 12
+                           // Losers[0] is not considered a row
+
+  var inf = 2*P; // how we represent ∞ in internal nodes,
+                 // but ExternalNodes[inf] actually exists
+
+  proc doCompare(eltA, eltB, addrA, addrB) {
+    //writeln("doCompare ", eltA, " ", eltB, " ", addrA, " ", addrB);
+    if addrB == inf {
+      return -1; // a is less if b is infinity
+    }
+    if addrA == inf {
+      return 1; // b is less if a is infinity
+    }
+    return mycompare(eltA, eltB, comparator);
+  }
+
+  // consider the rows in reverse order; we will compare elements
+  for row in 1..<nRows by -1 {
+    //writeln("Working on row ", row);
+
+    const rowStart = 1 << row; // e.g., last row in example starts at 16
+    const maxRowSize = 1 << row; // e.g. last row could have up to 16 elts
+    const rowSize = min(maxRowSize, 2*P - rowStart);
+    for i in rowStart..#rowSize by 2 {
+      // compare element i with element i+1
+
+      //writeln("i is ", i);
+
+      // get a reference to the elements to compare
+      const ref eltA = if i < P
+                       then ExternalNodes[InternalNodes[i]]
+                       else ExternalNodes[i];
+      const ref eltB = if i+1 < P
+                       then ExternalNodes[InternalNodes[i+1]]
+                       else ExternalNodes[i+1];
+      // what number will we store if the comparison indicates?
+      // need to propagate a winner from the current InternalNode
+      // if we are working on an internal node.
+      const tmpAddrA = if i < P then InternalNodes[i] else i;
+      const tmpAddrB = if i+1 < P then InternalNodes[i+1] else i+1;
+      //writeln("tmpAddrA ", tmpAddrA);
+      //writeln("tmpAddrB ", tmpAddrB);
+      const addrA = if ReadPosition[tmpAddrA] <= ReadEnd[tmpAddrA]
+                    then tmpAddrA
+                    else inf;
+      const addrB = if ReadPosition[tmpAddrB] <= ReadEnd[tmpAddrB]
+                    then tmpAddrB
+                    else inf;
+      //writeln("addrA ", addrA);
+      //writeln("addrB ", addrB);
+      ref eltDst = InternalNodes[i/2];
+      //writeln("Comparing ", addrA, " vs ", addrB);
+      if doCompare(eltA, eltB, addrA, addrB) < 0 {
+        //writeln("Setting node ", i/2, " to ", addrA);
+        eltDst = addrA;
+      } else {
+        //writeln("Setting node ", i/2, " to ", addrB);
+        eltDst = addrB;
+      }
+    }
+  }
+  // copy the champion to the top of the tree
+  InternalNodes[0] = InternalNodes[1];
+
+  //writeln("Winners tree");
+  //writeln("InternalNodes ", ExternalNodes[InternalNodes]);
+
+  // change the InternalNodes to store losers rather than winners
+  // note that the order in which this loop executes is important
+  // (since it reads from 2*i while setting i)
+  for i in 1..<P {
+    const left = 2*i;
+    const right = 2*i + 1;
+    const tmpAddrLeft =  if left < P then InternalNodes[left] else left;
+    const tmpAddrRight = if right < P then InternalNodes[right] else right;
+    const addrLeft =  if ReadPosition[tmpAddrLeft] <= ReadEnd[tmpAddrLeft]
+                      then tmpAddrLeft
+                      else inf;
+    const addrRight = if ReadPosition[tmpAddrRight] <= ReadEnd[tmpAddrRight]
+                      then tmpAddrRight
+                      else inf;
+
+    if InternalNodes[i] == addrLeft {
+      // addrLeft was the winner, so store addrRight
+      InternalNodes[i] = addrRight;
+    } else if InternalNodes[i] == addrRight {
+      // addrRight was the winner, so store addrLeft
+      InternalNodes[i] = addrLeft;
+    } else {
+      assert(false && "problem constructing tournament tree");
+    }
+  }
+
+  //writeln("Loser's tree");
+  //writeln("InternalNodes ", ExternalNodes[InternalNodes]);
+
+
+  var outPos = outputRange.low;
+  while true {
+    //writeln("looping");
+    //writeln("InternalNodes ", InternalNodes);
+    //writeln("ExtarnalNodes[InternalNodes] ", ExternalNodes[InternalNodes]);
+
+    var championAddr = InternalNodes[0]; // index of external node in P..<2*P
+    if championAddr == inf {
+      break;
+    }
+
+    // output the champion
+    //writeln("outputting ", ExternalNodes[championAddr]);
+    Output[outPos] = ExternalNodes[championAddr] : eltType;
+    outPos += 1;
+
+    // input the new value
+    var championAddrOrInf = championAddr;
+    ref ChampionPos = ReadPosition[championAddr];
+    if ChampionPos+1 <= ReadEnd[championAddr] {
+      ChampionPos += 1;
+      ExternalNodes[championAddr] = Input[ChampionPos];
+      //writeln("Read ", ExternalNodes[championAddr], " into ", championAddr);
+    } else {
+      championAddrOrInf = inf;
+    }
+
+    // move up the tree, adjusting the losers in InternalNodes
+    // and updating championAddr based on the comparisons
+    var i = championAddr / 2; // parent internal node
+    while i >= 1 {
+      //writeln("Setting Internal Node ", i);
+      // championAddr is an outer variable loop, updated as needed
+      const ref championElt = ExternalNodes[championAddrOrInf];
+
+      ref Loser = InternalNodes[i];
+      const otherAddr = Loser; // load the current value
+      const ref otherElt = ExternalNodes[otherAddr];
+
+      if doCompare(championElt, otherElt, championAddrOrInf, otherAddr) < 0 {
+        // newElt has won, nothing to do:
+        //  * championAddr is still correct
+        //  * Loser is still correct
+        //writeln("champion beats ", ExternalNodes[otherAddr]);
+      } else {
+        // otherElt has won, update the loser and champion
+        Loser = championAddrOrInf;
+        championAddrOrInf = otherAddr;
+        //writeln("champion lost to ", ExternalNodes[otherAddr]);
+      }
+
+      i /= 2;
+    }
+    // store the champion back into the tree
+    InternalNodes[0] = championAddrOrInf;
+  }
 }
 
 

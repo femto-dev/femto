@@ -30,9 +30,9 @@ use Sort;
 import Random;
 import BitOps;
 import Reflection;
+import CTypes.c_sizeof;
 
 import SuffixSort.DEFAULT_PERIOD;
-import SuffixSort.ENABLE_CACHED_TEXT;
 import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.TRACE;
 import SuffixSort.INPUT_PADDING;
@@ -42,9 +42,10 @@ import SuffixSort.INPUT_PADDING;
 config const SAMPLE_RATIO = 1.5;
 config const PARTITION_SORT_SAMPLE = true;
 config const PARTITION_SORT_ALL = true;
+config param IMPROVED_SORT_ALL = false; // TODO: fix this and then default
 config const SEED = 1;
 config const MIN_BUCKETS_PER_TASK = 8;
-config const MIN_BUCKETS = 10_000;
+config const MIN_BUCKETS_SPACE = 2_000_000; // a size in bytes
 
 /**
  This record contains the configuration for the suffix sorting
@@ -1077,36 +1078,177 @@ proc compareSampleRanks(a: prefixAndSampleRanks(?), b: offsetAndCached(?),
    This puts them into final sorted order when computing the suffix array.
    Sorts only A[region].
  */
+proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
+                              const thetext, n: cfg.offsetType,
+                              const SampleRanks, charsPerMod: cfg.offsetType,
+                              ref A: [] offsetAndCached(?),
+                              region: range(?),
+                              const nCharsCommon) {
+  type wordType = cfg.loadWordType;
+  type characterType = cfg.characterType;
+  const ref cover = cfg.cover;
+  param coverPrefix = cfg.getPrefixSize(cover.period);
+  const useMaxPrefix = max(coverPrefix - nCharsCommon, 0);
+
+  record finalComparator {
+    proc compare(a: offsetAndCached(?), b: offsetAndCached(?)) {
+      // first, compare the first cover.period characters of text
+      if useMaxPrefix > 0 {
+        const aOffset = a.offset + nCharsCommon;
+        const bOffset = b.offset + nCharsCommon;
+        const prefixCmp = comparePrefixes(cfg, aOffset, bOffset,
+                                          thetext, n,
+                                          maxPrefix=useMaxPrefix);
+        if prefixCmp != 0 {
+          return prefixCmp;
+        }
+      }
+      // if the prefixes are the same, compare the nearby sample
+      // rank from the recursive subproblem.
+      return compareSampleRanks(a, b, n, SampleRanks, charsPerMod, cover);
+    }
+  }
+
+  // this comparator helps to sort suffixes that all have the same
+  // distance to a sample suffix; normally that is all having the same phase.
+  record phaseComparator {
+    const phase: int;
+    const k: int; // offset + k will be in the cover
+    const nPrefixWords: int; // number of words of prefix to compare
+    proc init(phase: int) {
+      param eltsPerWord = numBytes(wordType) / numBytes(characterType);
+
+      var nextsample = 0;
+      for k in 0..cover.period {
+        if cover.containedInCover((phase + k)%cover.period) {
+          nextsample = k;
+          break;
+        }
+      }
+
+      this.phase = phase;
+      this.k = nextsample;
+      this.nPrefixWords = myDivCeil(this.k, eltsPerWord);
+
+      //writeln("phase ", phase, " k is ", k);
+    }
+    proc keyPart(a: offsetAndCached(?), i: int):(int(8), wordType) {
+      param sectionReturned = 0:int(8);
+      param sectionEnd = -1:int(8);
+
+      if EXTRA_CHECKS {
+        assert(a.offset % cover.period == phase);
+      }
+
+      if i < this.nPrefixWords {
+        // compare the prefix for the first nPrefixWords
+        return getPrefixKeyPart(cfg, a, i, thetext, n, maxPrefix=cover.period);
+      }
+      if i == this.nPrefixWords {
+        // compare the sample rank
+        const sampleOffset = offsetToSubproblemOffset(a.offset + k,
+                                                      cover, charsPerMod);
+        const rank = SampleRanks[sampleOffset];
+        return (sectionReturned, rank);
+      }
+
+      return (sectionEnd, 0);
+    }
+  }
+
+
+  if !IMPROVED_SORT_ALL {
+    sortRegion(A, new finalComparator(), region=region);
+
+  } else {
+    // partition by putting sample offsets in bucket 0
+    // and each nonsample offsets in its own bucket.
+
+    // destination for partitioning
+    var B:[region] A.eltType;
+
+    // distribute into buckets, bucket 0 has all sample positions,
+    // other than that, they are sorted by mod cover.period
+    record phaseSplitter {
+      proc numBuckets param {
+        return cover.period;
+      }
+      // yields (value, bucket index) for start_n..end_n
+      // gets the elements by calling Input[i] to get element i
+      // Input does not have to be an array, but it should have an eltType.
+      iter classify(Input, start_n, end_n, comparator) {
+        foreach i in start_n..end_n {
+          const elt = Input[i];
+          const offset = elt.offset;
+          const phase = offset % cover.period;
+          const bucket = if cover.containedInCover(phase) then 0 else phase;
+          //writeln( (elt, bucket) );
+          yield (elt, bucket);
+        }
+      }
+    }
+
+    // this assumption is used here
+    assert(cover.containedInCover(0));
+
+    //writeln("Partitioning by phase region ", region);
+
+    const unusedComparator = new finalComparator();
+    const subTasks = computeNumTasks();
+    const sp = new phaseSplitter();
+    const Counts = partition(A, B, sp, unusedComparator,
+                             region.low, region.high, subTasks);
+
+    const Ends = + scan Counts;
+
+    assert(Ends.last == region.size);
+
+    //writeln("Sorting buckets");
+    // now, consider each bucket & sort within that bucket
+    const nBuckets = sp.numBuckets;
+    var nNonZero = 0;
+    forall bucketIdx in 0..<nBuckets with (+ reduce nNonZero) {
+      const bucketSize = Counts[bucketIdx];
+      const bucketStart = region.low + Ends[bucketIdx] - bucketSize;
+      const bucketEnd = bucketStart + bucketSize - 1; // inclusive
+
+      if bucketSize > 0 && bucketIdx < cover.period {
+        // sort the bucket data, which is currently in B
+        sortRegion(B, new phaseComparator(bucketIdx),
+                   region=bucketStart..bucketEnd);
+        nNonZero += 1;
+      }
+    }
+
+    // Gather the ranges for input to multiWayMerge
+    var InputRanges: [0..<nNonZero] range;
+    var cur = 0;
+    for bucketIdx in 0..<nBuckets {
+      const bucketSize = Counts[bucketIdx];
+      const bucketStart = region.low + Ends[bucketIdx] - bucketSize;
+      const bucketEnd = bucketStart + bucketSize - 1; // inclusive
+
+      if bucketSize > 0 && bucketIdx < cover.period {
+        InputRanges[cur] = bucketStart..bucketEnd;
+        cur += 1;
+      }
+    }
+
+    //writeln("Multi-way merge");
+    //writeln("region ", region, " InputRanges ", InputRanges);
+    // do the serial multi-way merging from B back into A
+    multiWayMerge(B, InputRanges, A, region, new finalComparator());
+  }
+}
+
 proc sortSuffixesCompletely(const cfg:ssortConfig(?),
                             const thetext, n: cfg.offsetType,
                             const SampleRanks, charsPerMod: cfg.offsetType,
                             ref A: [] offsetAndCached(?),
                             region: range(?)) {
 
-  param coverPrefix = cfg.getPrefixSize(cfg.cover.period);
-
-  record finalComparator1 {
-    proc compare(a: offsetAndCached(?), b: offsetAndCached(?)) {
-      //writeln("finalComparator1(", a, ", ", b, ")");
-      // first, compare the first cover.period characters of text
-      const prefixCmp=comparePrefixes(cfg, a, b, thetext, n, coverPrefix);
-      if prefixCmp != 0 {
-        //writeln("returnA ", prefixCmp);
-        return prefixCmp;
-      }
-      // if the prefixes are the same, compare the nearby sample
-      // rank from the recursive subproblem.
-      const cmp =
-        compareSampleRanks(a, b, n, SampleRanks, charsPerMod, cfg.cover);
-      //writeln("returnB ", cmp);
-      return cmp;
-    }
-  }
-
-  // TODO: consider sorting each non-sample suffix position (with radix sort)
-  // and then doing a multi-way merge.
-
-  sortRegion(A, new finalComparator1(), region=region);
+  doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
+                           A, region, nCharsCommon=0);
 }
 
 proc sortSuffixesCompletelyBounded(
@@ -1129,37 +1271,13 @@ proc sortSuffixesCompletelyBounded(
   if nCharsCommon == 0 ||
      (cachedDataType != nothing &&
       numBits(characterType)*nCharsCommon < numBits(cachedDataType)) {
-    // use the other sorter if there is no savings here
-    sortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
-                           A, region);
+    doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
+                             A, region, nCharsCommon=0);
     return;
   }
 
-  const useMaxPrefix=max(coverPrefix - nCharsCommon, 0);
-
-  record finalComparator2 {
-    proc compare(a: offsetAndCached(?), b: offsetAndCached(?)) {
-      // first, compare the first cover.period characters of text
-      if useMaxPrefix > 0 {
-        const aOffset = a.offset + nCharsCommon;
-        const bOffset = b.offset + nCharsCommon;
-        const prefixCmp = comparePrefixes(cfg, aOffset, bOffset,
-                                          thetext, n,
-                                          maxPrefix=useMaxPrefix);
-        if prefixCmp != 0 {
-          return prefixCmp;
-        }
-      }
-      // if the prefixes are the same, compare the nearby sample
-      // rank from the recursive subproblem.
-      return compareSampleRanks(a, b, n, SampleRanks, charsPerMod, cfg.cover);
-    }
-  }
-
-  // TODO: consider sorting each non-sample suffix position (with radix sort)
-  // and then doing a multi-way merge.
-
-  sortRegion(A, new finalComparator2(), region=region);
+  doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
+                           A, region, nCharsCommon=nCharsCommon);
 }
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
@@ -1220,20 +1338,25 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType)
                                  loadWordType=subLoad,
                                  cover=cover);
 
-  var nTasks = computeNumTasks() * thetext.targetLocales().size;
-  var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks, MIN_BUCKETS);
-
-  //writeln("nTasks is ", nTasks);
-
   //// Step 1: Sort Sample Suffixes ////
 
   // begin by computing the input text for the recursive subproblem
   var SampleText:[0..<sampleN+INPUT_PADDING] subCfg.characterType;
   var allSamplesHaveUniqueRanks = false;
+
   // create a sample splitters that can be replaced later
   var unusedSplitter = makePrefixAndSampleRanks(cfg, 0, thetext, n,
                                                 0, SampleText, sampleN,
                                                 charsPerMod);
+
+  // compute number of buckets for sample partition & after recursion partition
+  const splitterSize = c_sizeof(unusedSplitter.type):int;
+  var nTasks = computeNumTasks() * thetext.targetLocales().size;
+  var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks,
+                                MIN_BUCKETS_SPACE / splitterSize);
+
+  //writeln("nTasks is ", nTasks);
+
   // these are initialized below
   const SampleSplitters1; // used if allSamplesHaveUniqueRanks
   const SampleSplitters2; // used otherwise
