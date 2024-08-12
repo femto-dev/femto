@@ -36,8 +36,7 @@ param HISTOGRAM_MAX = 255;
 
 import SuffixSort.INPUT_PADDING;
 import SuffixSort.EXTRA_CHECKS;
-import SuffixSort.computeSuffixArray;
-import SuffixSort.computeSuffixArrayAndLCP;
+import SuffixSort.{computeSuffixArray,computeSparsePLCP,lookupLCP};
 import SuffixSortImpl.offsetAndCached;
 import SuffixSimilarity;
 
@@ -78,7 +77,7 @@ inline proc adjustForFileBoundaries(count, offset: int, doc: int,
 
    If IgnoreDocs[doc] is true, entries from that file will be ignored.
  */
-proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
+proc findUnique(SA: [], SparsePLCP: [], thetext: [], fileStarts: [] int,
                 IgnoreDocs: [] bool, type MinUniqueEltType=uint(8))
 {
   const n = SA.size;
@@ -161,7 +160,8 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
       //  SA[i-1] and SA[i])
       var prevPrefix = max(int);
       for j in prev+1..i {
-        prevPrefix = min(prevPrefix, LCP[j]);
+        const LCPj = lookupLCP(thetext, n, SA, SparsePLCP, j);
+        prevPrefix = min(prevPrefix, LCPj);
       }
       // reduce prevPrefix to account for file boundaries
       prevPrefix = adjustForFileBoundaries(prevPrefix, prevOffset, prevDoc,
@@ -171,8 +171,11 @@ proc findUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
       // this is the minimum value of LCP[i+1..next]
       var nextPrefix = max(int);
       for j in i+1..next {
-        const nextLCP = if j < n then LCP[j] else 0;
-        nextPrefix = min(nextPrefix, nextLCP);
+        var LCPj = 0;
+        if j < n {
+          LCPj = lookupLCP(thetext, n, SA, SparsePLCP, j);
+        }
+        nextPrefix = min(nextPrefix, LCPj);
       }
       // reduce nextPrefix to account for file boundaries
       if nextDoc < numFiles && nextOffset < n {
@@ -291,7 +294,7 @@ proc ref uniqueStats.add(length: int) {
 // OutputUniqueForFile[doc] is true if unique strings should be output
 // for that file.
 // NumUnique has the number of unique substrings for each document.
-proc runFindUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
+proc runFindUnique(SA: [], SparsePLCP: [], thetext: [], fileStarts: [] int,
                    concisePaths: [] string,
                    ref IgnoreDocs: [0..<concisePaths.size] bool,
                    ref NumUnique: [0..<concisePaths.size] int,
@@ -303,7 +306,7 @@ proc runFindUnique(SA: [], LCP: [], thetext: [], fileStarts: [] int,
   var t: Time.stopwatch;
   t.reset();
   t.start();
-  const MinUnique = findUnique(SA, LCP, thetext, fileStarts, IgnoreDocs);
+  const MinUnique = findUnique(SA, SparsePLCP, thetext, fileStarts, IgnoreDocs);
   t.stop();
   writeln("finding unique substrings took ", t.elapsed(), " seconds");
 
@@ -480,14 +483,19 @@ proc main(args: [] string) throws {
   writeln("Computing suffix array with ", computeNumTasks(), " tasks");
   t.reset();
   t.start();
-  //var SA = computeSuffixArray(thetext, totalSize);
-  const SA, LCP;
-  computeSuffixArrayAndLCP(allData, totalSize, SA, LCP);
+  const SA = computeSuffixArray(allData, totalSize);
   t.stop();
 
-  writeln("suffix array construction took of ", totalSize, " bytes ",
+  writeln("suffix array construction of ", totalSize, " bytes ",
           "took ", t.elapsed(), " seconds");
   writeln(totalSize / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
+
+  writeln("Computing Sparse PLCP array");
+  t.reset();
+  t.start();
+  const SparsePLCP = computeSparsePLCP(allData, totalSize, SA);
+  t.stop();
+  writeln("Sparse PLCP array construction took ", t.elapsed(), " seconds");
 
   const nFiles = concisePaths.size;
   var IgnoreDocs: [0..<nFiles] bool;
@@ -495,7 +503,7 @@ proc main(args: [] string) throws {
   var FileStats: [0..<nFiles] uniqueStats;
   {
     const MinUnique =
-      runFindUnique(SA, LCP, allData, fileStarts, concisePaths,
+      runFindUnique(SA, SparsePLCP, allData, fileStarts, concisePaths,
                     IgnoreDocs, NumUnique, FileStats);
 
     const nNearDuplicates = + reduce ((NumUnique < MIN_UNIQUE):int);
@@ -512,7 +520,7 @@ proc main(args: [] string) throws {
   t.reset();
   t.start();
   const Similarity =
-    SuffixSimilarity.computeSimilarity(SA, LCP, allData, fileStarts);
+    SuffixSimilarity.computeSimilarity(SA, SparsePLCP, allData, fileStarts);
   t.stop();
   writeln("computing similarity took ", t.elapsed(), " seconds");
 
@@ -582,7 +590,8 @@ proc main(args: [] string) throws {
     }
 
     // compute the minimal unique substrings with the new IgnoreDocs
-    const MinUnique = runFindUnique(SA, LCP, allData, fileStarts, concisePaths,
+    const MinUnique = runFindUnique(SA, SparsePLCP, allData,
+                                    fileStarts, concisePaths,
                                     IgnoreDocs, NumUnique, FileStats);
 
     // output if appropriate

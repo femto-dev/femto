@@ -20,7 +20,7 @@
 
 module TestFindUnique {
   use FindUnique;
-  import SuffixSort.computeSuffixArrayAndLCP;
+  import SuffixSort.{computeSuffixArray, computeSparsePLCP};
 
   config const debugOutput = false;
 
@@ -64,21 +64,23 @@ module TestFindUnique {
     // computeSuffixArrayAndLCP(thetext, n=8, SA, LCP);
 
     const SA = [7, 2, 5, 0, 3, 6, 1, 4];
-    const LCP = [0, 1, 1, 3, 3, 0, 2, 2];
+    //const LCP = [0, 1, 1, 3, 3, 0, 2, 2];
+    const SparsePLCP = computeSparsePLCP(thetext, SA.size, SA);
 
     // Expected output
     const expectedMinUnique = [0, 0, 2, 0, 3, 0, 0, 0, 0];
 
     if debugOutput {
       writeln("SA: ", SA);
-      writeln("LCP: ", LCP);
+      //writeln("LCP: ", LCP);
+      writeln("SparsePLCP: ", SparsePLCP);
       writeln("thetext: ", thetext);
       writeln("fileStarts: ", fileStarts);
       writeln("expectedMinUnique: ", expectedMinUnique);
     }
 
     // Call the function
-    var result = findUnique(SA, LCP, thetext, fileStarts, ignoreDocs);
+    var result = findUnique(SA, SparsePLCP, thetext, fileStarts, ignoreDocs);
     if debugOutput {
       writeln("Result: ", result);
     }
@@ -127,19 +129,20 @@ module TestFindUnique {
       const thetext = bytesToArray(input);
       const fileStarts = [0, input.size];
       const ignoreDocs = [false];
-      const SA, LCP;
-      computeSuffixArrayAndLCP(thetext, n = input.size, SA, LCP);
+      const SA = computeSuffixArray(thetext, n = input.size);
+      const SparsePLCP = computeSparsePLCP(thetext, SA.size, SA);
 
       if debugOutput {
         writeln("Input: ", input);
         writeln("SA: ", SA);
-        writeln("LCP: ", LCP);
+        //writeln("LCP: ", LCP);
+        writeln("SparsePLCP: ", SparsePLCP);
         writeln("thetext: ", thetext);
         writeln("fileStarts: ", fileStarts);
         writeln("expectedMinUnique: ", expected);
       }
 
-      var result = findUnique(SA, LCP, thetext, fileStarts, ignoreDocs);
+      var result = findUnique(SA, SparsePLCP, thetext, fileStarts, ignoreDocs);
       if debugOutput {
         writeln("Result: ", result);
       }
@@ -166,19 +169,21 @@ module TestFindUnique {
       const thetext = bytesToArray(input);
       const ignoreDocs:[0..<fileStarts.size-1] bool = false;
 
-      const SA, LCP;
-      computeSuffixArrayAndLCP(thetext, n = input.size, SA, LCP);
+      const SA = computeSuffixArray(thetext, n = input.size);
+      const SparsePLCP = computeSparsePLCP(thetext, SA.size, SA);
+
 
       if debugOutput {
         writeln("Input: ", input);
         writeln("SA: ", SA);
-        writeln("LCP: ", LCP);
+        //writeln("LCP: ", LCP);
+        writeln("SparsePLCP: ", SparsePLCP);
         writeln("thetext: ", thetext);
         writeln("fileStarts: ", fileStarts);
         writeln("expectedMinUnique: ", expected);
       }
 
-      var result = findUnique(SA, LCP, thetext, fileStarts, ignoreDocs);
+      var result = findUnique(SA, SparsePLCP, thetext, fileStarts, ignoreDocs);
 
       if debugOutput {
         writeln("Result: ", result);

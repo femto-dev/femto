@@ -36,8 +36,7 @@ config const TARGET_BLOCK_SIZE = 1000;
 
 import SuffixSort.INPUT_PADDING;
 import SuffixSort.EXTRA_CHECKS;
-import SuffixSort.computeSuffixArray;
-import SuffixSort.computeSuffixArrayAndLCP;
+import SuffixSort.{computeSuffixArray,computeSparsePLCP,lookupLCP};
 import SuffixSortImpl.offsetAndCached;
 
 import Utility.computeNumTasks;
@@ -322,7 +321,7 @@ proc computeSimilarityAdaptiveLCP(ref Similarity: [] similarity,
 }
 
 proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
-                               SA: [], LCP: [], thetext: [],
+                               SA: [], SparsePLCP: [], thetext: [],
                                fileStarts: [] int,
                                targetBlockSize: int,
                                minCommonStrLen: int)
@@ -367,6 +366,12 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
     const blockStart = blockIdx * blockSize;
     const blockEnd = min(blockStart + blockSize - 1, n - 1); // inclusive
 
+    // Compute the LCP array for this block
+    var LCP:[blockStart..blockEnd] int;
+    forall (i, lcpEntry) in zip(LCP.domain, LCP) {
+      lcpEntry = lookupLCP(thetext, n, SA, SparsePLCP, i);
+    }
+
     // find the index of the minimum LCP value in blockStart..blockEnd
     const (minVal, minIdx) =
       minloc reduce zip(LCP[blockStart..blockEnd], blockStart..blockEnd);
@@ -408,6 +413,12 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
     const blockEnd = Boundaries[blockIdx+1] - 1; // inclusive
     const block = blockStart..blockEnd;
     //writeln("Working on block ", blockIdx, " with range ", block);
+
+    // Compute the LCP array for this block
+    var LCP:[blockStart..blockEnd] int;
+    forall (i, lcpEntry) in zip(LCP.domain, LCP) {
+      lcpEntry = lookupLCP(thetext, n, SA, SparsePLCP, i);
+    }
 
     // compute the minimum LCP in this block
     var minLCP = min reduce LCP[blockStart..blockEnd];
@@ -577,6 +588,7 @@ inline proc computeScore(minLCP: int,
   return amt;
 }
 
+/*
 proc computeSimilarityRecursive(block: range,
                                 ref AccumCoOccurences: [] similarity,
                                 const ref FileSufArrSize: [] real,
@@ -716,8 +728,9 @@ proc computeSimilarityRecursive(block: range,
     }
   }
 }
+*/
 
-
+/*
 proc computeSimilarityRecursiveLCP(ref Similarity: [] similarity,
                                    SA: [], LCP: [], thetext: [],
                                    fileStarts: [] int)
@@ -856,11 +869,12 @@ proc computeSimilarityRecursiveLCP(ref Similarity: [] similarity,
     elt.sumPrefixes = cooScore.sumPrefixes;
   }
 }
+*/
 
 /* Compute all-to-all similarity and return an array representing it.
    The returned array should be accessed with flattenTriangular(i,j)
    for i and j in 0..<fileStarts.size-1 */
-proc computeSimilarity(SA: [], LCP: [], thetext: [],
+proc computeSimilarity(SA: [], SparsePLCP: [], thetext: [],
                        fileStarts: [] int,
                        targetBlockSize: int = TARGET_BLOCK_SIZE,
                        minCommonStrLen: int = MIN_COMMON) {
@@ -875,7 +889,7 @@ proc computeSimilarity(SA: [], LCP: [], thetext: [],
     }
   }
 
-  computeSimilarityBlockLCP(Similarity, SA, LCP, thetext, fileStarts,
+  computeSimilarityBlockLCP(Similarity, SA, SparsePLCP, thetext, fileStarts,
                             targetBlockSize, minCommonStrLen);
 
   return Similarity;
@@ -918,14 +932,19 @@ proc main(args: [] string) throws {
   writeln("Computing suffix array with ", computeNumTasks(), " tasks");
   t.reset();
   t.start();
-  //var SA = computeSuffixArray(allData, totalSize);
-  const SA, LCP;
-  computeSuffixArrayAndLCP(allData, totalSize, SA, LCP);
+  const SA = computeSuffixArray(allData, totalSize);
   t.stop();
 
-  writeln("suffix array construction took of ", totalSize, " bytes ",
+  writeln("suffix array construction of ", totalSize, " bytes ",
           "took ", t.elapsed(), " seconds");
   writeln(totalSize / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
+
+  writeln("Computing Sparse PLCP array");
+  t.reset();
+  t.start();
+  const SparsePLCP = computeSparsePLCP(allData, totalSize, SA);
+  t.stop();
+  writeln("Sparse PLCP array construction took ", t.elapsed(), " seconds");
 
   const nFiles = allPaths.size;
 
@@ -943,12 +962,14 @@ proc main(args: [] string) throws {
   t.start();
 
   if STRATEGY == "recursive-lcp" {
-    computeSimilarityRecursiveLCP(Similarity, SA, LCP, allData, fileStarts);
+    halt("recursive-lcp not updated");
+    //computeSimilarityRecursiveLCP(Similarity, SA, LCP, allData, fileStarts);
   } else if STRATEGY == "block-lcp" {
-    computeSimilarityBlockLCP(Similarity, SA, LCP, allData, fileStarts,
+    computeSimilarityBlockLCP(Similarity, SA, SparsePLCP, allData, fileStarts,
                               TARGET_BLOCK_SIZE, MIN_COMMON);
   } else if STRATEGY == "adaptive-lcp" {
-    computeSimilarityAdaptiveLCP(Similarity, SA, LCP, allData, fileStarts);
+    halt("adaptive-lcp not updated");
+    //computeSimilarityAdaptiveLCP(Similarity, SA, LCP, allData, fileStarts);
   } else if STRATEGY == "adjacent-nolcp" {
     computeSimilarityAdjacentNoLCP(Similarity, SA, allData, fileStarts);
   } else {
