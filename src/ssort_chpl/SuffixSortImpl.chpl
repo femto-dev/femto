@@ -1673,8 +1673,8 @@ proc lcpParPlcp(thetext: [], const n: thetext.domain.idxType, const SA: []) {
    by Julian Shun.
 
  */
-proc computeSparsePLCP(thetext: [], const n: thetext.domain.idxType,
-                       const SA: [], param q=64) {
+proc doComputeSparsePLCP(thetext: [], const n: thetext.domain.idxType,
+                         const SA: [], param q) {
   const nTasks = computeNumTasks();
   type offsetType = (offset(SA[0])).type;
 
@@ -1726,8 +1726,8 @@ proc computeSparsePLCP(thetext: [], const n: thetext.domain.idxType,
 /* Given a sparse PLCP array computed as above in computeSparsePLCP,
    along with the parameter q and a suffix array position 'i', return
    LCP[i]. */
-proc lookupLCP(thetext: [], const n: thetext.domain.idxType, const SA: [],
-               const sparsePLCP: [], param q, i: n.type) {
+proc doLookupLCP(thetext: [], const n: thetext.domain.idxType, const SA: [],
+                 const sparsePLCP: [], i: n.type, param q) {
 
   //writeln("lookupLCP i=", i, " q=", q, " sparsePLCP=", sparsePLCP);
 

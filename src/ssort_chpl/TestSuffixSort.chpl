@@ -26,6 +26,7 @@ use Math;
 use IO;
 use Sort;
 
+import SuffixSort.{computeSparsePLCP,lookupLCP};
 import SuffixSort.TRACE;
 import SuffixSort.INPUT_PADDING;
 import SuffixSort.DEFAULT_PERIOD;
@@ -720,7 +721,7 @@ proc helpSparseLCP(inputArr: [], n: int, expectSA: [] int, expectLCP: [] int,
 
   // check the lookup function
   for i in 0 ..<n {
-    var gotLCPi = lookupLCP(inputArr, n, expectSA, SparsePLCP, q, i);
+    var gotLCPi = lookupLCP(inputArr, n, expectSA, SparsePLCP, i, q);
     assert(gotLCPi == expectLCP[i]);
   }
 }
@@ -947,6 +948,26 @@ proc testOthers() {
 
   testOther("banana$", [6,5,3,1,0,4,2]);
   testLCP("banana$", [6,5,3,1,0,4,2], [0,0,1,3,0,0,2]);
+
+
+  /*
+
+  abaababa
+  01234567
+
+  here is the suffix array and LCP:
+            SA         LCP
+  a         7          0
+  aababa    2          1
+  aba       5          1
+  abaababa  0          3
+  ababa     3          3
+  ba        6          0
+  baababa   1          2
+  baba      4          2
+  */
+  testOther("abaababa", [7,2,5,0,3,6,1,4]);
+  testLCP("abaababa", [7,2,5,0,3,6,1,4], [0,1,1,3,3,0,2,2]);
 }
 
 proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {

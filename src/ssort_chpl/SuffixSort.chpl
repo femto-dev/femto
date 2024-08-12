@@ -21,6 +21,7 @@ module SuffixSort {
 
 
 config param DEFAULT_PERIOD = 133;
+config param DEFAULT_LCP_SAMPLE = 64;
 config param EXTRA_CHECKS = false;
 config param TRACE = false;
 config type CACHED_DATA_TYPE = nothing;
@@ -76,6 +77,28 @@ proc computeSuffixArrayAndLCP(input: [], const n: input.domain.idxType,
   LCP = lcpParPlcp(input, n, SA);
 }
 
+/* Compute and return the sparse PLCP array based on the input text and suffix
+   array. The sparse PLCP array can be used to compute LCP[i] while using less
+   space.
+
+   The algorithm is based upon "Permuted Longest-Common-Prefix Array" by Juha
+   Kärkkäinen, Giovanni Manzini, and Simon J. Puglisi; and also
+   "Fast Parallel Computation of Longest Common Prefixes"
+   by Julian Shun.
+*/
+proc computeSparsePLCP(thetext: [], const n: thetext.domain.idxType,
+                       const SA: [], param q=DEFAULT_LCP_SAMPLE) {
+  return doComputeSparsePLCP(thetext, n, SA, q);
+}
+
+/* Given a sparse PLCP array computed as above in computeSparsePLCP,
+   along with the parameter q and a suffix array position 'i', return
+   LCP[i]. */
+proc lookupLCP(thetext: [], const n: thetext.domain.idxType, const SA: [],
+               const sparsePLCP: [], i: n.type, param q=DEFAULT_LCP_SAMPLE) {
+  return doLookupLCP(thetext, n, SA, sparsePLCP, i, q);
+}
+
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);
 
@@ -120,6 +143,8 @@ proc main(args: [] string) throws {
   writeln("suffix array construction of ", n, " bytes ",
           "took ", t.elapsed(), " seconds");
   writeln(n / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
+
+  Time.sleep(20);
 
   return 0;
 }
