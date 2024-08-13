@@ -41,12 +41,13 @@ import SuffixSortImpl.offsetAndCached;
 
 import Utility.computeNumTasks;
 
+import ChapelLocks.chpl_LocalSpinlock;
 import FileSystem;
 import IO;
 import List;
+import Math.{divCeil, log};
 import Sort;
 import Time;
-import Math.{divCeil, log};
 
 use Utility;
 
@@ -132,7 +133,7 @@ proc computeSimilarityAdjacentNoLCP(ref Similarity: [] similarity,
   }
 }
 
-
+/*
 proc computeSimilarityAdaptiveLCP(ref Similarity: [] similarity,
                                   SA: [], LCP: [], thetext: [],
                                   fileStarts: [] int)
@@ -318,7 +319,7 @@ proc computeSimilarityAdaptiveLCP(ref Similarity: [] similarity,
     elt.maxPrefix = maxp;
     elt.sumPrefixes = sump;
   }
-}
+}*/
 
 proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
                                SA: [], SparsePLCP: [], thetext: [],
@@ -392,6 +393,7 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
   // information about substrings common to docs A and B
   // uses AccumCoOccurences[flattenTriangular(docA, docB)]
   var AccumCoOccurences:[Similarity.domain] similarity = Similarity;
+  var AccumCoOccurencesLocks:[Similarity.domain] chpl_LocalSpinlock;
 
   // sum of squares of term counts for each document
   // (used in denominator of cosine similarity)
@@ -407,8 +409,7 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
 
   // consider each block, including the potentially short 0th
   // and nBlock'th blocks.
-  forall blockIdx in 0..nBlocks with (+ reduce AccumCoOccurences,
-                                      + reduce SumSqTermCounts) {
+  forall blockIdx in 0..nBlocks with (+ reduce SumSqTermCounts) {
     const blockStart = Boundaries[blockIdx] + 1;
     const blockEnd = Boundaries[blockIdx+1] - 1; // inclusive
     const block = blockStart..blockEnd;
@@ -482,7 +483,10 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
         amt.maxPrefix = curLCP;
         amt.sumPrefixes = curLCP;
 
-        AccumCoOccurences[flattenTriangular(docA, docB)] += amt;
+        const idx = flattenTriangular(docA, docB);
+        AccumCoOccurencesLocks[idx].lock();
+        AccumCoOccurences[idx] += amt;
+        AccumCoOccurencesLocks[idx].unlock();
 
         // add the contribution to the denominator
         //const sqScore = score * score;
@@ -527,7 +531,10 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
               amt.maxPrefix = minLCP;
               amt.sumPrefixes = minLCP;
 
-              AccumCoOccurences[flattenTriangular(docA, docB)] += amt;
+              const idx = flattenTriangular(docA, docB);
+              AccumCoOccurencesLocks[idx].lock();
+              AccumCoOccurences[idx] += amt;
+              AccumCoOccurencesLocks[idx].unlock();
             }
           }
         }
