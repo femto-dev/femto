@@ -1457,6 +1457,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     // Replace the values in SampleText with
     // 1-based ranks from the suffix array.
     forall (offset,rank) in zip(SubSA, SubSA.domain) {
+      // TODO: use a more compactified addressing here
       SampleText[offset.offset] = rank+1;
     }
     //writeln("SampleText is ", SampleText);
