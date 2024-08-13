@@ -42,7 +42,7 @@ import SuffixSort.INPUT_PADDING;
 config const SAMPLE_RATIO = 1.5;
 config const PARTITION_SORT_SAMPLE = true;
 config const PARTITION_SORT_ALL = true;
-config param IMPROVED_SORT_ALL = true;
+config param IMPROVED_SORT_ALL = false; // TODO: fix testing and then default
 config const SEED = 1;
 config const MIN_BUCKETS_PER_TASK = 8;
 config const MIN_BUCKETS_SPACE = 2_000_000; // a size in bytes
@@ -1459,6 +1459,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     // Replace the values in SampleText with
     // 1-based ranks from the suffix array.
     forall (offset,rank) in zip(SubSA, SubSA.domain) {
+      // TODO: use a more compactified addressing here
       SampleText[offset.offset] = rank+1;
     }
     //writeln("SampleText is ", SampleText);
