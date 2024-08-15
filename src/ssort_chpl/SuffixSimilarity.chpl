@@ -41,7 +41,6 @@ import SuffixSortImpl.offsetAndCached;
 
 import Utility.computeNumTasks;
 
-import ChapelLocks.chpl_LocalSpinlock;
 import FileSystem;
 import IO;
 import List;
@@ -57,6 +56,33 @@ proc offset(a: integral) {
 }
 proc offset(a: offsetAndCached(?)) {
   return a.offset;
+}
+
+record atomicSimilarity {
+  var score: atomic real = 0.0;
+  var numPrefixes: atomic int = 0;
+  var minPrefix: atomic int = max(int);
+  var maxPrefix: atomic int = min(int);
+  var sumPrefixes: atomic int = 0;
+
+  proc init() {
+    this.score = 0.0;
+    this.numPrefixes = 0;
+    this.minPrefix = max(int);
+    this.maxPrefix = min(int);
+    this.sumPrefixes = 0;
+  }
+
+  // s is the score contribution
+  // num is the number of prefixes represented here
+  // len is the length of the prefixes
+  proc ref accum(s: real, num: int, len: int) {
+    this.score.add(s, order=memoryOrder.relaxed);
+    this.numPrefixes.add(num, order=memoryOrder.relaxed);
+    atomicStoreMinRelaxed(this.minPrefix, len);
+    atomicStoreMaxRelaxed(this.maxPrefix, len);
+    this.sumPrefixes.add(len, order=memoryOrder.relaxed);
+  }
 }
 
 record similarity {
@@ -103,11 +129,10 @@ proc computeSimilarityAdjacentNoLCP(ref Similarity: [] similarity,
                                     SA: [], thetext: [], fileStarts: [] int)
 {
   const n = SA.size;
-  var CooccurenceCounts:[Similarity.domain] int;
+  var CooccurenceCounts:[Similarity.domain] atomic int;
   var TermCounts:[0..<fileStarts.size] int;
 
-  forall i in SA.domain with (+ reduce CooccurenceCounts,
-                              + reduce TermCounts) {
+  forall i in SA.domain with (+ reduce TermCounts) {
     if 0 < i && i < n - 1 {
       // assume that there is a common prefix between i-1 and i
       // that we are considering a term.
@@ -118,7 +143,8 @@ proc computeSimilarityAdjacentNoLCP(ref Similarity: [] similarity,
       TermCounts[docB] += 1;
       // add the contribution to the numerator
       if docA != docB {
-        CooccurenceCounts[flattenTriangular(docA, docB)] += 1;
+        ref sim = CooccurenceCounts[flattenTriangular(docA, docB)];
+        sim.add(1, memoryOrder.relaxed);
       }
     }
   }
@@ -126,7 +152,7 @@ proc computeSimilarityAdjacentNoLCP(ref Similarity: [] similarity,
   // Combine AllPairsSimilarity with SumSqTermCounts to form
   // the cosine similarity.
   forall (elt, cooCount) in zip(Similarity, CooccurenceCounts) {
-    const numerator = cooCount: real;
+    const numerator = cooCount.read(memoryOrder.relaxed): real;
     const denominatorA = sqrt(TermCounts[elt.docA]: real);
     const denominatorB = sqrt(TermCounts[elt.docB]: real);
     elt.score = sqrt(numerator / denominatorA / denominatorB);
@@ -392,8 +418,7 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
   // sum of products of term counts for terms common to docs A and B
   // information about substrings common to docs A and B
   // uses AccumCoOccurences[flattenTriangular(docA, docB)]
-  var AccumCoOccurences:[Similarity.domain] similarity = Similarity;
-  var AccumCoOccurencesLocks:[Similarity.domain] chpl_LocalSpinlock;
+  var AccumCoOccurences:[Similarity.domain] atomicSimilarity;
 
   // sum of squares of term counts for each document
   // (used in denominator of cosine similarity)
@@ -474,19 +499,9 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
         //const score = lcpR * (SqFileSize[docA] + SqFileSize[docB]);
         //const score = lcpR;
         const score = lcpR * (FileSufArrSize[docB] + FileSufArrSize[docA]);
-        var amt: similarity;
-        amt.docA = docA;
-        amt.docB = docB;
-        amt.score = score;
-        amt.numPrefixes = 1;
-        amt.minPrefix = curLCP;
-        amt.maxPrefix = curLCP;
-        amt.sumPrefixes = curLCP;
 
         const idx = flattenTriangular(docA, docB);
-        AccumCoOccurencesLocks[idx].lock();
-        AccumCoOccurences[idx] += amt;
-        AccumCoOccurencesLocks[idx].unlock();
+        AccumCoOccurences[idx].accum(score, 1, curLCP);
 
         // add the contribution to the denominator
         //const sqScore = score * score;
@@ -522,19 +537,10 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
               //const score = lcpR * (countA + countB);
               const score = lcpR * (countA * FileSufArrSize[docB] +
                                     countB * FileSufArrSize[docA]);
-              var amt: similarity;
-              amt.docA = docA;
-              amt.docB = docB;
-              amt.score = score;
-              amt.numPrefixes = min(countA, countB);
-              amt.minPrefix = minLCP;
-              amt.maxPrefix = minLCP;
-              amt.sumPrefixes = minLCP;
+              const numPrefixes = min(countA, countB);
 
               const idx = flattenTriangular(docA, docB);
-              AccumCoOccurencesLocks[idx].lock();
-              AccumCoOccurences[idx] += amt;
-              AccumCoOccurencesLocks[idx].unlock();
+              AccumCoOccurences[idx].accum(score, numPrefixes, minLCP);
             }
           }
         }
@@ -549,8 +555,6 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
   var SqrtSumSqTermCounts:[0..<nFiles] real = sqrt(min(1, SumSqTermCounts));
 
   forall (elt, cooScore) in zip(Similarity, AccumCoOccurences) {
-    assert(elt.docA == cooScore.docA);
-    assert(elt.docB == cooScore.docB);
     const docA = elt.docA;
     const docB = elt.docB;
     const fileSizeA = (fileStarts[docA+1] - fileStarts[docA]):real;
@@ -559,12 +563,13 @@ proc computeSimilarityBlockLCP(ref Similarity: [] similarity,
     //const denom = (sumSizes * (sumSizes+1)) / 2.0;
     //const denom = SqFileSize[docA] * SqFileSize[docB];
     const denom = 2.0 * FileSufArrSize[docA] * FileSufArrSize[docB];
-    elt.score = sqrt(cooScore.score / denom);
+    const score = cooScore.score.read(memoryOrder.relaxed);
+    elt.score = sqrt(score / denom);
     //elt.score = cooScore.score / denom;
-    elt.numPrefixes = cooScore.numPrefixes;
-    elt.minPrefix = cooScore.minPrefix;
-    elt.maxPrefix = cooScore.maxPrefix;
-    elt.sumPrefixes = cooScore.sumPrefixes;
+    elt.numPrefixes = cooScore.numPrefixes.read(memoryOrder.relaxed);
+    elt.minPrefix = cooScore.minPrefix.read(memoryOrder.relaxed);
+    elt.maxPrefix = cooScore.maxPrefix.read(memoryOrder.relaxed);
+    elt.sumPrefixes = cooScore.sumPrefixes.read(memoryOrder.relaxed);
   }
 }
 
