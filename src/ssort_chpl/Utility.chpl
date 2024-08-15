@@ -357,4 +357,29 @@ proc printSuffix(offset: int, thetext: [], fileStarts: [] int, lcp: int, amt: in
 }
 
 
+proc atomicStoreMinRelaxed(ref dst: atomic int, src: int) {
+  // TODO: call atomic store min once issue #22867 is resolved
+  var t = dst.read(memoryOrder.relaxed);
+  while min(src, t) != t {
+    // note: dst.compareExchangeWeak updates 't' if it fails
+    // to the current value
+    if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
+      return;
+    }
+  }
+}
+
+proc atomicStoreMaxRelaxed(ref dst: atomic int, src: int) {
+  // TODO: call atomic store max once issue #22867 is resolved
+  var t = dst.read(memoryOrder.relaxed);
+  while max(src, t) != t {
+    // note: dst.compareExchangeWeak updates 't' if it fails
+    // to the current value
+    if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
+      return;
+    }
+  }
+}
+
+
 }

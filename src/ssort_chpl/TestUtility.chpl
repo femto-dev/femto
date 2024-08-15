@@ -129,10 +129,30 @@ proc testFastaFiles() throws {
   FileSystem.remove(filename);
 }
 
+config const n = 100_000;
+proc testAtomicMinMax() {
+
+  var amin: atomic int = max(int);
+  var amax: atomic int = min(int);
+
+  forall i in 1..n {
+    atomicStoreMinRelaxed(amin, i);
+    atomicStoreMaxRelaxed(amax, i);
+  }
+
+  writeln("amin ", amin.read(), " amax ", amax.read());
+  assert(amin.read() == 1);
+  assert(amax.read() == n);
+}
+
 proc main() throws {
   testTriangles();
   testBsearch();
   testFastaFiles();
+  serial {
+    testAtomicMinMax();
+  }
+  testAtomicMinMax();
 }
 
 
