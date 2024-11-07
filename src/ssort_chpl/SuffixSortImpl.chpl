@@ -1340,6 +1340,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
 
   //// Step 1: Sort Sample Suffixes ////
 
+  // TODO: allocate output array here in order to avoid memory fragmentation
+
   // begin by computing the input text for the recursive subproblem
   var SampleText:[0..<sampleN+INPUT_PADDING] subCfg.characterType;
   var allSamplesHaveUniqueRanks = false;
