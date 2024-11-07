@@ -23,14 +23,23 @@ module FindUnique {
 /* the output directory */
 config const output="";
 
-config const REMOVE_NEAR_DUPLICATES = false;
-config const MIN_UNIQUE = 10; // discard some near-duplicates if there
-                              // aren't this many per file
+config const removeNearDuplicates = false;
+config const minUnique = 10; // discard some near-duplicates if there
+                             // aren't this many per file
 
-config const MAX_DUPLICATE_STEPS = 10;
-config const MAX_SIMILAR = 0.98; // maximum similarity score to allow
-                                 // when processing near-duplicates
-config const HISTOGRAM_WIDTH = 50; // how wide to make histogram chart
+config const maxDuplicateSteps = 10; // max tries removing near duplicates
+config const maxSimilar = 0.98; // maximum similarity score to allow
+                                // when processing near-duplicates
+config const histogramWidth = 50; // how wide to make histogram chart
+
+// upper-case names for the config constants to better identify them in code
+const OUTPUT = output;
+const REMOVE_NEAR_DUPLICATES = removeNearDuplicates;
+const MIN_UNIQUE = minUnique;
+const MAX_DUPLICATE_STEPS = maxDuplicateSteps;
+const MAX_SIMILAR = maxSimilar;
+const HISTOGRAM_WIDTH = histogramWidth;
+
 param HISTOGRAM_MIN = 0;
 param HISTOGRAM_MAX = 255;
 

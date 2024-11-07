@@ -27,7 +27,7 @@ import SuffixSort.EXTRA_CHECKS;
 
 import Utility.computeNumTasks;
 import Reflection.canResolveMethod;
-import Sort.{sort, DefaultComparator};
+import Sort.{sort, DefaultComparator, keyPartStatus};
 import Math.{log2, divCeil};
 import CTypes.c_array;
 
@@ -66,8 +66,9 @@ private inline proc myCompareByPart(a, b, comparator) {
   while true {
     var (aSection, aPart) = comparator.keyPart(a, curPart);
     var (bSection, bPart) = comparator.keyPart(b, curPart);
-    if aSection != 0 || bSection != 0 {
-      return aSection - bSection;
+    if aSection != keyPartStatus.returned ||
+       bSection != keyPartStatus.returned {
+      return aSection:int - bSection:int;
     }
     if aPart < bPart {
       return -1;
