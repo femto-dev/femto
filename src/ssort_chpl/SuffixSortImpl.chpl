@@ -41,8 +41,16 @@ import SuffixSort.INPUT_PADDING;
 // 1.0 would be only to sample enough for the splitters
 config const sampleRatio = 1.5;
 config const partitionSortSample = true;
+
+// use a partition-based sorting startegy for improved parallelism
+// and memory usage
 config const partitionSortAll = true;
-config param improvedSortAll = false; // TODO: fix this and then default
+
+// if this is set, separately sort each nonsample, and do k-way merge.
+// this should be faster for large problem sizes since the merge step
+// depends on the cover size rather than log n.
+config const improvedSortAll = true;
+
 config const seed = 1;
 config const minBucketsPerTask = 8;
 config const minBucketsSpace = 2_000_000; // a size in bytes
@@ -1111,8 +1119,10 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     }
   }
 
-  // this comparator helps to sort suffixes that all have the same
-  // distance to a sample suffix; normally that is all having the same phase.
+  // This comparator helps to sort suffixes that all have the same
+  // distance to a sample suffix.
+  // Sample suffixes always have distance 0 to sample suffixes.
+  // Other suffixes have a distance according to their phase.
   record phaseComparator : keyPartComparator {
     const phase: int;
     const k: int; // offset + k will be in the cover
@@ -1136,7 +1146,12 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     }
     proc keyPart(a: offsetAndCached(?), i: int):(keyPartStatus, wordType) {
       if EXTRA_CHECKS {
-        assert(a.offset % cover.period == phase);
+        if phase == 0 {
+          assert(cover.containedInCover(a.offset % cover.period));
+        } else {
+          assert(a.offset % cover.period == phase);
+          assert(cover.containedInCover((a.offset + k) % cover.period));
+        }
       }
 
       if i < this.nPrefixWords {
@@ -1156,12 +1171,12 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
   }
 
 
-  if !IMPROVED_SORT_ALL {
+  if numBits(wordType) != numBits(cfg.offsetType) || !IMPROVED_SORT_ALL {
     sortRegion(A, new finalComparator(), region=region);
 
   } else {
     // partition by putting sample offsets in bucket 0
-    // and each nonsample offsets in its own bucket.
+    // and each nonsample offset in its own bucket.
 
     // destination for partitioning
     var B:[region] A.eltType;
@@ -1180,6 +1195,11 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
           const elt = Input[i];
           const offset = elt.offset;
           const phase = offset % cover.period;
+          // this code relies on the assumption that 0 is in the cover
+          // (since it uses 0 for the bucket containing sample suffixes)
+          if EXTRA_CHECKS {
+            assert(cover.containedInCover(0));
+          }
           const bucket = if cover.containedInCover(phase) then 0 else phase;
           //writeln( (elt, bucket) );
           yield (elt, bucket);
@@ -1340,6 +1360,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
 
   //// Step 1: Sort Sample Suffixes ////
 
+  // TODO: allocate output array here in order to avoid memory fragmentation
+
   // begin by computing the input text for the recursive subproblem
   var SampleText:[0..<sampleN+INPUT_PADDING] subCfg.characterType;
   var allSamplesHaveUniqueRanks = false;
@@ -1457,6 +1479,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     // Replace the values in SampleText with
     // 1-based ranks from the suffix array.
     forall (offset,rank) in zip(SubSA, SubSA.domain) {
+      // TODO: use a more compactified addressing here
       SampleText[offset.offset] = rank+1;
     }
     //writeln("SampleText is ", SampleText);
@@ -1517,6 +1540,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
 
   } else {
     // this implementation is more complicated but should be more efficient
+    // because it has better parallelism
 
     // in a pass over the input,
     // partition the suffixes according to the splitters
@@ -1574,10 +1598,10 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
 
-      /*if TRACE {
+      if TRACE {
         writeln("final sort bucket ", bucketIdx,
                 " has ", bucketSize, " suffixes");
-        if SampleSplitters.bucketHasLowerBound(bucketIdx) {
+        /*if SampleSplitters.bucketHasLowerBound(bucketIdx) {
           writeln("lower bound ", SampleSplitters.bucketLowerBound(bucketIdx));
         }
         if SampleSplitters.bucketHasEqualityBound(bucketIdx) {
@@ -1586,10 +1610,10 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
         }
         if SampleSplitters.bucketHasUpperBound(bucketIdx) {
           writeln("upper bound ", SampleSplitters.bucketUpperBound(bucketIdx));
-        }
+        }*/
 
         //writeln("Bucket is ", SA[bucketStart..bucketEnd]);
-      }*/
+      }
 
       if bucketSize > 1 && !SampleSplitters.bucketHasEqualityBound(bucketIdx) {
         if SampleSplitters.bucketHasLowerBound(bucketIdx) &&

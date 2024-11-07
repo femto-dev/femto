@@ -45,6 +45,7 @@ private use Utility;
 private import IO;
 private import Time;
 private import List;
+private import Help;
 
 proc computeSuffixArray(input: [], const n: input.domain.idxType) {
   if !(input.domain.rank == 1 &&
@@ -99,18 +100,31 @@ proc lookupLCP(thetext: [], const n: thetext.domain.idxType, const SA: [],
   return doLookupLCP(thetext, n, SA, sparsePLCP, i, q);
 }
 
+proc usage(args: [] string) {
+  writeln("usage: ", args[0], " <files-and-directories>");
+  writeln("this program times the suffix array computation");
+  Help.printUsage();
+}
+
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);
 
   for arg in args[1..] {
+    if arg == "--help" || arg == "-h" {
+      usage(args);
+      return 0;
+    }
     if arg.startsWith("-") {
-      halt("argument not handled ", arg);
+      writeln("argument not handled ", arg);
+      usage(args);
+      return 1;
     }
     gatherFiles(inputFilesList, arg);
   }
 
   if inputFilesList.size == 0 {
     writeln("please specify input files and directories");
+    usage(args);
     return 1;
   }
 
