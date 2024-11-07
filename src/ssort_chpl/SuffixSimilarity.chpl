@@ -20,19 +20,35 @@
 module SuffixSimilarity {
 
 
+config const strategy="block-lcp"; // the default strategy to use
+
 // this size * the number of files = the window size
-config const STRATEGY="block-lcp";
-config const WINDOW_SIZE_RATIO = 2.5;
-config const WINDOW_SIZE_OVERRIDE = 0;
-config const NSIMILAR_TO_OUTPUT = 200;
-config const MIN_SCORE_TO_OUTPUT = 0.0;
+config const windowSizeRatio = 2.5;
+config const windowSizeOverride = 0;
 
-// these control adaptive-lcp and block-lcp
-config const MAX_BLOCK_SIZE = 1000;
-config const MIN_COMMON = 60;
-config const MAX_OCCURRENCES = 1000;
-config const TARGET_BLOCK_SIZE = 1000;
+// limit output to this many most similar
+config const nSimilarToOutput = 200;
+// limit output to at least this similarity score
+config const minScoreToOutput = 0.0;
 
+// knobs for block-lcp
+config const minCommon = 60; // consider only common substrings longer than this
+config const targetBlockSize = 1000; // target size for blocks to analyze
+
+// knobs for other algorithms
+config const maxBlockSize = 1000;
+config const maxOccurrences = 1000;
+
+// upper-case names for the config constants to better identify them in code
+const STRATEGY=strategy;
+const WINDOW_SIZE_RATIO = windowSizeRatio;
+const WINDOW_SIZE_OVERRIDE = windowSizeOverride;
+const NSIMILAR_TO_OUTPUT = nSimilarToOutput;
+const MIN_SCORE_TO_OUTPUT = minScoreToOutput;
+const MAX_BLOCK_SIZE = maxBlockSize;
+const MIN_COMMON = minCommon;
+const MAX_OCCURRENCES = maxOccurrences;
+const TARGET_BLOCK_SIZE = targetBlockSize;
 
 import SuffixSort.INPUT_PADDING;
 import SuffixSort.EXTRA_CHECKS;

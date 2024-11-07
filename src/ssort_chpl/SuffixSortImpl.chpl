@@ -39,13 +39,22 @@ import SuffixSort.INPUT_PADDING;
 
 // how much more should we sample to create splitters?
 // 1.0 would be only to sample enough for the splitters
-config const SAMPLE_RATIO = 1.5;
-config const PARTITION_SORT_SAMPLE = true;
-config const PARTITION_SORT_ALL = true;
-config param IMPROVED_SORT_ALL = false; // TODO: fix this and then default
-config const SEED = 1;
-config const MIN_BUCKETS_PER_TASK = 8;
-config const MIN_BUCKETS_SPACE = 2_000_000; // a size in bytes
+config const sampleRatio = 1.5;
+config const partitionSortSample = true;
+config const partitionSortAll = true;
+config param improvedSortAll = false; // TODO: fix this and then default
+config const seed = 1;
+config const minBucketsPerTask = 8;
+config const minBucketsSpace = 2_000_000; // a size in bytes
+
+// upper-case names for the config constants to better identify them in code
+const SAMPLE_RATIO = sampleRatio;
+const PARTITION_SORT_SAMPLE = partitionSortSample;
+const PARTITION_SORT_ALL = partitionSortAll;
+const IMPROVED_SORT_ALL = improvedSortAll;
+const SEED = seed;
+const MIN_BUCKETS_PER_TASK = minBucketsPerTask;
+const MIN_BUCKETS_SPACE = minBucketsSpace;
 
 /**
  This record contains the configuration for the suffix sorting

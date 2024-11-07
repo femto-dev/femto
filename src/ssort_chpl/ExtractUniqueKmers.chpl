@@ -22,10 +22,16 @@
 module ExtractUniqueKmers {
 
 
-config const INPUT:string;
-config const UNIQUE:string;
-config const REPLACE_FILENAME:string;
-config const K: int = 0;
+config const input:string; // input file
+config const unique:string; // .unique file from FindUnique
+config const replaceFilename:string; // use this filename in the output
+config const k: int = 0; // K as in KMER (common prefix length)
+
+// upper-case names for the config constants to better identify them in code
+const INPUT = input;
+const UNIQUE = unique;
+const REPLACE_FILENAME = replaceFilename;
+const K = k;
 
 use Utility;
 
