@@ -41,8 +41,16 @@ import SuffixSort.INPUT_PADDING;
 // 1.0 would be only to sample enough for the splitters
 config const sampleRatio = 1.5;
 config const partitionSortSample = true;
+
+// use a partition-based sorting startegy for improved parallelism
+// and memory usage
 config const partitionSortAll = true;
-config param improvedSortAll = true;
+
+// if this is set, separately sort each nonsample, and do k-way merge.
+// this should be faster for large problem sizes since the merge step
+// depends on the cover size rather than log n.
+config const improvedSortAll = true;
+
 config const seed = 1;
 config const minBucketsPerTask = 8;
 config const minBucketsSpace = 2_000_000; // a size in bytes
@@ -1532,6 +1540,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
 
   } else {
     // this implementation is more complicated but should be more efficient
+    // because it has better parallelism
 
     // in a pass over the input,
     // partition the suffixes according to the splitters
@@ -1589,10 +1598,10 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
 
-      /*if TRACE {
+      if TRACE {
         writeln("final sort bucket ", bucketIdx,
                 " has ", bucketSize, " suffixes");
-        if SampleSplitters.bucketHasLowerBound(bucketIdx) {
+        /*if SampleSplitters.bucketHasLowerBound(bucketIdx) {
           writeln("lower bound ", SampleSplitters.bucketLowerBound(bucketIdx));
         }
         if SampleSplitters.bucketHasEqualityBound(bucketIdx) {
@@ -1601,10 +1610,10 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
         }
         if SampleSplitters.bucketHasUpperBound(bucketIdx) {
           writeln("upper bound ", SampleSplitters.bucketUpperBound(bucketIdx));
-        }
+        }*/
 
         //writeln("Bucket is ", SA[bucketStart..bucketEnd]);
-      }*/
+      }
 
       if bucketSize > 1 && !SampleSplitters.bucketHasEqualityBound(bucketIdx) {
         if SampleSplitters.bucketHasLowerBound(bucketIdx) &&
