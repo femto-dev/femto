@@ -134,7 +134,7 @@ operator +(x: similarity, y: similarity) {
   return ret;
 }
 
-record similarityComparator {
+record similarityComparator : Sort.keyComparator {
   proc key(a: similarity) {
     return -a.score;
   }
