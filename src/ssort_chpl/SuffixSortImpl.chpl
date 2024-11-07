@@ -1111,8 +1111,10 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     }
   }
 
-  // this comparator helps to sort suffixes that all have the same
-  // distance to a sample suffix; normally that is all having the same phase.
+  // This comparator helps to sort suffixes that all have the same
+  // distance to a sample suffix.
+  // Sample suffixes always have distance 0 to sample suffixes.
+  // Other suffixes have a distance according to their phase.
   record phaseComparator : keyPartComparator {
     const phase: int;
     const k: int; // offset + k will be in the cover
@@ -1136,7 +1138,12 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     }
     proc keyPart(a: offsetAndCached(?), i: int):(keyPartStatus, wordType) {
       if EXTRA_CHECKS {
-        assert(a.offset % cover.period == phase);
+        if phase == 0 {
+          assert(cover.containedInCover(a.offset % cover.period));
+        } else {
+          assert(a.offset % cover.period == phase);
+          assert(cover.containedInCover((a.offset + k) % cover.period));
+        }
       }
 
       if i < this.nPrefixWords {
@@ -1161,7 +1168,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
 
   } else {
     // partition by putting sample offsets in bucket 0
-    // and each nonsample offsets in its own bucket.
+    // and each nonsample offset in its own bucket.
 
     // destination for partitioning
     var B:[region] A.eltType;
@@ -1180,6 +1187,11 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
           const elt = Input[i];
           const offset = elt.offset;
           const phase = offset % cover.period;
+          // this code relies on the assumption that 0 is in the cover
+          // (since it uses 0 for the bucket containing sample suffixes)
+          if EXTRA_CHECKS {
+            assert(cover.containedInCover(0));
+          }
           const bucket = if cover.containedInCover(phase) then 0 else phase;
           //writeln( (elt, bucket) );
           yield (elt, bucket);
