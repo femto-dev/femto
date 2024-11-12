@@ -64,7 +64,8 @@ proc computeSuffixArray(input: [], const n: input.domain.idxType) {
                               offsetType = input.idxType,
                               cachedDataType = CACHED_DATA_TYPE,
                               loadWordType = LOAD_WORD_TYPE,
-                              cover = new differenceCover(DEFAULT_PERIOD));
+                              cover = new differenceCover(DEFAULT_PERIOD),
+                              locales = Locales);
 
   return ssortDcx(cfg, input, n);
 }

@@ -124,7 +124,8 @@ private proc checkSeeressesCase(type offsetType,
                               offsetType=offsetType,
                               cachedDataType=cachedDataType,
                               loadWordType=loadWordType,
-                              cover=new differenceCover(period));
+                              cover=new differenceCover(period),
+                              locales=Locales);
 
   if expectCached.type != nothing {
     const A = buildAllOffsets(cfg, inputArr, n, {0..<n});
@@ -133,7 +134,9 @@ private proc checkSeeressesCase(type offsetType,
   const SA = computeSuffixArrayDirectly(cfg, inputArr, n:offsetType,
                                         {0..<n:offsetType});
   checkOffsets(SA, expectOffsets);
-  assert(SA.eltType.cacheType == cachedDataType);
+  if !isIntegralType(SA.eltType) {
+    assert(SA.eltType.cacheType == cachedDataType);
+  }
 
   if expectCached.type != nothing {
     checkCached(SA, expectCached);
@@ -142,7 +145,9 @@ private proc checkSeeressesCase(type offsetType,
   // try ssortDcx
   const SA2 = ssortDcx(cfg, inputArr, n:offsetType);
   checkOffsets(SA2, expectOffsets);
-  assert(SA2.eltType.cacheType == cachedDataType);
+  if !isIntegralType(SA2.eltType) {
+    assert(SA2.eltType.cacheType == cachedDataType);
+  }
 
   if expectCached.type != nothing {
     checkCached(SA2, expectCached);
@@ -171,7 +176,8 @@ private proc testHelpers() {
                                 offsetType=int,
                                 cachedDataType=nothing,
                                 loadWordType=uint(8),
-                                cover=new differenceCover(3));
+                                cover=new differenceCover(3),
+                                locales=Locales);
 
     assert(cfg.getPrefixSize(3) == 3);
     assert(cfg.getPrefixSize(7) == 7);
@@ -184,7 +190,8 @@ private proc testHelpers() {
                                 offsetType=int,
                                 cachedDataType=nothing,
                                 loadWordType=uint(16),
-                                cover=new differenceCover(3));
+                                cover=new differenceCover(3),
+                                locales=Locales);
 
     assert(cfg.getPrefixSize(3) == 4);
     assert(cfg.getPrefixSize(7) == 8);
@@ -197,7 +204,8 @@ private proc testHelpers() {
                                 offsetType=int,
                                 cachedDataType=nothing,
                                 loadWordType=uint(32),
-                                cover=new differenceCover(3));
+                                cover=new differenceCover(3),
+                                locales=Locales);
 
     assert(cfg.getPrefixSize(3) == 4);
     assert(cfg.getPrefixSize(7) == 8);
@@ -210,7 +218,8 @@ private proc testHelpers() {
                                 offsetType=int,
                                 cachedDataType=nothing,
                                 loadWordType=uint(64),
-                                cover=new differenceCover(3));
+                                cover=new differenceCover(3),
+                                locales=Locales);
 
     assert(cfg.getPrefixSize(3) == 8);
     assert(cfg.getPrefixSize(7) == 8);
@@ -223,7 +232,8 @@ private proc testHelpers() {
                                 offsetType=int,
                                 cachedDataType=uint(64),
                                 loadWordType=uint(64),
-                                cover=new differenceCover(3));
+                                cover=new differenceCover(3),
+                                locales=Locales);
 
     assert(cfg.getPrefixSize(3) == 3);
     assert(cfg.getPrefixSize(7) == 7);
@@ -238,7 +248,8 @@ private proc testPrefixComparisons(type loadWordType, type cachedDataType) {
                               offsetType=int,
                               cachedDataType=cachedDataType,
                               loadWordType=loadWordType,
-                              cover=cover);
+                              cover=cover,
+                              locales=Locales);
   const inputStr = "aabbccaaddffffffffaabbccaaddff";
                  //           11111111112222222222
                  // 012345678901234567890123456789
@@ -329,7 +340,8 @@ proc testRankComparisons3() {
                               offsetType=int,
                               cachedDataType=nothing,
                               loadWordType=uint(8),
-                              cover=cover);
+                              cover=cover,
+                              locales=Locales);
 
   // create the mapping to the recursive problem
   const n = 16;
@@ -435,7 +447,8 @@ proc testRankComparisons21() {
                               offsetType=int,
                               cachedDataType=nothing,
                               loadWordType=uint(8),
-                              cover=cover);
+                              cover=cover,
+                              locales=Locales);
 
   type offsetType = cfg.offsetType;
   type cachedDataType = cfg.cachedDataType;
@@ -772,7 +785,8 @@ proc testOtherCase(input: string, expectSA: [] int,
                                 (if cachedDataType != nothing
                                  then cachedDataType
                                  else inputArr.eltType),
-                              cover=new differenceCover(period));
+                              cover=new differenceCover(period),
+                              locales=Locales);
   const SA = ssortDcx(cfg, inputArr, n:offsetType);
 
   if TRACE && n <= 10 {
@@ -992,8 +1006,9 @@ proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
                               loadWordType=
                                 (if cachedDataType != nothing
                                  then cachedDataType
-                                 else inputArr.eltType),
-                              cover=new differenceCover(period));
+                                 else uint),
+                              cover=new differenceCover(period),
+                              locales=Locales);
   const SA = ssortDcx(cfg, inputArr, n:offsetType);
 
   if TRACE && n <= 50 {
@@ -1124,8 +1139,9 @@ proc testDescendingCase(max: int, repeats: int, in n: int,
                               loadWordType=
                                 (if cachedDataType != nothing
                                  then cachedDataType
-                                 else inputArr.eltType),
-                              cover=new differenceCover(period));
+                                 else uint),
+                              cover=new differenceCover(period),
+                              locales=Locales);
   const SA = ssortDcx(cfg, inputArr, n:offsetType);
 
   if TRACE && n <= 50 {
