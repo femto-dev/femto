@@ -31,10 +31,12 @@ import Random;
 import BitOps;
 import Reflection;
 import CTypes.c_sizeof;
+import Time;
 
 import SuffixSort.DEFAULT_PERIOD;
 import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.TRACE;
+import SuffixSort.TIMING;
 import SuffixSort.INPUT_PADDING;
 
 // how much more should we sample to create splitters?
@@ -63,6 +65,7 @@ const IMPROVED_SORT_ALL = improvedSortAll;
 const SEED = seed;
 const MIN_BUCKETS_PER_TASK = minBucketsPerTask;
 const MIN_BUCKETS_SPACE = minBucketsSpace;
+
 
 /**
  This record contains the configuration for the suffix sorting
@@ -1305,6 +1308,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
               resultDom = {0..<n})
  : [resultDom] offsetAndCached(cfg.offsetType, cfg.cachedDataType) {
 
+  var total : Time.stopwatch;
+
   type offsetType = cfg.offsetType;
   type cachedDataType = cfg.cachedDataType;
   const ref cover = cfg.cover;
@@ -1314,6 +1319,16 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
   const charsPerMod = 1+myDivCeil(n, cover.period);
   const sampleN = cover.sampleSize * charsPerMod;
 
+  if TIMING {
+    writeln("begin ssortDcx n=", n);
+    total.start();
+  }
+  defer {
+    if TIMING {
+      total.stop();
+      writeln("end ssortDcx n=", n, " after ", total.elapsed(), " s");
+    }
+  }
   if TRACE {
     writeln("in ssortDcx ", cfg.type:string, " n=", n);
     //writeln("thetext is ", thetext[0..<n]); // TODO remove me
@@ -1377,6 +1392,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
   var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks,
                                 MIN_BUCKETS_SPACE / splitterSize);
 
+  //writeln("requesting ", requestedNumBuckets, " buckets");
   //writeln("nTasks is ", nTasks);
 
   // these are initialized below
@@ -1384,6 +1400,17 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
   const SampleSplitters2; // used otherwise
 
   {
+    var pre : Time.stopwatch;
+    if TIMING {
+      pre.start();
+    }
+    defer {
+      if TIMING {
+        pre.stop();
+        writeln("pre in ", pre.elapsed(), " s");
+      }
+    }
+
     var mySampleN: offsetType;
     // Sample is an array of sorted offsets
     const Sample = sortSampleOffsets(cfg, thetext, n,
@@ -1476,6 +1503,19 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
       writeln("back in ssortDcx n=", n);
       //writeln("SubSA is ", SubSA);
     }
+
+    /*
+    var update : Time.stopwatch;
+    if TIMING {
+      update.start();
+    }
+    defer {
+      if TIMING {
+        update.stop();
+        writeln("update SampleText in ", update.elapsed(), " s");
+      }
+    }*/
+
     // Replace the values in SampleText with
     // 1-based ranks from the suffix array.
     forall (offset,rank) in zip(SubSA, SubSA.domain) {
@@ -1527,8 +1567,22 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                                      false); // dummy to support split init
   }
 
+  var post : Time.stopwatch;
+  if TIMING {
+    post.start();
+  }
+  defer {
+    if TIMING {
+      post.stop();
+      writeln("post in ", post.elapsed(), " s");
+    }
+  }
+
+
   //// Step 2: Sort everything all together ////
   if !PARTITION_SORT_ALL {
+    //writeln("simple sort");
+
     // simple sort of everything all together
     var SA = buildAllOffsets(cfg, thetext, n, resultDom);
 
@@ -1539,6 +1593,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     return SA;
 
   } else {
+    //writeln("partitioned sort");
+
     // this implementation is more complicated but should be more efficient
     // because it has better parallelism
 
@@ -1572,6 +1628,11 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
       }
     }
 
+    var makeBuckets : Time.stopwatch;
+    if TIMING {
+      makeBuckets.start();
+    }
+
     const comparator = new finalPartitionComparator();
     const InputProducer = new offsetProducer2();
 
@@ -1590,6 +1651,16 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     //writeln("final sort after partition SA is ", SA);
 
     const Ends = + scan Counts;
+
+    if TIMING {
+      makeBuckets.stop();
+      writeln("makeBuckets in ", makeBuckets.elapsed(), " s");
+    }
+
+    var sortBuckets : Time.stopwatch;
+    if TIMING {
+      sortBuckets.start();
+    }
 
     // now, consider each bucket & sort within that bucket
     const nBuckets = SampleSplitters.numBuckets;
@@ -1633,6 +1704,12 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     }
 
     assert(Ends.last == n);
+
+    if TIMING {
+      sortBuckets.stop();
+      writeln("sortBuckets in ", sortBuckets.elapsed(), " s");
+    }
+
 
     //writeln("returning SA ", SA);
     return SA;
