@@ -813,7 +813,7 @@ proc buildSampleOffsets(const cfg: ssortConfig(?),
   const nPeriods = myDivCeil(n, cover.period); // nPeriods * period >= n
   assert(sampleN == cover.sampleSize * nPeriods);
 
-  const Dom = blockDist.createDomain({0..<sampleN}, targetLocales=cfg.locales);
+  const Dom = makeBlockDomain({0..<sampleN}, targetLocales=cfg.locales);
   var SA:[Dom] offsetAndCachedT(cfg.offsetType, cfg.cachedDataType) =
     forall i in Dom do
       makeSampleOffset(cfg, i, text, n);
@@ -922,8 +922,8 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
     }
 
     const replSp = replicateSplitters(sp, cfg.locales);
-    const SampleDom = blockDist.createDomain({0..<sampleN},
-                                             targetLocales=cfg.locales);
+    const SampleDom = makeBlockDomain({0..<sampleN},
+                                      targetLocales=cfg.locales);
     var Sample: [SampleDom] offsetAndCachedT(offsetType, cachedDataType);
 
     // now, count & partition by the prefix by traversing over the input
@@ -1382,8 +1382,8 @@ proc sortSuffixesCompletelyBounded(
     The returned array is Block distributed over cfg.locales.
 */
 proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
-              resultDom = blockDist.createDomain({0..<n},
-                                                 targetLocales=cfg.locales))
+              resultDom = makeBlockDomain({0..<n},
+                                          targetLocales=cfg.locales))
  : [resultDom] offsetAndCachedT(cfg.offsetType, cfg.cachedDataType) {
 
   var total : Time.stopwatch;
@@ -1462,7 +1462,9 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
   // TODO: allocate output array here in order to avoid memory fragmentation
 
   // begin by computing the input text for the recursive subproblem
-  var SampleText:[0..<sampleN+INPUT_PADDING] subCfg.characterType;
+  var SampleDom = makeBlockDomain({0..<sampleN+INPUT_PADDING},
+                                  targetLocales=cfg.locales);
+  var SampleText:[SampleDom] subCfg.characterType;
   var allSamplesHaveUniqueRanks = false;
 
   // create a sample splitters that can be replaced later

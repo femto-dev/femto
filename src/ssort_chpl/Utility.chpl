@@ -28,8 +28,10 @@ import List.list;
 import OS.EofError;
 import Path;
 import Sort.{sort,isSorted};
+import BlockDist.blockDist;
+import ChplConfig.CHPL_COMM;
 
-import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING};
+import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING, DISTRIBUTE_EVEN_WITH_COMM_NONE};
 
 /* For FASTA files, when reading them, also read in the reverse complement */
 config param INCLUDE_REVERSE_COMPLEMENT=true;
@@ -49,6 +51,17 @@ proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
   }
 
   return nTasks;
+}
+
+/* Make a BlockDist domain, but fall back on DefaultRectangular if
+   CHPL_COMM=none.
+*/
+proc makeBlockDomain(dom, targetLocales) {
+  if CHPL_COMM=="none" && !DISTRIBUTE_EVEN_WITH_COMM_NONE {
+    return dom;
+  } else {
+    return blockDist.createDomain(dom, targetLocales=targetLocales);
+  }
 }
 
 /* This function gives the size of an array of triangular indices
@@ -336,20 +349,25 @@ proc trimPaths(ref paths:[] string) {
    * a corresponding array of file sizes
    * a corresponding list of offsets where each file starts,
      which, contains an extra entry for the total size
+
+ The resulting arrays will be Block distributed among 'locales'.
  */
 proc readAllFiles(const ref files: list(string),
+                  locales: [ ] locale,
                   out allData: [] uint(8),
                   out allPaths: [] string,
                   out concisePaths: [] string,
                   out fileSizes: [] int,
                   out fileStarts: [] int,
                   out totalSize: int) throws {
-  var paths = files.toArray();
-  for p in paths {
+  var locPaths = files.toArray();
+  for p in locPaths {
     p = Path.normPath(p);
   }
-  sort(paths);
+  sort(locPaths);
 
+  const ByFileDom = makeBlockDomain({0..<locPaths.size}, targetLocales=locales);
+  const paths:[ByFileDom] string = forall i in ByFileDom do locPaths[i];
   const nFiles = paths.size;
 
   if nFiles == 0 {
@@ -366,7 +384,9 @@ proc readAllFiles(const ref files: list(string),
   const fileEnds = + scan sizes;
   const total = fileEnds.last;
 
-  var thetext:[0..<total+INPUT_PADDING] uint(8);
+  const TextDom = makeBlockDomain({0..<total+INPUT_PADDING},
+                                  targetLocales=locales);
+  var thetext:[TextDom] uint(8);
 
   // read each file
   forall (path, sz, end) in zip(paths, sizes, fileEnds) {
@@ -376,7 +396,8 @@ proc readAllFiles(const ref files: list(string),
   }
 
   // compute fileStarts
-  var starts:[0..nFiles] int;
+  const StartsDom = makeBlockDomain({0..nFiles}, targetLocales=locales);
+  var starts:[StartsDom] int;
   starts[0] = 0;
   starts[1..nFiles] = fileEnds;
 

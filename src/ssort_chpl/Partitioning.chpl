@@ -534,7 +534,7 @@ proc partition(const Input, ref Output, rsplit, comparator,
   const nBlocks = divCeil(n, blockSize);
 
   // create the arrays that drive the counting and distributing process
-  const tasksDom = blockDist.createDomain({0..<nTasks}, targetLocales=locales);
+  const tasksDom = makeBlockDomain({0..<nTasks}, targetLocales=locales);
   var localState:[tasksDom] owned PerTaskState =
     forall i in tasksDom do new PerTaskState(nBuckets);
 
@@ -545,8 +545,8 @@ proc partition(const Input, ref Output, rsplit, comparator,
   //   count for bin 1, task 0
   //   count for bin 1, task 1
   // i.e. bin*nTasks + taskId
-  const globalCountsDom = blockDist.createDomain({0..<countsSize},
-                                                 targetLocales=locales);
+  const globalCountsDom = makeBlockDomain({0..<countsSize},
+                                          targetLocales=locales);
   var globalCounts:[globalCountsDom] int;
 
   // Step 1: Count
@@ -604,8 +604,7 @@ proc partition(const Input, ref Output, rsplit, comparator,
   }
 
   // Compute the total counts to return them
-  const countsDom = blockDist.createDomain({0..<nBuckets},
-                                           targetLocales=locales);
+  const countsDom = makeBlockDomain({0..<nBuckets}, targetLocales=locales);
   var counts:[countsDom] int;
   forall (c,bin) in zip(counts,countsDom) {
     var total = 0;
