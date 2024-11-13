@@ -617,10 +617,9 @@ proc charactersInCommon(const cfg:ssortConfig(?), const a, const b): int
 // before and after PR #25636.
 proc sortRegion(ref A: [], comparator, region: range(?)) {
   if isDistributedDomain(A.domain) {
-    // should not be using the standard library for distributed sorts here
-    // (although it might come up in some unit testing)
-    writeln("warning: sortRegion called on a distributed array");
-    // copy to a local array, sort, and copy back
+    // copy to a local array, sort, and copy back.
+    // this situation occurs regularly within sortSuffixesByPrefix.
+    // TODO: can try to do sort in-place with an array view if it's all local
     var localDom: domain(1) = {region,};
     var localA:[localDom] A.eltType = A[region];
     sortRegion(localA, comparator, region);
@@ -837,6 +836,9 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
   sampleN = cover.sampleSize * nPeriods;
   var nToSampleForSplitters = (SAMPLE_RATIO*requestedNumBuckets):int;
   if !PARTITION_SORT_SAMPLE || nToSampleForSplitters >= sampleN {
+    if TRACE {
+      writeln("sortSampleOffsets simple");
+    }
     // Simpler approach: build sample offsets and sort them
     // does more random access and/or uses more memory (if caching data)
     var Sample = buildSampleOffsets(cfg, thetext, n, sampleN);
@@ -848,6 +850,9 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
 
     return Sample;
   } else {
+    if TRACE {
+      writeln("sortSampleOffsets partitioning");
+    }
     // To better avoid random access,
     // go through the input & partition by a splitter
     // while creating the offset & storing it into an output array
@@ -930,16 +935,28 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
     // now, consider each bucket & sort within that bucket.
     // this will be distributed because partition returns a Block array
     const nBuckets = sp.numBuckets;
-    forall (bucketSize, bucketIdx) in zip(Counts, Counts.domain) {
+    var minBucketSize = max(int);
+    var maxBucketSize = min(int);
+    var sumBucketSizes = 0;
+    var countBucketsConsidered = 0;
+    forall (bucketSize, bucketIdx) in zip(Counts, Counts.domain)
+                                   with (min reduce minBucketSize,
+                                         max reduce maxBucketSize,
+                                         + reduce sumBucketSizes,
+                                         + reduce countBucketsConsidered) {
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
 
-      if bucketSize > 1 {
-        if sp.bucketHasEqualityBound(bucketIdx) {
-          // nothing else to do because everything in this bucket
-          // has the same prefix
-        } else if sp.bucketHasLowerBound(bucketIdx) &&
-                  sp.bucketHasUpperBound(bucketIdx) {
+      // skip empty buckets and buckets with equal elements
+      if bucketSize > 1 && !sp.bucketHasEqualityBound(bucketIdx) {
+        // note statistics
+        minBucketSize reduce= bucketSize;
+        maxBucketSize reduce= bucketSize;
+        sumBucketSizes += bucketSize;
+        countBucketsConsidered += 1;
+
+        if sp.bucketHasLowerBound(bucketIdx) &&
+           sp.bucketHasUpperBound(bucketIdx) {
           sortSuffixesByPrefixBounded(cfg, thetext, n=n,
                                       Sample, bucketStart..bucketEnd,
                                       sp.bucketLowerBound(bucketIdx),
@@ -951,6 +968,14 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
                                maxPrefix=coverPrefix);
         }
       }
+    }
+
+    if TRACE {
+      writeln(" bucket size statistics for sortSampleOffsets",
+              " n=", countBucketsConsidered,
+              " min=", minBucketSize,
+              " avg=", sumBucketSizes:real / countBucketsConsidered,
+              " max=", maxBucketSize);
     }
 
     return Sample;
@@ -1443,8 +1468,10 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
   var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks,
                                 MIN_BUCKETS_SPACE / splitterSize);
 
-  //writeln("requesting ", requestedNumBuckets, " buckets");
-  //writeln("nTasks is ", nTasks);
+  if TRACE {
+    writeln(" requesting ", requestedNumBuckets, " buckets");
+    writeln(" nTasks is ", nTasks);
+  }
 
   // these are initialized below
   const SampleSplitters1; // used if allSamplesHaveUniqueRanks
@@ -1761,7 +1788,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     }
 
     if TRACE {
-      writeln("bucket size statistics for final sort",
+      writeln(" bucket size statistics for final sort",
+              " n=", countBucketsConsidered,
               " min=", minBucketSize,
               " avg=", sumBucketSizes:real / countBucketsConsidered,
               " max=", maxBucketSize);
