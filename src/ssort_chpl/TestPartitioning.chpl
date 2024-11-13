@@ -152,7 +152,7 @@ proc testPartitionsEven(n: int, nSplit: int) {
 
   const counts = partition(Input, Output, sp, replicateSplitters(sp, [here]),
                            myDefaultComparator, 0, n-1,
-                           locales=[here], nTasks=1);
+                           locales=none, nTasks=1);
   assert(counts.size == nBuckets);
 
   var minSize = max(int);
@@ -194,7 +194,7 @@ proc testPartitionSingleSplitter(n: int) {
 
   const counts = partition(Input, Output, sp, replicateSplitters(sp, [here]),
                            myDefaultComparator, 0, n-1,
-                           locales=[here], nTasks=1);
+                           locales=none, nTasks=1);
   assert(counts.size == nBuckets);
 
   var total = 0;

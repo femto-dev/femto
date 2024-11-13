@@ -25,7 +25,7 @@ module Partitioning {
 
 import SuffixSort.EXTRA_CHECKS;
 
-import Utility.{computeNumTasks,makeBlockDomain};
+import Utility.{computeNumTasks,makeBlockDomain,maybeDistributed};
 import Reflection.canResolveMethod;
 import Sort.{sort, DefaultComparator, keyPartStatus};
 import Math.{log2, divCeil};
@@ -423,9 +423,10 @@ class ReplicatedWrapper {
 
 /* helper that returns a replicated array of splitters, or 'none'
    if there is no need for replication.
-   'sp' is normally a 'record splitters'. */
-proc replicateSplitters(sp, locales: []) {
-  if maybeDistributed() {
+   'sp' is normally a 'record splitters'.
+   'locales' is normally an array of locales but can be 'none'. */
+proc replicateSplitters(sp, locales) {
+  if maybeDistributed() && locales.type != nothing {
     const DomOne = {1..1};
     const ReplDom = DomOne dmapped new replicatedDist();
     var Result: [ReplDom] owned ReplicatedWrapper(sp.type)?;
@@ -445,7 +446,7 @@ proc replicateSplitters(sp, locales: []) {
 
 /* helper that return the current splitter */
 inline proc localSplitter(sp, replicatedSplitters) const ref {
-  if maybeDistributed() {
+  if maybeDistributed() && replicatedSplitters.type != nothing {
     return replicatedSplitters[1]!.x;
   } else {
     return sp;
@@ -475,6 +476,9 @@ class PerTaskState {
    'split' is the splitters and it should be either 'record splitters'
    or something else that behaves similarly to it.
    'rsplit' should be the result of calling 'replicateSplitters' on 'split'.
+   'locales' is the locales that are to be used, or 'none' if
+   it should not be distributed.
+
 
    If equality buckets are not in use:
      Bucket 0 consists of elts with
@@ -519,7 +523,9 @@ proc partition(const Input, ref Output, split, rsplit, comparator,
   //writeln("partition with locales=", locales, " nTasks=", nTasks);
 
   // check that nTasks is reasonable. It should have a task per locale in use.
-  assert(locales.size <= nTasks);
+  if locales.type != nothing {
+    assert(locales.size <= nTasks);
+  }
 
   const nBuckets; // set below
   const n = end - start + 1;

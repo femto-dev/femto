@@ -1155,7 +1155,6 @@ proc compareSampleRanks(a: prefixAndSampleRanks(?), b,
   return compareIntegers(rankA, rankB);
 }
 
-
 /* Sort suffixes by prefix and by the sample ranks.
    This puts them into final sorted order when computing the suffix array.
    Sorts only A[region].
@@ -1168,7 +1167,11 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
                               const SampleRanks, charsPerMod: cfg.offsetType,
                               ref A: [], // integral or offsetAndCached(?)
                               region: range(?),
-                              const nCharsCommon) {
+                              const nCharsCommon,
+                              // these are for gathering timing data
+                              out partitionTime:real,
+                              out sortEachNonsampleTime:real,
+                              out mergeTime:real) {
   type wordType = cfg.loadWordType;
   type characterType = cfg.characterType;
   const ref cover = cfg.cover;
@@ -1176,7 +1179,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
   const useMaxPrefix = max(coverPrefix - nCharsCommon, 0);
 
   record finalComparator : relativeComparator {
-    proc compare(a, b) { // integral or offset and cached
+    proc compare(a, b) { // integral or offsetAndCached
       // first, compare the first cover.period characters of text
       if useMaxPrefix > 0 {
         const aOffset = offset(a) + nCharsCommon;
@@ -1286,20 +1289,34 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     assert(cover.containedInCover(0));
 
     //writeln("Partitioning by phase region ", region);
+    var partitionTimer : Time.stopwatch;
+    if TIMING {
+      partitionTimer.start();
+    }
 
     const unusedComparator = new finalComparator();
     const subTasks = computeNumTasks();
     const sp = new phaseSplitter();
-    const rsp = replicateSplitters(sp, [here]);
+    const rsp = none;
     const Counts = partition(A, B, sp, rsp, unusedComparator,
                              start=region.low, end=region.high,
-                             locales=[here], nTasks=subTasks);
+                             locales=none, nTasks=subTasks);
 
     const Ends = + scan Counts;
 
     assert(Ends.last == region.size);
 
+    if TIMING {
+      partitionTimer.stop();
+      partitionTime = partitionTimer.elapsed();
+    }
+
     //writeln("Sorting buckets");
+    var sortEachNonsampleTimer : Time.stopwatch;
+    if TIMING {
+      sortEachNonsampleTimer.start();
+    }
+
     // now, consider each bucket & sort within that bucket
     const nBuckets = sp.numBuckets;
     var nNonZero = 0;
@@ -1314,6 +1331,11 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
                    region=bucketStart..bucketEnd);
         nNonZero += 1;
       }
+    }
+
+    if TIMING {
+      sortEachNonsampleTimer.stop();
+      sortEachNonsampleTime = sortEachNonsampleTimer.elapsed();
     }
 
     // Gather the ranges for input to multiWayMerge
@@ -1332,8 +1354,18 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
 
     //writeln("Multi-way merge");
     //writeln("region ", region, " InputRanges ", InputRanges);
+    var mergeTimer : Time.stopwatch;
+    if TIMING {
+      mergeTimer.start();
+    }
+
     // do the serial multi-way merging from B back into A
     multiWayMerge(B, InputRanges, A, region, new finalComparator());
+
+    if TIMING {
+      mergeTimer.stop();
+      mergeTime = mergeTimer.elapsed();
+    }
   }
 }
 
@@ -1341,10 +1373,15 @@ proc sortSuffixesCompletely(const cfg:ssortConfig(?),
                             const thetext, n: cfg.offsetType,
                             const SampleRanks, charsPerMod: cfg.offsetType,
                             ref A: [], // array of integral or offsetAndCached
-                            region: range(?)) {
+                            region: range(?),
+                            // these are for gathering timing data
+                            out partitionTime:real,
+                            out sortEachNonsampleTime:real,
+                            out mergeTime:real) {
 
   doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
-                           A, region, nCharsCommon=0);
+                           A, region, nCharsCommon=0,
+                           partitionTime, sortEachNonsampleTime, mergeTime);
 }
 
 proc sortSuffixesCompletelyBounded(
@@ -1354,7 +1391,11 @@ proc sortSuffixesCompletelyBounded(
                             ref A: [], // array of integral or offsetAndCached
                             region: range(?),
                             const lowerBound: prefixAndSampleRanks(?),
-                            const upperBound: prefixAndSampleRanks(?)) {
+                            const upperBound: prefixAndSampleRanks(?),
+                            // these are for gathering timing data
+                            out partitionTime:real,
+                            out sortEachNonsampleTime:real,
+                            out mergeTime:real) {
 
   type characterType = cfg.characterType;
   type cachedDataType = cfg.cachedDataType;
@@ -1368,12 +1409,14 @@ proc sortSuffixesCompletelyBounded(
      (cachedDataType != nothing &&
       numBits(characterType)*nCharsCommon < numBits(cachedDataType)) {
     doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
-                             A, region, nCharsCommon=0);
+                             A, region, nCharsCommon=0,
+                             partitionTime, sortEachNonsampleTime, mergeTime);
     return;
   }
 
   doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
-                           A, region, nCharsCommon=nCharsCommon);
+                           A, region, nCharsCommon=nCharsCommon,
+                           partitionTime, sortEachNonsampleTime, mergeTime);
 }
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
@@ -1675,8 +1718,11 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     // simple sort of everything all together
     var SA = buildAllOffsets(cfg, thetext, n, resultDom);
 
+    var partitionTime, sortEachNonsampleTime, mergeTime: real;
+
     sortSuffixesCompletely(cfg, thetext, n=n, SampleText, charsPerMod,
-                           SA, 0..<n);
+                           SA, 0..<n,
+                           partitionTime, sortEachNonsampleTime, mergeTime);
 
     //writeln("returning SA ", SA);
     return SA;
@@ -1764,11 +1810,17 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     var maxBucketSize = min(int);
     var sumBucketSizes = 0;
     var countBucketsConsidered = 0;
+    var partitionTime = 0.0;
+    var sortEachNonsampleTime = 0.0;
+    var mergeTime = 0.0;
     forall (bucketSize, bucketIdx) in zip(Counts, Counts.domain)
                                    with (min reduce minBucketSize,
                                          max reduce maxBucketSize,
                                          + reduce sumBucketSizes,
-                                         + reduce countBucketsConsidered) {
+                                         + reduce countBucketsConsidered,
+                                         + reduce partitionTime,
+                                         + reduce sortEachNonsampleTime,
+                                         + reduce mergeTime) {
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
       const ref MySampleSplitters = localSplitter(SampleSplitters,
@@ -1782,6 +1834,10 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
         sumBucketSizes += bucketSize;
         countBucketsConsidered += 1;
 
+        var myPartitionTime = 0.0;
+        var mySortEachNonsampleTime = 0.0;
+        var myMergeTime = 0.0;
+
         if MySampleSplitters.bucketHasLowerBound(bucketIdx) &&
            MySampleSplitters.bucketHasUpperBound(bucketIdx) {
           sortSuffixesCompletelyBounded(
@@ -1789,12 +1845,20 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                                  SampleText, charsPerMod,
                                  SA, bucketStart..bucketEnd,
                                  MySampleSplitters.bucketLowerBound(bucketIdx),
-                                 MySampleSplitters.bucketUpperBound(bucketIdx));
+                                 MySampleSplitters.bucketUpperBound(bucketIdx),
+                                 myPartitionTime, mySortEachNonsampleTime,
+                                 myMergeTime);
         } else {
           sortSuffixesCompletely(cfg, thetext, n=n,
                                  SampleText, charsPerMod,
-                                 SA, bucketStart..bucketEnd);
+                                 SA, bucketStart..bucketEnd,
+                                 myPartitionTime, mySortEachNonsampleTime,
+                                 myMergeTime);
         }
+
+        partitionTime += myPartitionTime;
+        sortEachNonsampleTime += mySortEachNonsampleTime;
+        mergeTime += myMergeTime;
       }
     }
 
@@ -1803,6 +1867,10 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     if TIMING {
       sortBuckets.stop();
       writeln("sortBuckets in ", sortBuckets.elapsed(), " s");
+      writeln(" and inside that (adding times from all tasks)");
+      writeln(" partitionTime ", partitionTime, " s");
+      writeln(" sortEachNonsampleTime ", sortEachNonsampleTime, " s");
+      writeln(" mergeTime ", mergeTime, " s");
     }
 
     if TRACE {
