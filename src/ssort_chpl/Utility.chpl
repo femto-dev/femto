@@ -53,14 +53,19 @@ proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
   return nTasks;
 }
 
+/* are we running distributed according to CHPL_COMM ? */
+proc maybeDistributed() param {
+  return CHPL_COMM!="none" || DISTRIBUTE_EVEN_WITH_COMM_NONE;
+}
+
 /* Make a BlockDist domain, but fall back on DefaultRectangular if
    CHPL_COMM=none.
 */
 proc makeBlockDomain(dom, targetLocales) {
-  if CHPL_COMM=="none" && !DISTRIBUTE_EVEN_WITH_COMM_NONE {
-    return dom;
-  } else {
+  if maybeDistributed() {
     return blockDist.createDomain(dom, targetLocales=targetLocales);
+  } else {
+    return dom;
   }
 }
 

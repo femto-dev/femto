@@ -76,7 +76,7 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   const useNLocales = min(nTasks, Locales.size);
   const targetLocales = for i in 0..<useNLocales do Locales[i];
   const counts =
-    partition(Input, Output, replicateSplitters(sp, targetLocales),
+    partition(Input, Output, sp, replicateSplitters(sp, targetLocales),
               myDefaultComparator, 0, n-1,
               locales=targetLocales, nTasks=nTasks);
   assert(counts.size == nBuckets);
@@ -150,7 +150,7 @@ proc testPartitionsEven(n: int, nSplit: int) {
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
-  const counts = partition(Input, Output, replicateSplitters(sp, [here]),
+  const counts = partition(Input, Output, sp, replicateSplitters(sp, [here]),
                            myDefaultComparator, 0, n-1,
                            locales=[here], nTasks=1);
   assert(counts.size == nBuckets);
@@ -192,7 +192,7 @@ proc testPartitionSingleSplitter(n: int) {
   assert(sp.hasEqualityBuckets);
   assert(nBuckets == 3); // < == and > buckets
 
-  const counts = partition(Input, Output, replicateSplitters(sp, [here]),
+  const counts = partition(Input, Output, sp, replicateSplitters(sp, [here]),
                            myDefaultComparator, 0, n-1,
                            locales=[here], nTasks=1);
   assert(counts.size == nBuckets);

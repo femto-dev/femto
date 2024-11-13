@@ -25,12 +25,11 @@ module Partitioning {
 
 import SuffixSort.EXTRA_CHECKS;
 
-import Utility.computeNumTasks;
+import Utility.{computeNumTasks,makeBlockDomain};
 import Reflection.canResolveMethod;
 import Sort.{sort, DefaultComparator, keyPartStatus};
 import Math.{log2, divCeil};
 import CTypes.c_array;
-import BlockDist.blockDist;
 import ReplicatedDist.replicatedDist;
 
 // These settings control the sample sort and classification process
@@ -422,26 +421,35 @@ class ReplicatedWrapper {
   var x;
 }
 
-/* helper that returns a replicated array of splitters.
+/* helper that returns a replicated array of splitters, or 'none'
+   if there is no need for replication.
    'sp' is normally a 'record splitters'. */
 proc replicateSplitters(sp, locales: []) {
-  const DomOne = {1..1};
-  const ReplDom = DomOne dmapped new replicatedDist();
-  var Result: [ReplDom] owned ReplicatedWrapper(sp.type)?;
+  if maybeDistributed() {
+    const DomOne = {1..1};
+    const ReplDom = DomOne dmapped new replicatedDist();
+    var Result: [ReplDom] owned ReplicatedWrapper(sp.type)?;
 
-  // now set the replicand on each Locale
-  coforall loc in locales {
-    on loc {
-      Result[1] = new ReplicatedWrapper(sp);
+    // now set the replicand on each Locale
+    coforall loc in locales {
+      on loc {
+        Result[1] = new ReplicatedWrapper(sp);
+      }
     }
-  }
 
-  return Result;
+    return Result;
+  } else {
+    return none;
+  }
 }
 
 /* helper that return the current splitter */
-proc localSplitter(replicatedSplitters: []) const ref {
-  return replicatedSplitters[1]!.x;
+inline proc localSplitter(sp, replicatedSplitters) const ref {
+  if maybeDistributed() {
+    return replicatedSplitters[1]!.x;
+  } else {
+    return sp;
+  }
 }
 
 class PerTaskState {
@@ -464,8 +472,9 @@ class PerTaskState {
 
    This is done in parallel.
 
-   'split' should be the result of 'replicateSplitters' called on
-   either 'record splitters' or something else that behaves similarly to it.
+   'split' is the splitters and it should be either 'record splitters'
+   or something else that behaves similarly to it.
+   'rsplit' should be the result of calling 'replicateSplitters' on 'split'.
 
    If equality buckets are not in use:
      Bucket 0 consists of elts with
@@ -502,7 +511,7 @@ class PerTaskState {
        split.sortedSplitter((numBuckets-2)/2) < elts
 
  */
-proc partition(const Input, ref Output, rsplit, comparator,
+proc partition(const Input, ref Output, split, rsplit, comparator,
                start: int, end: int,
                locales,
                nTasks: int = locales.size * computeNumTasks()) {
@@ -517,12 +526,12 @@ proc partition(const Input, ref Output, rsplit, comparator,
 
   {
     // access the local replicand to do some checking and get # buckets
-    const ref split = localSplitter(rsplit);
-    nBuckets = split.numBuckets;
+    const ref mysplit = localSplitter(split, rsplit);
+    nBuckets = mysplit.numBuckets;
 
     // check that the splitters are sorted according to comparator
-    if EXTRA_CHECKS && isSubtype(split.type,splitters) {
-      assert(isSorted(split.sortedStorage[0..<split.myNumBuckets-1],
+    if EXTRA_CHECKS && isSubtype(mysplit.type,splitters) {
+      assert(isSorted(mysplit.sortedStorage[0..<mysplit.myNumBuckets-1],
                       comparator));
     }
   }
@@ -554,7 +563,7 @@ proc partition(const Input, ref Output, rsplit, comparator,
     var taskStart = start + tid * blockSize;
     var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
     // get the local replicand
-    const ref split = localSplitter(rsplit);
+    const ref mysplit = localSplitter(split, rsplit);
 
     ref counts = locState.localCounts;
     foreach bin in 0..<nBuckets {
@@ -563,7 +572,7 @@ proc partition(const Input, ref Output, rsplit, comparator,
 
     // this loop must really be serial. it can be run in parallel
     // within the forall because it's updating state local to each task.
-    for (_,bin) in split.classify(Input, taskStart, taskEnd, comparator) {
+    for (_,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
       counts[bin] += 1;
     }
 
@@ -581,7 +590,7 @@ proc partition(const Input, ref Output, rsplit, comparator,
     var taskStart = start + tid * blockSize;
     var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
     // get the local replicand
-    const ref split = localSplitter(rsplit);
+    const ref mysplit = localSplitter(split, rsplit);
 
     ref nextOffsets = locState.localCounts;
     // initialize nextOffsets
@@ -595,7 +604,7 @@ proc partition(const Input, ref Output, rsplit, comparator,
     // as above,
     // this loop must really be serial. it can be run in parallel
     // within the forall because it's updating state local to each task.
-    for (elt,bin) in split.classify(Input, taskStart, taskEnd, comparator) {
+    for (elt,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
       // Store it in the right bin
       ref next = nextOffsets[bin];
       Output[next] = elt;

@@ -22,7 +22,7 @@ module SuffixSortImpl {
 
 use DifferenceCovers;
 use Partitioning;
-import Utility.computeNumTasks;
+import Utility.{computeNumTasks,makeBlockDomain};
 
 use BlockDist;
 use Math;
@@ -927,7 +927,7 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
     var Sample: [SampleDom] offsetAndCachedT(offsetType, cachedDataType);
 
     // now, count & partition by the prefix by traversing over the input
-    const Counts = partition(InputProducer, Sample, replSp, comparator,
+    const Counts = partition(InputProducer, Sample, sp, replSp, comparator,
                              start=0, end=sampleN-1,
                              locales=cfg.locales, nTasks);
 
@@ -947,7 +947,7 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
                                          + reduce countBucketsConsidered) {
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
-      const ref mySp = localSplitter(replSp);
+      const ref mySp = localSplitter(sp, replSp);
 
       // skip empty buckets and buckets with equal elements
       if bucketSize > 1 && !mySp.bucketHasEqualityBound(bucketIdx) {
@@ -1291,7 +1291,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     const subTasks = computeNumTasks();
     const sp = new phaseSplitter();
     const rsp = replicateSplitters(sp, [here]);
-    const Counts = partition(A, B, rsp, unusedComparator,
+    const Counts = partition(A, B, sp, rsp, unusedComparator,
                              start=region.low, end=region.high,
                              locales=[here], nTasks=subTasks);
 
@@ -1737,7 +1737,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
 
     //writeln("SampleSplitters is ", SampleSplitters.sortedStorage);
 
-    const Counts = partition(InputProducer, SA, ReplSampleSplitters, comparator,
+    const Counts = partition(InputProducer, SA,
+                             SampleSplitters, ReplSampleSplitters, comparator,
                              start=0, end=n-1,
                              locales=cfg.locales, nTasks);
 
@@ -1770,7 +1771,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                                          + reduce countBucketsConsidered) {
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
-      const ref MySampleSplitters = localSplitter(ReplSampleSplitters);
+      const ref MySampleSplitters = localSplitter(SampleSplitters,
+                                                  ReplSampleSplitters);
 
       if bucketSize > 1 && !MySampleSplitters.bucketHasEqualityBound(bucketIdx)
       {
