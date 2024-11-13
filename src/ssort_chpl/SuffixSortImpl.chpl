@@ -824,7 +824,7 @@ proc buildSampleOffsets(const cfg: ssortConfig(?),
 /* Returns an array of the sample offsets sorted
    by the first cover.period characters.
 
-   The returned array is Block distributed over cfg.locales.
+   The returned array is Block distributed over cfg.locales if CHPL_COMM!=none.
  */
 proc sortSampleOffsets(const cfg:ssortConfig(?),
                        const thetext, n: cfg.offsetType,
@@ -1379,7 +1379,7 @@ proc sortSuffixesCompletelyBounded(
 /** Create and return a sorted suffix array for the suffixes 0..<n
     referring to 'thetext'.
 
-    The returned array is Block distributed over cfg.locales.
+    The returned array is Block distributed over cfg.locales if CHPL_COMM!=none.
 */
 proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
               resultDom = makeBlockDomain({0..<n},
@@ -1878,6 +1878,9 @@ proc lcpParPlcp(thetext: [], const n: thetext.domain.idxType, const SA: []) {
  */
 proc doComputeSparsePLCP(thetext: [], const n: thetext.domain.idxType,
                          const SA: [], param q) {
+  // TODO: get this distributed
+  //  - PHI can be block distributed
+  //  - the coforall loop can be coforall + on PHI[taskStart]
   const nTasks = computeNumTasks();
   type offsetType = (offset(SA[0])).type;
 
