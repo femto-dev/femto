@@ -814,7 +814,7 @@ proc buildSampleOffsets(const cfg: ssortConfig(?),
   const nPeriods = myDivCeil(n, cover.period); // nPeriods * period >= n
   assert(sampleN == cover.sampleSize * nPeriods);
 
-  const Dom = {0..<sampleN};
+  const Dom = blockDist.createDomain({0..<sampleN}, targetLocales=cfg.locales);
   var SA:[Dom] offsetAndCachedT(cfg.offsetType, cfg.cachedDataType) =
     forall i in Dom do
       makeSampleOffset(cfg, i, text, n);
@@ -824,6 +824,8 @@ proc buildSampleOffsets(const cfg: ssortConfig(?),
 
 /* Returns an array of the sample offsets sorted
    by the first cover.period characters.
+
+   The returned array is Block distributed over cfg.locales.
  */
 proc sortSampleOffsets(const cfg:ssortConfig(?),
                        const thetext, n: cfg.offsetType,
@@ -896,6 +898,8 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
       var SplittersSampleDom = {0..<nToSampleForSplitters};
       type prefixType = makePrefix(cfg, 0,thetext, n).type;
       var SplittersSample:[SplittersSampleDom] prefixType;
+      // TODO: this could be a forall loop, but running into
+      // some kind of error about PCGRandomPrivate_iterate_bounded
       for (x, r) in zip(SplittersSample,
                         randNums.next(SplittersSampleDom, 0, sampleN-1)) {
         // r is a packed index into the offsets to sample
@@ -912,38 +916,23 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
                          howSorted=sortLevel.unsorted);
     }
 
-    var Sample: [0..<sampleN] offsetAndCachedT(offsetType, cachedDataType);
+    const SampleDom = blockDist.createDomain({0..<sampleN},
+                                             targetLocales=cfg.locales);
+    var Sample: [SampleDom] offsetAndCachedT(offsetType, cachedDataType);
 
     // now, count & partition by the prefix by traversing over the input
     const Counts = partition(InputProducer, Sample, sp, comparator,
-                             0, sampleN-1, nTasks);
+                             start=0, end=sampleN-1,
+                             locales=cfg.locales, nTasks);
 
     const Ends = + scan Counts;
 
-    // now, consider each bucket & sort within that bucket
+    // now, consider each bucket & sort within that bucket.
+    // this will be distributed because partition returns a Block array
     const nBuckets = sp.numBuckets;
-    forall bucketIdx in 0..<nBuckets {
-      const bucketSize = Counts[bucketIdx];
+    forall (bucketSize, bucketIdx) in zip(Counts, Counts.domain) {
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
-
-      /*if TRACE {
-        writeln("sortSampleOffsets bucket ", bucketIdx,
-                " has ", bucketSize, " suffixes");
-
-        if sp.bucketHasLowerBound(bucketIdx) {
-          writeln("lower bound ", sp.bucketLowerBound(bucketIdx));
-        }
-        if sp.bucketHasEqualityBound(bucketIdx) {
-          writeln("equal bound ",
-                   sp.bucketEqualityBound(bucketIdx));
-        }
-        if sp.bucketHasUpperBound(bucketIdx) {
-          writeln("upper bound ", sp.bucketUpperBound(bucketIdx));
-        }
-
-        //writeln(Sample[bucketStart..bucketEnd]);
-      }*/
 
       if bucketSize > 1 {
         if sp.bucketHasEqualityBound(bucketIdx) {
@@ -961,10 +950,6 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
                                Sample, bucketStart..bucketEnd,
                                maxPrefix=coverPrefix);
         }
-        // TODO: adjust sort library call to avoid the ~2x array view overhead
-        //   * by optimizing down to c_ptr for contiguous arrays, or
-        //   * by allowing passing the array bounds
-        // Or, consider using MSB Radix Sort to avoid that overhead here.
       }
     }
 
@@ -1147,6 +1132,9 @@ proc compareSampleRanks(a: prefixAndSampleRanks(?), b,
 /* Sort suffixes by prefix and by the sample ranks.
    This puts them into final sorted order when computing the suffix array.
    Sorts only A[region].
+
+   The computation in this function is not distributed because
+   it's expected to be called from within a distributed forall loop.
  */
 proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
                               const thetext, n: cfg.offsetType,
@@ -1239,6 +1227,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     // and each nonsample offset in its own bucket.
 
     // destination for partitioning
+    // this is a non-distributed (local) array even if A is distributed
     var B:[region] A.eltType;
 
     // distribute into buckets, bucket 0 has all sample positions,
@@ -1275,7 +1264,8 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     const subTasks = computeNumTasks();
     const sp = new phaseSplitter();
     const Counts = partition(A, B, sp, unusedComparator,
-                             region.low, region.high, subTasks);
+                             start=region.low, end=region.high,
+                             locales=[here], nTasks=subTasks);
 
     const Ends = + scan Counts;
 
@@ -1285,8 +1275,8 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     // now, consider each bucket & sort within that bucket
     const nBuckets = sp.numBuckets;
     var nNonZero = 0;
-    forall bucketIdx in 0..<nBuckets with (+ reduce nNonZero) {
-      const bucketSize = Counts[bucketIdx];
+    forall (bucketSize, bucketIdx) in zip(Counts, Counts.domain)
+                                   with (+ reduce nNonZero) {
       const bucketStart = region.low + Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1; // inclusive
 
@@ -1359,7 +1349,10 @@ proc sortSuffixesCompletelyBounded(
 }
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
-    referring to 'text'. */
+    referring to 'thetext'.
+
+    The returned array is Block distributed over cfg.locales.
+*/
 proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
               resultDom = blockDist.createDomain({0..<n},
                                                  targetLocales=cfg.locales))
@@ -1446,7 +1439,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
 
   // compute number of buckets for sample partition & after recursion partition
   const splitterSize = c_sizeof(unusedSplitter.type):int;
-  var nTasks = computeNumTasks() * thetext.targetLocales().size;
+  var nTasks = computeNumTasks() * resultDom.targetLocales().size;
   var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks,
                                 MIN_BUCKETS_SPACE / splitterSize);
 
@@ -1704,7 +1697,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     //writeln("SampleSplitters is ", SampleSplitters.sortedStorage);
 
     const Counts = partition(InputProducer, SA, SampleSplitters, comparator,
-                             0, n-1, nTasks);
+                             start=0, end=n-1,
+                             locales=cfg.locales, nTasks);
 
     //writeln("final sort ranks are ", SampleText[0..<sampleN]);
     //writeln("final sort after partition SA is ", SA);
@@ -1721,31 +1715,28 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
       sortBuckets.start();
     }
 
-    // now, consider each bucket & sort within that bucket
+    // now, consider each bucket & sort within that bucket.
+    // this will be distributed because partition returns a Block array
     const nBuckets = SampleSplitters.numBuckets;
-    forall bucketIdx in 0..<nBuckets {
-      const bucketSize = Counts[bucketIdx];
+    var minBucketSize = max(int);
+    var maxBucketSize = min(int);
+    var sumBucketSizes = 0;
+    var countBucketsConsidered = 0;
+    forall (bucketSize, bucketIdx) in zip(Counts, Counts.domain)
+                                   with (min reduce minBucketSize,
+                                         max reduce maxBucketSize,
+                                         + reduce sumBucketSizes,
+                                         + reduce countBucketsConsidered) {
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
 
-      if TRACE {
-        //writeln("final sort bucket ", bucketIdx,
-        //        " has ", bucketSize, " suffixes");
-        /*if SampleSplitters.bucketHasLowerBound(bucketIdx) {
-          writeln("lower bound ", SampleSplitters.bucketLowerBound(bucketIdx));
-        }
-        if SampleSplitters.bucketHasEqualityBound(bucketIdx) {
-          writeln("equal bound ",
-                   SampleSplitters.bucketEqualityBound(bucketIdx));
-        }
-        if SampleSplitters.bucketHasUpperBound(bucketIdx) {
-          writeln("upper bound ", SampleSplitters.bucketUpperBound(bucketIdx));
-        }*/
-
-        //writeln("Bucket is ", SA[bucketStart..bucketEnd]);
-      }
-
       if bucketSize > 1 && !SampleSplitters.bucketHasEqualityBound(bucketIdx) {
+        // note statistics
+        minBucketSize reduce= bucketSize;
+        maxBucketSize reduce= bucketSize;
+        sumBucketSizes += bucketSize;
+        countBucketsConsidered += 1;
+
         if SampleSplitters.bucketHasLowerBound(bucketIdx) &&
            SampleSplitters.bucketHasUpperBound(bucketIdx) {
           sortSuffixesCompletelyBounded(
@@ -1769,6 +1760,12 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
       writeln("sortBuckets in ", sortBuckets.elapsed(), " s");
     }
 
+    if TRACE {
+      writeln("bucket size statistics for final sort",
+              " min=", minBucketSize,
+              " avg=", sumBucketSizes:real / countBucketsConsidered,
+              " max=", maxBucketSize);
+    }
 
     //writeln("returning SA ", SA);
     return SA;

@@ -30,6 +30,7 @@ import Reflection.canResolveMethod;
 import Sort.{sort, DefaultComparator, keyPartStatus};
 import Math.{log2, divCeil};
 import CTypes.c_array;
+import BlockDist.blockDist;
 
 // These settings control the sample sort and classification process
 param classifyUnrollFactor = 7;
@@ -468,12 +469,18 @@ class PerTaskState {
  */
 proc partition(const Input, ref Output, split, comparator,
                start: int, end: int,
-               nTasks: int = computeNumTasks()) {
+               locales = [here],
+               nTasks: int = locales.size * computeNumTasks()) {
+
+  //writeln("partition with locales=", locales, " nTasks=", nTasks);
 
   // check that the splitters are sorted according to comparator
   if EXTRA_CHECKS && isSubtype(split.type,splitters) {
     assert(isSorted(split.sortedStorage[0..<split.myNumBuckets-1], comparator));
   }
+
+  // check that nTasks is reasonable. It should have a task per locale in use.
+  assert(locales.size <= nTasks);
 
   const nBuckets = split.numBuckets;
   const n = end - start + 1;
@@ -484,10 +491,9 @@ proc partition(const Input, ref Output, split, comparator,
   const nBlocks = divCeil(n, blockSize);
 
   // create the arrays that drive the counting and distributing process
-  var localState:[0..<nTasks] owned PerTaskState?;
-  coforall i in 0..<nTasks {
-    localState[i] = new PerTaskState(nBuckets);
-  }
+  const tasksDom = blockDist.createDomain({0..<nTasks}, targetLocales=locales);
+  var localState:[tasksDom] owned PerTaskState =
+    forall i in tasksDom do new PerTaskState(nBuckets);
 
   // globalCounts stores counts like this:
   //   count for bin 0, task 0
@@ -496,21 +502,26 @@ proc partition(const Input, ref Output, split, comparator,
   //   count for bin 1, task 0
   //   count for bin 1, task 1
   // i.e. bin*nTasks + taskId
-  var globalCounts:[0..<countsSize] int;
+  const globalCountsDom = blockDist.createDomain({0..<countsSize},
+                                                 targetLocales=locales);
+  var globalCounts:[globalCountsDom] int;
 
   // Step 1: Count
-  coforall tid in 0..<nTasks {
+  forall (locState,tid) in zip(localState,tasksDom) {
     var taskStart = start + tid * blockSize;
     var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
 
-    ref counts = localState[tid]!.localCounts;
-    for bin in 0..<nBuckets {
+    ref counts = locState.localCounts;
+    foreach bin in 0..<nBuckets {
       counts[bin] = 0;
     }
 
+    // this loop must really be serial. it can be run in parallel
+    // within the forall because it's updating state local to each task.
     for (_,bin) in split.classify(Input, taskStart, taskEnd, comparator) {
       counts[bin] += 1;
     }
+
     // Now store the counts into the global counts array
     foreach bin in 0..<nBuckets {
       globalCounts[bin*nTasks + tid] = counts[bin];
@@ -521,19 +532,22 @@ proc partition(const Input, ref Output, split, comparator,
   const globalEnds = + scan globalCounts;
 
   // Step 3: Distribute
-  coforall tid in 0..<nTasks {
+  forall (locState,tid) in zip(localState,tasksDom) {
     var taskStart = start + tid * blockSize;
     var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
 
-    ref nextOffsets = localState[tid]!.localCounts;
+    ref nextOffsets = locState.localCounts;
     // initialize nextOffsets
-    for bin in 0..<nBuckets {
+    foreach bin in 0..<nBuckets {
       var globalBin = bin*nTasks+tid;
       nextOffsets[bin] = if globalBin > 0
                          then start+globalEnds[globalBin-1]
                          else start;
     }
 
+    // as above,
+    // this loop must really be serial. it can be run in parallel
+    // within the forall because it's updating state local to each task.
     for (elt,bin) in split.classify(Input, taskStart, taskEnd, comparator) {
       // Store it in the right bin
       ref next = nextOffsets[bin];
@@ -543,8 +557,10 @@ proc partition(const Input, ref Output, split, comparator,
   }
 
   // Compute the total counts to return them
-  var counts:[0..<nBuckets] int;
-  forall bin in 0..<nBuckets {
+  const countsDom = blockDist.createDomain({0..<nBuckets},
+                                           targetLocales=locales);
+  var counts:[countsDom] int;
+  forall (c,bin) in zip(counts,countsDom) {
     var total = 0;
     for tid in 0..<nTasks {
       total += globalCounts[bin*nTasks + tid];
