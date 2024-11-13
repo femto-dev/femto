@@ -921,12 +921,13 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
                          howSorted=sortLevel.unsorted);
     }
 
+    const replSp = replicateSplitters(sp, cfg.locales);
     const SampleDom = blockDist.createDomain({0..<sampleN},
                                              targetLocales=cfg.locales);
     var Sample: [SampleDom] offsetAndCachedT(offsetType, cachedDataType);
 
     // now, count & partition by the prefix by traversing over the input
-    const Counts = partition(InputProducer, Sample, sp, comparator,
+    const Counts = partition(InputProducer, Sample, replSp, comparator,
                              start=0, end=sampleN-1,
                              locales=cfg.locales, nTasks);
 
@@ -946,21 +947,22 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
                                          + reduce countBucketsConsidered) {
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
+      const ref mySp = localSplitter(replSp);
 
       // skip empty buckets and buckets with equal elements
-      if bucketSize > 1 && !sp.bucketHasEqualityBound(bucketIdx) {
+      if bucketSize > 1 && !mySp.bucketHasEqualityBound(bucketIdx) {
         // note statistics
         minBucketSize reduce= bucketSize;
         maxBucketSize reduce= bucketSize;
         sumBucketSizes += bucketSize;
         countBucketsConsidered += 1;
 
-        if sp.bucketHasLowerBound(bucketIdx) &&
-           sp.bucketHasUpperBound(bucketIdx) {
+        if mySp.bucketHasLowerBound(bucketIdx) &&
+           mySp.bucketHasUpperBound(bucketIdx) {
           sortSuffixesByPrefixBounded(cfg, thetext, n=n,
                                       Sample, bucketStart..bucketEnd,
-                                      sp.bucketLowerBound(bucketIdx),
-                                      sp.bucketUpperBound(bucketIdx),
+                                      mySp.bucketLowerBound(bucketIdx),
+                                      mySp.bucketUpperBound(bucketIdx),
                                       maxPrefix=coverPrefix);
         } else {
           sortSuffixesByPrefix(cfg, thetext, n=n,
@@ -1288,7 +1290,8 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     const unusedComparator = new finalComparator();
     const subTasks = computeNumTasks();
     const sp = new phaseSplitter();
-    const Counts = partition(A, B, sp, unusedComparator,
+    const rsp = replicateSplitters(sp, [here]);
+    const Counts = partition(A, B, rsp, unusedComparator,
                              start=region.low, end=region.high,
                              locales=[here], nTasks=subTasks);
 
@@ -1393,6 +1396,11 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
   // figure out how big the sample will be, including a 0 after each mod
   const charsPerMod = 1+myDivCeil(n, cover.period);
   const sampleN = cover.sampleSize * charsPerMod;
+
+  if !isDistributedDomain(thetext.domain) && isDistributedDomain(resultDom) &&
+     resultDom.targetLocales().size > 1 {
+    writeln("warning: thetext not distributed but result is");
+  }
 
   if TIMING {
     writeln("begin ssortDcx n=", n);
@@ -1633,10 +1641,12 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                                        comparator,
                                        howSorted=sortLevel.approximately);
     } else {
-       SampleSplitters2 = new splitters([unusedSplitter, unusedSplitter],
-                                        false); // dummy to support split init
+      // this case is for !PARTITION_SORT_ALL
+      SampleSplitters2 = new splitters([unusedSplitter, unusedSplitter],
+                                       false); // dummy to support split init
     }
   } else {
+    // this case is for allSamplesHaveUniqueRanks==true.
     // No need to recurse if all offsets had unique Ranks
     // i.e. each character in SampleText occurs only once
     // i.e. each character in SampleText is already the rank
@@ -1720,10 +1730,12 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     const ref SampleSplitters = if allSamplesHaveUniqueRanks
                                 then SampleSplitters1
                                 else SampleSplitters2;
+    const ReplSampleSplitters = replicateSplitters(SampleSplitters,
+                                                   cfg.locales);
 
     //writeln("SampleSplitters is ", SampleSplitters.sortedStorage);
 
-    const Counts = partition(InputProducer, SA, SampleSplitters, comparator,
+    const Counts = partition(InputProducer, SA, ReplSampleSplitters, comparator,
                              start=0, end=n-1,
                              locales=cfg.locales, nTasks);
 
@@ -1756,22 +1768,24 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                                          + reduce countBucketsConsidered) {
       const bucketStart = Ends[bucketIdx] - bucketSize;
       const bucketEnd = bucketStart + bucketSize - 1;
+      const ref MySampleSplitters = localSplitter(ReplSampleSplitters);
 
-      if bucketSize > 1 && !SampleSplitters.bucketHasEqualityBound(bucketIdx) {
+      if bucketSize > 1 && !MySampleSplitters.bucketHasEqualityBound(bucketIdx)
+      {
         // note statistics
         minBucketSize reduce= bucketSize;
         maxBucketSize reduce= bucketSize;
         sumBucketSizes += bucketSize;
         countBucketsConsidered += 1;
 
-        if SampleSplitters.bucketHasLowerBound(bucketIdx) &&
-           SampleSplitters.bucketHasUpperBound(bucketIdx) {
+        if MySampleSplitters.bucketHasLowerBound(bucketIdx) &&
+           MySampleSplitters.bucketHasUpperBound(bucketIdx) {
           sortSuffixesCompletelyBounded(
                                  cfg, thetext, n=n,
                                  SampleText, charsPerMod,
                                  SA, bucketStart..bucketEnd,
-                                 SampleSplitters.bucketLowerBound(bucketIdx),
-                                 SampleSplitters.bucketUpperBound(bucketIdx));
+                                 MySampleSplitters.bucketLowerBound(bucketIdx),
+                                 MySampleSplitters.bucketUpperBound(bucketIdx));
         } else {
           sortSuffixesCompletely(cfg, thetext, n=n,
                                  SampleText, charsPerMod,

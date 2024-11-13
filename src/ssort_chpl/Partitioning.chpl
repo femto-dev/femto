@@ -31,6 +31,7 @@ import Sort.{sort, DefaultComparator, keyPartStatus};
 import Math.{log2, divCeil};
 import CTypes.c_array;
 import BlockDist.blockDist;
+import ReplicatedDist.replicatedDist;
 
 // These settings control the sample sort and classification process
 param classifyUnrollFactor = 7;
@@ -189,6 +190,11 @@ record splitters : writeSerializable {
   var storage: [0..<myNumBuckets] eltType;
   // filled from 0..myNumBuckets-2; myNumBuckets-1 is a duplicate of previous
   var sortedStorage: [0..<myNumBuckets] eltType;
+
+  proc init(type eltType) {
+    // default init, creates invalid splitters, but useful for replicating
+    this.eltType = eltType;
+  }
 
   // Create splitters based on some precomputed, already sorted splitters
   // useSplitters needs to be of size 2**n and the last element will
@@ -412,6 +418,32 @@ record splitters : writeSerializable {
   }
 } // end record splitters
 
+class ReplicatedWrapper {
+  var x;
+}
+
+/* helper that returns a replicated array of splitters.
+   'sp' is normally a 'record splitters'. */
+proc replicateSplitters(sp, locales: []) {
+  const DomOne = {1..1};
+  const ReplDom = DomOne dmapped new replicatedDist();
+  var Result: [ReplDom] owned ReplicatedWrapper(sp.type)?;
+
+  // now set the replicand on each Locale
+  coforall loc in locales {
+    on loc {
+      Result[1] = new ReplicatedWrapper(sp);
+    }
+  }
+
+  return Result;
+}
+
+/* helper that return the current splitter */
+proc localSplitter(replicatedSplitters: []) const ref {
+  return replicatedSplitters[1]!.x;
+}
+
 class PerTaskState {
   var nBuckets: int;
   var localCounts: [0..<nBuckets] int;
@@ -431,6 +463,9 @@ class PerTaskState {
    ended up in each bucket.
 
    This is done in parallel.
+
+   'split' should be the result of 'replicateSplitters' called on
+   either 'record splitters' or something else that behaves similarly to it.
 
    If equality buckets are not in use:
      Bucket 0 consists of elts with
@@ -467,23 +502,31 @@ class PerTaskState {
        split.sortedSplitter((numBuckets-2)/2) < elts
 
  */
-proc partition(const Input, ref Output, split, comparator,
+proc partition(const Input, ref Output, rsplit, comparator,
                start: int, end: int,
-               locales = [here],
+               locales,
                nTasks: int = locales.size * computeNumTasks()) {
 
   //writeln("partition with locales=", locales, " nTasks=", nTasks);
 
-  // check that the splitters are sorted according to comparator
-  if EXTRA_CHECKS && isSubtype(split.type,splitters) {
-    assert(isSorted(split.sortedStorage[0..<split.myNumBuckets-1], comparator));
-  }
-
   // check that nTasks is reasonable. It should have a task per locale in use.
   assert(locales.size <= nTasks);
 
-  const nBuckets = split.numBuckets;
+  const nBuckets; // set below
   const n = end - start + 1;
+
+  {
+    // access the local replicand to do some checking and get # buckets
+    const ref split = localSplitter(rsplit);
+    nBuckets = split.numBuckets;
+
+    // check that the splitters are sorted according to comparator
+    if EXTRA_CHECKS && isSubtype(split.type,splitters) {
+      assert(isSorted(split.sortedStorage[0..<split.myNumBuckets-1],
+                      comparator));
+    }
+  }
+
 
   // Divide the input into nTasks chunks.
   const countsSize = nTasks * nBuckets;
@@ -510,6 +553,8 @@ proc partition(const Input, ref Output, split, comparator,
   forall (locState,tid) in zip(localState,tasksDom) {
     var taskStart = start + tid * blockSize;
     var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
+    // get the local replicand
+    const ref split = localSplitter(rsplit);
 
     ref counts = locState.localCounts;
     foreach bin in 0..<nBuckets {
@@ -535,6 +580,8 @@ proc partition(const Input, ref Output, split, comparator,
   forall (locState,tid) in zip(localState,tasksDom) {
     var taskStart = start + tid * blockSize;
     var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
+    // get the local replicand
+    const ref split = localSplitter(rsplit);
 
     ref nextOffsets = locState.localCounts;
     // initialize nextOffsets
