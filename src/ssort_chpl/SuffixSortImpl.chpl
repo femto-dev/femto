@@ -1312,13 +1312,6 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     // partition by putting sample offsets in bucket 0
     // and each nonsample offset in its own bucket.
 
-    record offsetProducer2 {
-      proc eltType type do return cfg.offsetType;
-      proc this(i) {
-        return offset(A[i]);
-      }
-    }
-
     // help to distribute into buckets, bucket 0 has all sample positions,
     // other than that, they are sorted by mod cover.period
     record phaseSplitter {
@@ -1355,14 +1348,13 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
 
     // destination for partitioning
     // this is a non-distributed (local) array even if A is distributed
-    var B:[region] cfg.offsetType;
+    var B:[region] A.eltType;
 
-    const OffsetProducer = new offsetProducer2();
     const unusedComparator = new finalComparator();
     const subTasks = computeNumTasks();
     const sp = new phaseSplitter();
     const rsp = none;
-    const Counts = partition(OffsetProducer, B, sp, rsp, unusedComparator,
+    const Counts = partition(A, B, sp, rsp, unusedComparator,
                              start=region.low, end=region.high,
                              locales=none, nTasks=subTasks);
 
@@ -1373,24 +1365,6 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     if TIMING {
       partitionTimer.stop();
       partitionTime = partitionTimer.elapsed();
-    }
-
-    var lookupTimer : Time.stopwatch;
-    if TIMING {
-      lookupTimer.start();
-    }
-
-    // now lookup the data to avoid lookups in the sort/merge
-    type prefixAndSampleRanksType =
-      makePrefixAndSampleRanks(cfg, 0, thetext, n,
-                               SampleRanks, charsPerMod).type;
-    var C:[region] prefixAndSampleRanksType =
-      forall off in B do makePrefixAndSampleRanks(cfg, off, thetext, n,
-                                                  SampleRanks, charsPerMod);
-
-    if TIMING {
-      lookupTimer.stop();
-      lookupTime = lookupTimer.elapsed();
     }
 
     //writeln("Sorting buckets");
@@ -1409,7 +1383,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
 
       if bucketSize > 0 && bucketIdx < cover.period {
         // sort the bucket data, which is currently in B
-        sortRegion(C, new phaseComparator(bucketIdx),
+        sortRegion(B, new phaseComparator(bucketIdx),
                    region=bucketStart..bucketEnd);
         nNonZero += 1;
       }
@@ -1442,7 +1416,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     }
 
     // do the serial multi-way merging from B back into A
-    multiWayMerge(C, InputRanges, A, region, new finalComparator());
+    multiWayMerge(B, InputRanges, A, region, new finalComparator());
 
     if TIMING {
       mergeTimer.stop();
