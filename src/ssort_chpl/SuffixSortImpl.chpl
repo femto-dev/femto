@@ -22,13 +22,14 @@ module SuffixSortImpl {
 
 use DifferenceCovers;
 use Partitioning;
-import Utility.{computeNumTasks,makeBlockDomain};
+import Utility.{computeNumTasks,makeBlockDomain,makeReplicatedArray};
 
 use BlockDist;
 use Math;
 use IO;
 use Sort;
-import Random;
+use Random; // 'use' (vs 'import') to work around an error about
+            // PCGRandomPrivate_iterate_bounded
 import BitOps;
 import Reflection;
 import CTypes.c_sizeof;
@@ -923,8 +924,8 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
       var SplittersSample:[SplittersSampleDom] prefixType;
       // TODO: this could be a forall loop, but running into
       // some kind of error about PCGRandomPrivate_iterate_bounded
-      for (x, r) in zip(SplittersSample,
-                        randNums.next(SplittersSampleDom, 0, sampleN-1)) {
+      forall (x, r) in zip(SplittersSample,
+                           randNums.next(SplittersSampleDom, 0, sampleN-1)) {
         // r is a packed index into the offsets to sample
         // we have to unpack it to get the regular offset
         const whichPeriod = r / cover.sampleSize;
@@ -1756,6 +1757,18 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                                      false); // dummy to support split init
   }
 
+  var replicate : Time.stopwatch;
+  if TIMING {
+    replicate.start();
+  }
+  const RepSampleRanks =
+    makeReplicatedArray(SampleText,targetLocales=cfg.locales);
+  if TIMING {
+    replicate.stop();
+    writeln("replicate in ", replicate.elapsed(), " s");
+  }
+
+
   var post : Time.stopwatch;
   if TIMING {
     post.start();
@@ -1777,7 +1790,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
 
     var partitionTime, lookupTime, sortEachNonsampleTime, mergeTime: real;
 
-    sortSuffixesCompletely(cfg, thetext, n=n, SampleText, charsPerMod,
+    sortSuffixesCompletely(cfg, thetext, n=n, RepSampleRanks, charsPerMod,
                            SA, 0..<n,
                            partitionTime, lookupTime,
                            sortEachNonsampleTime, mergeTime);
@@ -1819,7 +1832,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
         }
         // if the prefixes are the same, compare the nearby sample
         // rank from the recursive subproblem.
-        return compareSampleRanks(a, b, n, SampleText, charsPerMod, cover);
+        return compareSampleRanks(a, b, n, RepSampleRanks, charsPerMod, cover);
       }
     }
 
@@ -1846,7 +1859,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                              start=0, end=n-1,
                              locales=cfg.locales, nTasks);
 
-    //writeln("final sort ranks are ", SampleText[0..<sampleN]);
+    //writeln("final sort ranks are ", RepSampleRanks[0..<sampleN]);
     //writeln("final sort after partition SA is ", SA);
 
     const Ends = + scan Counts;
@@ -1924,14 +1937,14 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
 
           sortSuffixesCompletelyBounded(
                                  cfg, thetext, n=n,
-                                 SampleText, charsPerMod,
+                                 RepSampleRanks, charsPerMod,
                                  SA, bucketStart..bucketEnd,
                                  lowerBound, upperBound, nCharsCommon,
                                  myPartitionTime, myLookupTime,
                                  mySortEachNonsampleTime, myMergeTime);
         } else {
           sortSuffixesCompletely(cfg, thetext, n=n,
-                                 SampleText, charsPerMod,
+                                 RepSampleRanks, charsPerMod,
                                  SA, bucketStart..bucketEnd,
                                  myPartitionTime, myLookupTime,
                                  mySortEachNonsampleTime, myMergeTime);

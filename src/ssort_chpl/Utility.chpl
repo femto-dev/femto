@@ -29,6 +29,7 @@ import OS.EofError;
 import Path;
 import Sort.{sort,isSorted};
 import BlockDist.blockDist;
+import ReplicatedDist.replicatedDist;
 import ChplConfig.CHPL_COMM;
 
 import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING, DISTRIBUTE_EVEN_WITH_COMM_NONE};
@@ -71,6 +72,27 @@ proc makeBlockDomain(dom, targetLocales) {
     return dom;
   }
 }
+
+/* Replicate an array */
+proc makeReplicatedArray(in inArray: [ ], targetLocales) {
+  if maybeDistributed() && targetLocales.type != nothing {
+    const MyDom = inArray.domain;
+    const ReplDom = MyDom dmapped new replicatedDist();
+    var Result: [ReplDom] inArray.eltType;
+
+    // now set the replicand on each Locale
+    coforall loc in targetLocales {
+      on loc {
+        Result = inArray;
+      }
+    }
+
+    return Result;
+  } else {
+    return inArray;
+  }
+}
+
 
 /* This function gives the size of an array of triangular indices
    for use with flattenTriangular.
