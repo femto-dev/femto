@@ -647,7 +647,7 @@ proc partition(const Input, ref Output, split, rsplit, comparator,
    */
 proc multiWayMerge(Input: [] ?eltType,
                    InputRanges: [] range,
-                   ref Output: [] eltType,
+                   ref Output: [] ?outEltType,
                    outputRange: range,
                    comparator,
                    type readEltType=eltType) {
@@ -658,7 +658,7 @@ proc multiWayMerge(Input: [] ?eltType,
     var pos = outputRange.low;
     for r in InputRanges {
       for i in r {
-        Output[pos] = Input[i];
+        Output[pos] = Input[i]:outEltType;
         pos += 1;
       }
     }
@@ -820,7 +820,7 @@ proc multiWayMerge(Input: [] ?eltType,
 
     // output the champion
     //writeln("outputting ", ExternalNodes[championAddr]);
-    Output[outPos] = ExternalNodes[championAddr] : eltType;
+    Output[outPos] = ExternalNodes[championAddr] : outEltType;
     outPos += 1;
 
     // input the new value
