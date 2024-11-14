@@ -1763,6 +1763,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
   }
   const RepSampleRanks =
     makeReplicatedArray(SampleText,targetLocales=cfg.locales);
+  const RepTheText =
+    makeReplicatedArray(thetext,targetLocales=cfg.locales);
   if TIMING {
     replicate.stop();
     writeln("replicate in ", replicate.elapsed(), " s");
@@ -1786,11 +1788,11 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     //writeln("simple sort");
 
     // simple sort of everything all together
-    var SA = buildAllOffsets(cfg, thetext, n, resultDom);
+    var SA = buildAllOffsets(cfg, RepTheText, n, resultDom);
 
     var partitionTime, lookupTime, sortEachNonsampleTime, mergeTime: real;
 
-    sortSuffixesCompletely(cfg, thetext, n=n, RepSampleRanks, charsPerMod,
+    sortSuffixesCompletely(cfg, RepTheText, n=n, RepSampleRanks, charsPerMod,
                            SA, 0..<n,
                            partitionTime, lookupTime,
                            sortEachNonsampleTime, mergeTime);
@@ -1810,7 +1812,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     record offsetProducer2 {
       proc eltType type do return offsetAndCachedT(offsetType, cachedDataType);
       proc this(i: offsetType) {
-        const ret = makeOffsetAndCached(cfg, i, thetext, n);
+        const ret = makeOffsetAndCached(cfg, i, RepTheText, n);
         //writeln("offsetProducer2(", i, ") generated ", ret);
         return ret;
       }
@@ -1819,14 +1821,14 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     record finalPartitionComparator : relativeComparator {
       // note: this one should just be used for EXTRA_CHECKS
       proc compare(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?)) {
-        return comparePrefixAndSampleRanks(cfg, a, b, thetext, n, coverPrefix);
+        return comparePrefixAndSampleRanks(cfg, a, b, RepTheText, n, coverPrefix);
       }
       // this is the main compare function used in the partition
       proc compare(a: prefixAndSampleRanks(?), b) {
         // b integral or offsetAndCached
 
         // first, compare the first cover.period characters of text
-        const prefixCmp = comparePrefixes(cfg, a, b, thetext, n, coverPrefix);
+        const prefixCmp = comparePrefixes(cfg, a, b, RepTheText, n, coverPrefix);
         if prefixCmp != 0 {
           return prefixCmp;
         }
@@ -1936,14 +1938,14 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
           countBucketsWithCommon += 1;
 
           sortSuffixesCompletelyBounded(
-                                 cfg, thetext, n=n,
+                                 cfg, RepTheText, n=n,
                                  RepSampleRanks, charsPerMod,
                                  SA, bucketStart..bucketEnd,
                                  lowerBound, upperBound, nCharsCommon,
                                  myPartitionTime, myLookupTime,
                                  mySortEachNonsampleTime, myMergeTime);
         } else {
-          sortSuffixesCompletely(cfg, thetext, n=n,
+          sortSuffixesCompletely(cfg, RepTheText, n=n,
                                  RepSampleRanks, charsPerMod,
                                  SA, bucketStart..bucketEnd,
                                  myPartitionTime, myLookupTime,
