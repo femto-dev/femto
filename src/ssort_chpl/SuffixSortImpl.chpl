@@ -211,6 +211,25 @@ inline proc offset(a: prefixAndSampleRanks(?)) {
   return a.offset;
 }
 
+// these casts from prefixAndSampleRanks help with multiWayMerge
+operator :(x: prefixAndSampleRanks(?), type t:x.offsetType) {
+  return offset(x);
+}
+operator :(x: prefixAndSampleRanks(?),
+           type t:offsetAndCached(x.offsetType,nothing)) {
+  return new offsetAndCached(offsetType=x.offsetType,
+                             cacheType=nothing,
+                             offset=offset(x),
+                             cached=none);
+}
+operator :(x: prefixAndSampleRanks(?),
+           type t:offsetAndCached(x.offsetType,x.wordType)) {
+  return new offsetAndCached(offsetType=x.offsetType,
+                             cacheType=x.wordType,
+                             offset=offset(x),
+                             cached=x.words[0]);
+}
+
 
 /**
   Read a "word" of data from 'text' character index 'i'.
@@ -362,8 +381,7 @@ proc makePrefix(const cfg: ssortConfig(?), offset: cfg.offsetType,
 proc makePrefixAndSampleRanks(const cfg: ssortConfig(?),
                               offset: cfg.offsetType,
                               const text, n: cfg.offsetType,
-                              sampleOffset: cfg.offsetType,
-                              const Ranks, ranksN: cfg.offsetType,
+                              const Ranks,
                               charsPerMod: cfg.offsetType) {
   const ref cover = cfg.cover;
   // compute the type information for creating a prefix
@@ -1155,6 +1173,38 @@ proc compareSampleRanks(a: prefixAndSampleRanks(?), b,
   return compareIntegers(rankA, rankB);
 }
 
+proc compareSampleRanks(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?),
+                        n: integral, const SampleRanks, charsPerMod, cover) {
+  // find k such that a.offset+k and b.offset+k are both in the cover
+  // (i.e. both are in the sample solved in the recursive problem)
+  const k = cover.findInCover(offset(a) % cover.period,
+                              offset(b) % cover.period);
+  const aj = cover.nextCoverIndex(offset(a) % cover.period);
+  const bj = cover.nextCoverIndex(offset(b) % cover.period);
+  // a + k and a + aj are both in the cover
+  // a + aj is the offset which represents the first cover position here
+  const aPlusKCoverIdx = cover.coverIndex((offset(a) + k) % cover.period);
+  const aPlusJCoverIdx = cover.coverIndex((offset(a) + aj) % cover.period);
+  var aRankIdx = aPlusKCoverIdx - aPlusJCoverIdx;
+  if aRankIdx < 0 then aRankIdx += cover.sampleSize;
+
+  const bPlusKCoverIdx = cover.coverIndex((offset(b) + k) % cover.period);
+  const bPlusJCoverIdx = cover.coverIndex((offset(b) + bj) % cover.period);
+  var bRankIdx = bPlusKCoverIdx - bPlusJCoverIdx;
+  if bRankIdx < 0 then bRankIdx += cover.sampleSize;
+
+  const rankA = a.ranks[aRankIdx];
+  const rankB = b.ranks[bRankIdx];
+
+  const cmp = compareEndOfString(offset(a) + k, offset(b) + k, n);
+  if cmp != 0 {
+    return cmp;
+  }
+
+  return compareIntegers(rankA, rankB);
+}
+
+
 /* Sort suffixes by prefix and by the sample ranks.
    This puts them into final sorted order when computing the suffix array.
    Sorts only A[region].
@@ -1170,6 +1220,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
                               const nCharsCommon,
                               // these are for gathering timing data
                               out partitionTime:real,
+                              out lookupTime:real,
                               out sortEachNonsampleTime:real,
                               out mergeTime:real) {
   type wordType = cfg.loadWordType;
@@ -1238,9 +1289,14 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
       }
       if i == this.nPrefixWords {
         // compare the sample rank
-        const sampleOffset = offsetToSubproblemOffset(offset(a) + k,
-                                                      cover, charsPerMod);
-        const rank = SampleRanks[sampleOffset];
+        const rank;
+        if isSubtype(a.type, prefixAndSampleRanks) {
+          rank = a.ranks[0];
+        } else {
+          const sampleOffset = offsetToSubproblemOffset(offset(a) + k,
+                                                        cover, charsPerMod);
+          rank = SampleRanks[sampleOffset];
+        }
         return (keyPartStatus.returned, rank:wordType);
       }
 
@@ -1256,11 +1312,14 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     // partition by putting sample offsets in bucket 0
     // and each nonsample offset in its own bucket.
 
-    // destination for partitioning
-    // this is a non-distributed (local) array even if A is distributed
-    var B:[region] A.eltType;
+    record offsetProducer2 {
+      proc eltType type do return cfg.offsetType;
+      proc this(i) {
+        return offset(A[i]);
+      }
+    }
 
-    // distribute into buckets, bucket 0 has all sample positions,
+    // help to distribute into buckets, bucket 0 has all sample positions,
     // other than that, they are sorted by mod cover.period
     record phaseSplitter {
       proc numBuckets param {
@@ -1294,11 +1353,16 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
       partitionTimer.start();
     }
 
+    // destination for partitioning
+    // this is a non-distributed (local) array even if A is distributed
+    var B:[region] cfg.offsetType;
+
+    const OffsetProducer = new offsetProducer2();
     const unusedComparator = new finalComparator();
     const subTasks = computeNumTasks();
     const sp = new phaseSplitter();
     const rsp = none;
-    const Counts = partition(A, B, sp, rsp, unusedComparator,
+    const Counts = partition(OffsetProducer, B, sp, rsp, unusedComparator,
                              start=region.low, end=region.high,
                              locales=none, nTasks=subTasks);
 
@@ -1309,6 +1373,24 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     if TIMING {
       partitionTimer.stop();
       partitionTime = partitionTimer.elapsed();
+    }
+
+    var lookupTimer : Time.stopwatch;
+    if TIMING {
+      lookupTimer.start();
+    }
+
+    // now lookup the data to avoid lookups in the sort/merge
+    type prefixAndSampleRanksType =
+      makePrefixAndSampleRanks(cfg, 0, thetext, n,
+                               SampleRanks, charsPerMod).type;
+    var C:[region] prefixAndSampleRanksType =
+      forall off in B do makePrefixAndSampleRanks(cfg, off, thetext, n,
+                                                  SampleRanks, charsPerMod);
+
+    if TIMING {
+      lookupTimer.stop();
+      lookupTime = lookupTimer.elapsed();
     }
 
     //writeln("Sorting buckets");
@@ -1327,7 +1409,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
 
       if bucketSize > 0 && bucketIdx < cover.period {
         // sort the bucket data, which is currently in B
-        sortRegion(B, new phaseComparator(bucketIdx),
+        sortRegion(C, new phaseComparator(bucketIdx),
                    region=bucketStart..bucketEnd);
         nNonZero += 1;
       }
@@ -1360,7 +1442,7 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
     }
 
     // do the serial multi-way merging from B back into A
-    multiWayMerge(B, InputRanges, A, region, new finalComparator());
+    multiWayMerge(C, InputRanges, A, region, new finalComparator());
 
     if TIMING {
       mergeTimer.stop();
@@ -1376,12 +1458,14 @@ proc sortSuffixesCompletely(const cfg:ssortConfig(?),
                             region: range(?),
                             // these are for gathering timing data
                             out partitionTime:real,
+                            out lookupTime:real,
                             out sortEachNonsampleTime:real,
                             out mergeTime:real) {
 
   doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
                            A, region, nCharsCommon=0,
-                           partitionTime, sortEachNonsampleTime, mergeTime);
+                           partitionTime, lookupTime,
+                           sortEachNonsampleTime, mergeTime);
 }
 
 proc sortSuffixesCompletelyBounded(
@@ -1392,8 +1476,10 @@ proc sortSuffixesCompletelyBounded(
                             region: range(?),
                             const lowerBound: prefixAndSampleRanks(?),
                             const upperBound: prefixAndSampleRanks(?),
+                            const nCharsCommon: int,
                             // these are for gathering timing data
                             out partitionTime:real,
+                            out lookupTime:real,
                             out sortEachNonsampleTime:real,
                             out mergeTime:real) {
 
@@ -1401,22 +1487,20 @@ proc sortSuffixesCompletelyBounded(
   type cachedDataType = cfg.cachedDataType;
   param coverPrefix = cfg.getPrefixSize(cfg.cover.period);
 
-  // compute the number of characters in common between lowerBound and
-  // upperBound.
-  const nCharsCommon = charactersInCommon(cfg, lowerBound, upperBound);
-
   if nCharsCommon == 0 ||
      (cachedDataType != nothing &&
       numBits(characterType)*nCharsCommon < numBits(cachedDataType)) {
     doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
                              A, region, nCharsCommon=0,
-                             partitionTime, sortEachNonsampleTime, mergeTime);
+                             partitionTime, lookupTime,
+                             sortEachNonsampleTime, mergeTime);
     return;
   }
 
   doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
                            A, region, nCharsCommon=nCharsCommon,
-                           partitionTime, sortEachNonsampleTime, mergeTime);
+                           partitionTime, lookupTime,
+                           sortEachNonsampleTime, mergeTime);
 }
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
@@ -1512,16 +1596,17 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
 
   // create a sample splitters that can be replaced later
   var unusedSplitter = makePrefixAndSampleRanks(cfg, 0, thetext, n,
-                                                0, SampleText, sampleN,
-                                                charsPerMod);
+                                                SampleText, charsPerMod);
 
   // compute number of buckets for sample partition & after recursion partition
   const splitterSize = c_sizeof(unusedSplitter.type):int;
   var nTasks = computeNumTasks() * resultDom.targetLocales().size;
   var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks,
-                                MIN_BUCKETS_SPACE / splitterSize);
+                                MIN_BUCKETS_SPACE / splitterSize,
+                                sqrt(n):int);
 
   if TRACE {
+    writeln(" each prefixAndSampleRank is ", splitterSize, " bytes");
     writeln(" requesting ", requestedNumBuckets, " buckets");
     writeln(" nTasks is ", nTasks);
   }
@@ -1601,8 +1686,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
           // find the index in the parent problem.
           const off = subproblemOffsetToOffset(subOff, cover, charsPerMod);
           return makePrefixAndSampleRanks(cfg, off, thetext, n,
-                                          subOff, SampleText, sampleN,
-                                          charsPerMod);
+                                          SampleText, charsPerMod);
         }
       }
 
@@ -1667,8 +1751,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
           var off = subproblemOffsetToOffset(subOff, cover, charsPerMod);
 
           return makePrefixAndSampleRanks(cfg, off, thetext, n,
-                                          subOff, SampleText, sampleN,
-                                          charsPerMod);
+                                          SampleText, charsPerMod);
         }
       }
 
@@ -1718,11 +1801,12 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     // simple sort of everything all together
     var SA = buildAllOffsets(cfg, thetext, n, resultDom);
 
-    var partitionTime, sortEachNonsampleTime, mergeTime: real;
+    var partitionTime, lookupTime, sortEachNonsampleTime, mergeTime: real;
 
     sortSuffixesCompletely(cfg, thetext, n=n, SampleText, charsPerMod,
                            SA, 0..<n,
-                           partitionTime, sortEachNonsampleTime, mergeTime);
+                           partitionTime, lookupTime,
+                           sortEachNonsampleTime, mergeTime);
 
     //writeln("returning SA ", SA);
     return SA;
@@ -1810,7 +1894,12 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     var maxBucketSize = min(int);
     var sumBucketSizes = 0;
     var countBucketsConsidered = 0;
+    var minCommon = max(int);
+    var maxCommon = 0;
+    var sumCommon = 0;
+    var countBucketsWithCommon = 0;
     var partitionTime = 0.0;
+    var lookupTime = 0.0;
     var sortEachNonsampleTime = 0.0;
     var mergeTime = 0.0;
     forall (bucketSize, bucketIdx) in zip(Counts, Counts.domain)
@@ -1818,7 +1907,12 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                                          max reduce maxBucketSize,
                                          + reduce sumBucketSizes,
                                          + reduce countBucketsConsidered,
+                                         min reduce minCommon,
+                                         max reduce maxCommon,
+                                         + reduce sumCommon,
+                                         + reduce countBucketsWithCommon,
                                          + reduce partitionTime,
+                                         + reduce lookupTime,
                                          + reduce sortEachNonsampleTime,
                                          + reduce mergeTime) {
       const bucketStart = Ends[bucketIdx] - bucketSize;
@@ -1835,28 +1929,42 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
         countBucketsConsidered += 1;
 
         var myPartitionTime = 0.0;
+        var myLookupTime = 0.0;
         var mySortEachNonsampleTime = 0.0;
         var myMergeTime = 0.0;
 
         if MySampleSplitters.bucketHasLowerBound(bucketIdx) &&
            MySampleSplitters.bucketHasUpperBound(bucketIdx) {
+
+          const ref lowerBound = MySampleSplitters.bucketLowerBound(bucketIdx);
+          const ref upperBound = MySampleSplitters.bucketUpperBound(bucketIdx);
+          // compute the number of characters in common between lowerBound and
+          // upperBound.
+          const nCharsCommon = charactersInCommon(cfg, lowerBound, upperBound);
+
+          // note statistics
+          minCommon reduce= nCharsCommon;
+          maxCommon reduce= nCharsCommon;
+          sumCommon += nCharsCommon;
+          countBucketsWithCommon += 1;
+
           sortSuffixesCompletelyBounded(
                                  cfg, thetext, n=n,
                                  SampleText, charsPerMod,
                                  SA, bucketStart..bucketEnd,
-                                 MySampleSplitters.bucketLowerBound(bucketIdx),
-                                 MySampleSplitters.bucketUpperBound(bucketIdx),
-                                 myPartitionTime, mySortEachNonsampleTime,
-                                 myMergeTime);
+                                 lowerBound, upperBound, nCharsCommon,
+                                 myPartitionTime, myLookupTime,
+                                 mySortEachNonsampleTime, myMergeTime);
         } else {
           sortSuffixesCompletely(cfg, thetext, n=n,
                                  SampleText, charsPerMod,
                                  SA, bucketStart..bucketEnd,
-                                 myPartitionTime, mySortEachNonsampleTime,
-                                 myMergeTime);
+                                 myPartitionTime, myLookupTime,
+                                 mySortEachNonsampleTime, myMergeTime);
         }
 
         partitionTime += myPartitionTime;
+        lookupTime += myLookupTime;
         sortEachNonsampleTime += mySortEachNonsampleTime;
         mergeTime += myMergeTime;
       }
@@ -1869,6 +1977,7 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
       writeln("sortBuckets in ", sortBuckets.elapsed(), " s");
       writeln(" and inside that (adding times from all tasks)");
       writeln(" partitionTime ", partitionTime, " s");
+      writeln(" lookupTime ", lookupTime, " s");
       writeln(" sortEachNonsampleTime ", sortEachNonsampleTime, " s");
       writeln(" mergeTime ", mergeTime, " s");
     }
@@ -1879,6 +1988,11 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
               " min=", minBucketSize,
               " avg=", sumBucketSizes:real / countBucketsConsidered,
               " max=", maxBucketSize);
+      writeln(" bucket common prefix statistics for final sort",
+              " n=", countBucketsWithCommon,
+              " min=", minCommon,
+              " max=", maxCommon,
+              " avg=", sumCommon:real / countBucketsWithCommon);
     }
 
     //writeln("returning SA ", SA);
