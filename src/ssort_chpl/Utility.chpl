@@ -73,26 +73,72 @@ proc makeBlockDomain(dom, targetLocales) {
   }
 }
 
-/* Replicate an array */
-proc makeReplicatedArray(in inArray: [ ], targetLocales) {
-  if maybeDistributed() && targetLocales.type != nothing {
-    const MyDom = inArray.domain;
-    const ReplDom = MyDom dmapped new replicatedDist();
-    var Result: [ReplDom] inArray.eltType;
+class ReplicatedWrapper {
+  var x;
+}
 
-    // now set the replicand on each Locale
-    coforall loc in targetLocales {
-      on loc {
-        Result = inArray;
+proc replicate(in x, targetLocales) {
+  if maybeDistributed() && targetLocales.type != nothing {
+    var minIdV = max(int);
+    var maxIdV = min(int);
+    for loc in targetLocales {
+      minIdV = min(minIdV, loc.id);
+      maxIdV = max(maxIdV, loc.id);
+    }
+    const D = blockDist.createDomain({minIdV..maxIdV},
+                                     targetLocales=targetLocales);
+    var Result: [D] owned ReplicatedWrapper(x.type)?;
+
+    proc helpReplicate(from, i) {
+
+      // should already be on this locale...
+      assert(here == targetLocales[i]);
+
+      // create a local copy
+      Result[here.id] = new ReplicatedWrapper(from);
+      // get a reference to the copy we just created
+      const ref newFrom = Result[here.id]!.x;
+
+      // if 2*i is in the domain, replicate from Result[targetLocales[i].id]
+      // but skip this case for i == 0 to avoid infinite loop
+      if targetLocales.domain.contains(2*i) && i != 0 {
+        begin {
+          on targetLocales[2*i] {
+            helpReplicate(newFrom, 2*i);
+          }
+        }
+      }
+
+      // ditto for 2*i+1
+      if targetLocales.domain.contains(2*i+1) {
+        begin {
+          on targetLocales[2*i+1] {
+            helpReplicate(newFrom, 2*i+1);
+          }
+        }
+      }
+    }
+
+    sync {
+      if targetLocales.domain.contains(targetLocales.domain.low) {
+        helpReplicate(x, targetLocales.domain.low);
       }
     }
 
     return Result;
   } else {
-    return inArray;
+    return x;
   }
 }
 
+proc getLocalReplicand(replicated, targetLocales) const ref {
+  if maybeDistributed() && targetLocales.type != nothing {
+    return replicated.localAccess[here.id]!.x;
+  } else {
+    // return the value, which was copied to 'replicated'
+    return replicated;
+  }
+}
 
 /* This function gives the size of an array of triangular indices
    for use with flattenTriangular.

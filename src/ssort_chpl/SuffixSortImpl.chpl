@@ -22,7 +22,7 @@ module SuffixSortImpl {
 
 use DifferenceCovers;
 use Partitioning;
-import Utility.{computeNumTasks,makeBlockDomain,makeReplicatedArray};
+import Utility.{computeNumTasks,makeBlockDomain,replicate,getLocalReplicand};
 
 use BlockDist;
 use Math;
@@ -44,16 +44,6 @@ import SuffixSort.INPUT_PADDING;
 // how much more should we sample to create splitters?
 // 1.0 would be only to sample enough for the splitters
 config const sampleRatio = 1.5;
-config const partitionSortSample = true;
-
-// use a partition-based sorting startegy for improved parallelism
-// and memory usage
-config const partitionSortAll = true;
-
-// if this is set, separately sort each nonsample, and do k-way merge.
-// this should be faster for large problem sizes since the merge step
-// depends on the cover size rather than log n.
-config const improvedSortAll = true;
 
 config const seed = 1;
 config const minBucketsPerTask = 8;
@@ -61,12 +51,19 @@ config const minBucketsSpace = 2_000_000; // a size in bytes
 
 // upper-case names for the config constants to better identify them in code
 const SAMPLE_RATIO = sampleRatio;
-const PARTITION_SORT_SAMPLE = partitionSortSample;
-const PARTITION_SORT_ALL = partitionSortAll;
-const IMPROVED_SORT_ALL = improvedSortAll;
 const SEED = seed;
 const MIN_BUCKETS_PER_TASK = minBucketsPerTask;
 const MIN_BUCKETS_SPACE = minBucketsSpace;
+
+// use a partition-based sorting startegy for improved parallelism
+// and memory usage
+config param PARTITION_SORT_ALL = true;
+// and also for sorting the sample by the first characters
+config param PARTITION_SORT_SAMPLE = true;
+// if this is set, separately sort each nonsample, and do k-way merge.
+// this should be faster for large problem sizes since the merge step
+// depends on the cover size rather than log n.
+config param IMPROVED_SORT_ALL = true;
 
 
 /**
@@ -1757,17 +1754,15 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                                      false); // dummy to support split init
   }
 
-  var replicate : Time.stopwatch;
+  var replicateTimer : Time.stopwatch;
   if TIMING {
-    replicate.start();
+    replicateTimer.start();
   }
-  const RepSampleRanks =
-    makeReplicatedArray(SampleText,targetLocales=cfg.locales);
-  const RepTheText =
-    makeReplicatedArray(thetext,targetLocales=cfg.locales);
+  const RepSampleRanks = replicate(SampleText, targetLocales=cfg.locales);
+  const RepTheText = replicate(thetext, targetLocales=cfg.locales);
   if TIMING {
-    replicate.stop();
-    writeln("replicate in ", replicate.elapsed(), " s");
+    replicateTimer.stop();
+    writeln("replicate in ", replicateTimer.elapsed(), " s");
   }
 
 
@@ -1788,11 +1783,11 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     //writeln("simple sort");
 
     // simple sort of everything all together
-    var SA = buildAllOffsets(cfg, RepTheText, n, resultDom);
+    var SA = buildAllOffsets(cfg, thetext, n, resultDom);
 
     var partitionTime, lookupTime, sortEachNonsampleTime, mergeTime: real;
 
-    sortSuffixesCompletely(cfg, RepTheText, n=n, RepSampleRanks, charsPerMod,
+    sortSuffixesCompletely(cfg, thetext, n=n, RepSampleRanks, charsPerMod,
                            SA, 0..<n,
                            partitionTime, lookupTime,
                            sortEachNonsampleTime, mergeTime);
@@ -1812,7 +1807,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     record offsetProducer2 {
       proc eltType type do return offsetAndCachedT(offsetType, cachedDataType);
       proc this(i: offsetType) {
-        const ret = makeOffsetAndCached(cfg, i, RepTheText, n);
+        const ref localText = getLocalReplicand(RepTheText, cfg.locales);
+        const ret = makeOffsetAndCached(cfg, i, localText, n);
         //writeln("offsetProducer2(", i, ") generated ", ret);
         return ret;
       }
@@ -1821,20 +1817,23 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
     record finalPartitionComparator : relativeComparator {
       // note: this one should just be used for EXTRA_CHECKS
       proc compare(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?)) {
-        return comparePrefixAndSampleRanks(cfg, a, b, RepTheText, n, coverPrefix);
+        const ref localText = getLocalReplicand(RepTheText, cfg.locales);
+        return comparePrefixAndSampleRanks(cfg, a, b, localText, n, coverPrefix);
       }
       // this is the main compare function used in the partition
       proc compare(a: prefixAndSampleRanks(?), b) {
+        const ref localText = getLocalReplicand(RepTheText, cfg.locales);
         // b integral or offsetAndCached
 
         // first, compare the first cover.period characters of text
-        const prefixCmp = comparePrefixes(cfg, a, b, RepTheText, n, coverPrefix);
+        const prefixCmp = comparePrefixes(cfg, a, b, localText, n, coverPrefix);
         if prefixCmp != 0 {
           return prefixCmp;
         }
+        const ref localRanks = getLocalReplicand(RepSampleRanks, cfg.locales);
         // if the prefixes are the same, compare the nearby sample
         // rank from the recursive subproblem.
-        return compareSampleRanks(a, b, n, RepSampleRanks, charsPerMod, cover);
+        return compareSampleRanks(a, b, n, localRanks, charsPerMod, cover);
       }
     }
 
@@ -1922,6 +1921,9 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
         var mySortEachNonsampleTime = 0.0;
         var myMergeTime = 0.0;
 
+        const ref localText = getLocalReplicand(RepTheText, cfg.locales);
+        const ref localRanks = getLocalReplicand(RepSampleRanks, cfg.locales);
+
         if MySampleSplitters.bucketHasLowerBound(bucketIdx) &&
            MySampleSplitters.bucketHasUpperBound(bucketIdx) {
 
@@ -1938,15 +1940,15 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
           countBucketsWithCommon += 1;
 
           sortSuffixesCompletelyBounded(
-                                 cfg, RepTheText, n=n,
-                                 RepSampleRanks, charsPerMod,
+                                 cfg, localText, n=n,
+                                 localRanks, charsPerMod,
                                  SA, bucketStart..bucketEnd,
                                  lowerBound, upperBound, nCharsCommon,
                                  myPartitionTime, myLookupTime,
                                  mySortEachNonsampleTime, myMergeTime);
         } else {
-          sortSuffixesCompletely(cfg, RepTheText, n=n,
-                                 RepSampleRanks, charsPerMod,
+          sortSuffixesCompletely(cfg, localText, n=n,
+                                 localRanks, charsPerMod,
                                  SA, bucketStart..bucketEnd,
                                  myPartitionTime, myLookupTime,
                                  mySortEachNonsampleTime, myMergeTime);

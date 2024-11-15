@@ -417,7 +417,9 @@ record splitters : writeSerializable {
   }
 } // end record splitters
 
-class ReplicatedWrapper {
+// TODO: adjust this to use replicate()
+
+class ReplicatedSplittersWrapper {
   var x;
 }
 
@@ -429,12 +431,12 @@ proc replicateSplitters(sp, locales) {
   if maybeDistributed() && locales.type != nothing {
     const DomOne = {1..1};
     const ReplDom = DomOne dmapped new replicatedDist();
-    var Result: [ReplDom] owned ReplicatedWrapper(sp.type)?;
+    var Result: [ReplDom] owned ReplicatedSplittersWrapper(sp.type)?;
 
     // now set the replicand on each Locale
     coforall loc in locales {
       on loc {
-        Result[1] = new ReplicatedWrapper(sp);
+        Result[1] = new ReplicatedSplittersWrapper(sp);
       }
     }
 

@@ -175,6 +175,18 @@ proc testAtomicMinMax() {
   assert(amax.read() == n);
 }
 
+proc testReplicate() {
+  const v = "hello";
+  const rep = replicate(v, Locales);
+  coforall loc in Locales {
+    on loc {
+      const ref locv = getLocalReplicand(rep, Locales);
+      assert(locv.locale == here);
+      assert("hello" == locv);
+    }
+  }
+}
+
 proc main() throws {
   testTriangles();
   testBsearch();
@@ -184,6 +196,8 @@ proc main() throws {
     testAtomicMinMax();
   }
   testAtomicMinMax();
+
+  testReplicate();
 }
 
 
