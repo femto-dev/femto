@@ -140,10 +140,10 @@ proc offsetAndCachedT(type offsetType, type cacheType) type {
 
 
 /**
-  This record holds a whole record with a prefix.
-  This is useful for splitters.
+  This record holds a whole prefix of cover.period characters
+  packed into words.
 
-  It could store an offset as well but that isn't actually needed.
+  This is useful for splitters.
  */
 record prefix : writeSerializable {
   type wordType;
@@ -161,7 +161,7 @@ record prefix : writeSerializable {
 }
 
 /**
-  This record holds a whole record with a prefix and an offset.
+  This record holds a prefix and an offset.
  */
 record prefixAndOffset : writeSerializable {
   type wordType;
@@ -169,13 +169,13 @@ record prefixAndOffset : writeSerializable {
   param nWords;
 
   var offset: offsetType;
-  var words: nWords*wordType;
+  var p: prefix(wordType, nWords);
 
   // this function is a debugging aid
   proc serialize(writer, ref serializer) throws {
     writer.write(offset, "(");
     for i in 0..<nWords {
-      writer.writef("%016xu", words[i]);
+      writer.writef("%016xu", p.words[i]);
     }
     writer.write(")");
   }
@@ -193,7 +193,7 @@ record prefixAndSampleRanks : writeSerializable {
   param nRanks;
 
   var offset: offsetType;
-  var words: nWords*wordType;
+  var p: prefix(wordType, nWords);
   var ranks: nRanks*offsetType;
 
   // this function is a debugging aid
@@ -201,7 +201,7 @@ record prefixAndSampleRanks : writeSerializable {
     writer.write(offset);
     writer.write("(");
     for i in 0..<nWords {
-      writer.writef("%016xu", words[i]);
+      writer.writef("%016xu", p.words[i]);
     }
     writer.write("|");
     for i in 0..<nRanks {
@@ -372,11 +372,11 @@ inline proc makeOffsetAndCached(const cfg: ssortConfig(?),
   at least k characters.
  */
 proc makePrefix(const cfg: ssortConfig(?), offset: cfg.offsetType,
-                const text, n: cfg.offsetType,
-                param k = cfg.cover.period) {
+                const text, n: cfg.offsetType /*, param k = cfg.cover.period*/) {
   type characterType = cfg.characterType;
   type wordType = cfg.loadWordType;
   const ref cover = cfg.cover;
+  param k = cover.period;
   // how many words do we need in order to hold cover.period characters?
   param wordBytes = numBytes(wordType);
   param textCharBytes = numBytes(characterType);
@@ -405,8 +405,7 @@ proc makePrefix(const cfg: ssortConfig(?), offset: cfg.offsetType,
 }
 
 proc makePrefixAndOffset(const cfg: ssortConfig(?), offset: cfg.offsetType,
-                         const text, n: cfg.offsetType,
-                         param k = cfg.cover.period) {
+                         const text, n: cfg.offsetType) {
   type characterType = cfg.characterType;
   type wordType = cfg.loadWordType;
   const ref cover = cfg.cover;
@@ -416,21 +415,8 @@ proc makePrefixAndOffset(const cfg: ssortConfig(?), offset: cfg.offsetType,
   var result = new prefixAndOffset(wordType=wordType,
                                    offsetType=cfg.offsetType,
                                    nWords=nWords,
-                                   offset=offset);
-  // fill in the words
-  for i in 0..<nWords {
-    type idxType = text.idxType;
-    param eltsPerWord = numBytes(wordType) / numBytes(characterType);
-    const castOffset = offset:idxType;
-    const castI = i:idxType;
-    const idx = castOffset + castI*eltsPerWord;
-    if idx < n {
-      result.words[i] = loadWord(cfg, idx, text, n);
-    } else {
-      result.words[i] = 0;
-    }
-  }
-
+                                   offset=offset,
+                                   p=makePrefix(cfg, offset, text, n));
   return result;
 }
 
@@ -454,21 +440,8 @@ proc makePrefixAndSampleRanks(const cfg: ssortConfig(?),
                                         offsetType=cfg.offsetType,
                                         nWords=prefixType.nWords,
                                         nRanks=cover.sampleSize,
-                                        offset=offset);
-
-  // fill in the words
-  for i in 0..<result.nWords {
-    type idxType = text.idxType;
-    param eltsPerWord = numBytes(wordType) / numBytes(characterType);
-    const castOffset = offset:idxType;
-    const castI = i:idxType;
-    const idx = castOffset + castI*eltsPerWord;
-    if idx < n {
-      result.words[i] = loadWord(cfg, idx, text, n);
-    } else {
-      result.words[i] = 0;
-    }
-  }
+                                        offset=offset,
+                                        p=makePrefix(cfg, offset, text, n));
 
   // fill in the ranks
   const extendedN = charsPerMod * cover.period;
@@ -516,7 +489,7 @@ inline proc getKeyPartForPrefix(const p: prefix(?), i: integral) {
 // can be called from keyPart(prefix, i)
 inline proc getKeyPartForPrefix(const p: prefixAndOffset(?), i: integral) {
   if i < p.nWords {
-    return (keyPartStatus.returned, p.words[i]);
+    return (keyPartStatus.returned, p.p.words[i]);
   }
 
   // otherwise, return that we reached the end
@@ -526,7 +499,7 @@ inline proc getKeyPartForPrefix(const p: prefixAndOffset(?), i: integral) {
 // can be called from keyPart(prefix, i)
 inline proc getKeyPartForPrefix(const p: prefixAndSampleRanks(?), i: integral) {
   if i < p.nWords {
-    return (keyPartStatus.returned, p.words[i]);
+    return (keyPartStatus.returned, p.p.words[i]);
   }
 
   // otherwise, return that we reached the end
@@ -875,7 +848,14 @@ proc computeSuffixArrayDirectly(const cfg:ssortConfig(?),
 
   fixTrailingZeros(text, n, A);
 
-  return A;
+  if isIntegralType(A.eltType) {
+    return A;
+  }
+
+  // otherwise, convert cached type to int
+  const SAOffsets: [resultDom] cfg.offsetType =
+    forall elt in A do offset(elt);
+  return SAOffsets;
 }
 
 proc makeSampleOffset(const cfg: ssortConfig(?),
@@ -984,7 +964,7 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
     record offsetProducer1 {
       proc eltType type do return prefixAndOffsetType;
       proc this(i: offsetType) {
-        return makePrefixAndOffset(cfg, i, thetext, n);
+        return makeSampleOffset(cfg, i, thetext, n);
       }
     }
 
@@ -1211,8 +1191,9 @@ inline proc comparePrefixAndSampleRanks(const cfg: ssortConfig(?),
 
   a and b should be integral or offsetAndCached.
  */
-/*proc compareSampleRanks(a, b,
+proc compareSampleRanks(a, b,
                         n: integral, const SampleRanks, charsPerMod, cover) {
+  writeln("in testing-only compareSampleRanks");
   //writeln("compareSampleRanks(", a, ", ", b, ")");
 
   // find k such that a.offset+k and b.offset+k are both in the cover
@@ -1237,6 +1218,8 @@ inline proc comparePrefixAndSampleRanks(const cfg: ssortConfig(?),
 }
 proc compareSampleRanks(a: prefixAndSampleRanks(?), b,
                         n: integral, const SampleRanks, charsPerMod, cover) {
+  writeln("in testing-only compareSampleRanks2");
+
   // find k such that a.offset+k and b.offset+k are both in the cover
   // (i.e. both are in the sample solved in the recursive problem)
   const k = cover.findInCover(offset(a) % cover.period,
@@ -1258,7 +1241,7 @@ proc compareSampleRanks(a: prefixAndSampleRanks(?), b,
 
   return compareIntegers(rankA, rankB);
 }
-*/
+
 proc compareSampleRanks(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?),
                         n: integral, const SampleRanks, charsPerMod, cover) {
   // find k such that a.offset+k and b.offset+k are both in the cover
@@ -1572,7 +1555,7 @@ proc sortSuffixesCompletelyBounded(
 proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
               resultDom = makeBlockDomain({0..<n},
                                           targetLocales=cfg.locales))
- : [resultDom] offsetAndCachedT(cfg.offsetType, cfg.cachedDataType) {
+ : [resultDom] cfg.offsetType {
 
   var total : Time.stopwatch;
 
@@ -1695,6 +1678,12 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
                                      requestedNumBuckets=requestedNumBuckets,
                                      /*out*/ mySampleN);
     //writeln("Sample ", Sample);
+
+    if EXTRA_CHECKS {
+      forall off in Sample {
+        assert(cover.containedInCover(offset(off) % cover.period));
+      }
+    }
 
     // now, compute the rank of each of these. we need to compare
     // the first cover.period characters & assign different ranks when these
