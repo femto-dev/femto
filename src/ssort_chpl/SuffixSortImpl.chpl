@@ -63,7 +63,8 @@ config param PARTITION_SORT_SAMPLE = true;
 // if this is set, separately sort each nonsample, and do k-way merge.
 // this should be faster for large problem sizes since the merge step
 // depends on the cover size rather than log n.
-config param IMPROVED_SORT_ALL = true;
+config param IMPROVED_SORT_ALL = false; // TODO: re-enable
+                                        // after identifying communication
 
 
 /**
@@ -691,7 +692,9 @@ proc sortRegion(ref A: [], comparator, region: range(?)) {
     // TODO: can try to do sort in-place with an array view if it's all local
     var localDom: domain(1) = {region,};
     var localA:[localDom] A.eltType = A[region];
-    sortRegion(localA, comparator, region);
+    local {
+      sortRegion(localA, comparator, region);
+    }
     A[region] = localA;
   } else {
     if Reflection.canResolve("sort", A, comparator, region) {
@@ -729,46 +732,6 @@ proc sortSuffixesByPrefix(const cfg:ssortConfig(?),
   }
 
   sortRegion(A, new myPrefixComparator1(), region=region);
-}
-
-// similar to above but we know lower and upper bounds
-proc sortSuffixesByPrefixBounded(const cfg:ssortConfig(?),
-                                 const thetext, n: cfg.offsetType,
-                                 ref A: [], // integral or offsetAndCached
-                                 region: range(?),
-                                 lowerBound: prefix(?),
-                                 upperBound: prefix(?),
-                                 maxPrefix: cfg.offsetType) {
-  type idxType = cfg.idxType;
-  type characterType = cfg.characterType;
-  type offsetType = cfg.offsetType;
-  type cachedDataType = cfg.cachedDataType;
-  type wordType = cfg.loadWordType;
-
-  // compute the number of characters in common between lowerBound and
-  // upperBound.
-  const nCharsCommon = charactersInCommon(cfg, lowerBound, upperBound);
-
-  if nCharsCommon == 0 ||
-     (cachedDataType != nothing &&
-      numBits(characterType)*nCharsCommon < numBits(cachedDataType)) {
-    // use the other sorter if there is no savings here
-    sortSuffixesByPrefix(cfg, thetext, n, A, region, maxPrefix);
-    return;
-  }
-
-  const useMaxPrefix=max(maxPrefix-nCharsCommon, 0);
-
-  // Define a comparator to support radix sorting by the next
-  // characters up to maxPrefix that it's not already sorted by.
-  record myPrefixComparator2 : keyPartComparator {
-    proc keyPart(a, i: int):(keyPartStatus, wordType) {
-      return getKeyPartForOffset(cfg, offset(a) + nCharsCommon, i,
-                                 thetext, n, maxPrefix=useMaxPrefix);
-    }
-  }
-
-  sortRegion(A, new myPrefixComparator2(), region=region);
 }
 
 
@@ -1037,18 +1000,9 @@ proc sortSampleOffsets(const cfg:ssortConfig(?),
         sumBucketSizes += bucketSize;
         countBucketsConsidered += 1;
 
-        if mySp.bucketHasLowerBound(bucketIdx) &&
-           mySp.bucketHasUpperBound(bucketIdx) {
-          sortSuffixesByPrefixBounded(cfg, thetext, n=n,
-                                      Sample, bucketStart..bucketEnd,
-                                      mySp.bucketLowerBound(bucketIdx),
-                                      mySp.bucketUpperBound(bucketIdx),
-                                      maxPrefix=coverPrefix);
-        } else {
-          sortSuffixesByPrefix(cfg, thetext, n=n,
-                               Sample, bucketStart..bucketEnd,
-                               maxPrefix=coverPrefix);
-        }
+        sortSuffixesByPrefix(cfg, thetext, n=n,
+                             Sample, bucketStart..bucketEnd,
+                             maxPrefix=coverPrefix);
       }
     }
 
@@ -1281,35 +1235,29 @@ proc compareSampleRanks(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?),
    The computation in this function is not distributed because
    it's expected to be called from within a distributed forall loop.
  */
-proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
-                              const thetext, n: cfg.offsetType,
-                              const SampleRanks, charsPerMod: cfg.offsetType,
-                              ref A: [], // integral or offsetAndCached(?)
-                              region: range(?),
-                              const nCharsCommon,
-                              // these are for gathering timing data
-                              out partitionTime:real,
-                              out lookupTime:real,
-                              out sortEachNonsampleTime:real,
-                              out mergeTime:real) {
+proc sortSuffixesCompletely(const cfg:ssortConfig(?),
+                            const thetext, n: cfg.offsetType,
+                            const SampleRanks, charsPerMod: cfg.offsetType,
+                            ref A: [], // integral or offsetAndCached(?)
+                            region: range(?),
+                            // these are for gathering timing data
+                            out partitionTime:real,
+                            out lookupTime:real,
+                            out sortEachNonsampleTime:real,
+                            out mergeTime:real) {
   type wordType = cfg.loadWordType;
   type characterType = cfg.characterType;
   const ref cover = cfg.cover;
   param coverPrefix = cfg.getPrefixSize(cover.period);
-  const useMaxPrefix = max(coverPrefix - nCharsCommon, 0);
 
   record finalComparator : relativeComparator {
     proc compare(a, b) { // integral or offsetAndCached
       // first, compare the first cover.period characters of text
-      if useMaxPrefix > 0 {
-        const aOffset = offset(a) + nCharsCommon;
-        const bOffset = offset(b) + nCharsCommon;
-        const prefixCmp = comparePrefixes(cfg, aOffset, bOffset,
-                                          thetext, n,
-                                          maxPrefix=useMaxPrefix);
-        if prefixCmp != 0 {
-          return prefixCmp;
-        }
+     const prefixCmp =
+        comparePrefixes(cfg, a, b, thetext, n, maxPrefix=coverPrefix);
+
+      if prefixCmp != 0 {
+        return prefixCmp;
       }
       // if the prefixes are the same, compare the nearby sample
       // rank from the recursive subproblem.
@@ -1428,6 +1376,9 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
                              start=region.low, end=region.high,
                              locales=none, nTasks=subTasks);
 
+    if isDistributedDomain(Counts.domain) then
+      compilerError("Was not expecting it to be distributed");
+
     const Ends = + scan Counts;
 
     assert(Ends.last == region.size);
@@ -1493,58 +1444,6 @@ proc doSortSuffixesCompletely(const cfg:ssortConfig(?),
       mergeTime = mergeTimer.elapsed();
     }
   }
-}
-
-proc sortSuffixesCompletely(const cfg:ssortConfig(?),
-                            const thetext, n: cfg.offsetType,
-                            const SampleRanks, charsPerMod: cfg.offsetType,
-                            ref A: [], // array of integral or offsetAndCached
-                            region: range(?),
-                            // these are for gathering timing data
-                            out partitionTime:real,
-                            out lookupTime:real,
-                            out sortEachNonsampleTime:real,
-                            out mergeTime:real) {
-
-  doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
-                           A, region, nCharsCommon=0,
-                           partitionTime, lookupTime,
-                           sortEachNonsampleTime, mergeTime);
-}
-
-proc sortSuffixesCompletelyBounded(
-                            const cfg:ssortConfig(?),
-                            const thetext, n: cfg.offsetType,
-                            const SampleRanks, charsPerMod: cfg.offsetType,
-                            ref A: [], // array of integral or offsetAndCached
-                            region: range(?),
-                            const lowerBound: prefixAndSampleRanks(?),
-                            const upperBound: prefixAndSampleRanks(?),
-                            const nCharsCommon: int,
-                            // these are for gathering timing data
-                            out partitionTime:real,
-                            out lookupTime:real,
-                            out sortEachNonsampleTime:real,
-                            out mergeTime:real) {
-
-  type characterType = cfg.characterType;
-  type cachedDataType = cfg.cachedDataType;
-  param coverPrefix = cfg.getPrefixSize(cfg.cover.period);
-
-  if nCharsCommon == 0 ||
-     (cachedDataType != nothing &&
-      numBits(characterType)*nCharsCommon < numBits(cachedDataType)) {
-    doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
-                             A, region, nCharsCommon=0,
-                             partitionTime, lookupTime,
-                             sortEachNonsampleTime, mergeTime);
-    return;
-  }
-
-  doSortSuffixesCompletely(cfg, thetext, n, SampleRanks, charsPerMod,
-                           A, region, nCharsCommon=nCharsCommon,
-                           partitionTime, lookupTime,
-                           sortEachNonsampleTime, mergeTime);
 }
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
@@ -2021,21 +1920,20 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
           maxCommon reduce= nCharsCommon;
           sumCommon += nCharsCommon;
           countBucketsWithCommon += 1;
-
-          sortSuffixesCompletelyBounded(
-                                 cfg, thetext, n=n,
-                                 SampleText, charsPerMod,
-                                 SA, bucketStart..bucketEnd,
-                                 lowerBound, upperBound, nCharsCommon,
-                                 myPartitionTime, myLookupTime,
-                                 mySortEachNonsampleTime, myMergeTime);
-        } else {
-          sortSuffixesCompletely(cfg, thetext, n=n,
-                                 SampleText, charsPerMod,
-                                 SA, bucketStart..bucketEnd,
-                                 myPartitionTime, myLookupTime,
-                                 mySortEachNonsampleTime, myMergeTime);
         }
+
+        var localSA: [bucketStart..bucketEnd] SA.eltType;
+        localSA = SA[bucketStart..bucketEnd];
+
+        local {
+        sortSuffixesCompletely(cfg, thetext, n=n,
+                               SampleText, charsPerMod,
+                               localSA, bucketStart..bucketEnd,
+                               myPartitionTime, myLookupTime,
+                               mySortEachNonsampleTime, myMergeTime);
+        }
+
+        SA[bucketStart..bucketEnd] = localSA;
 
         partitionTime += myPartitionTime;
         lookupTime += myLookupTime;
