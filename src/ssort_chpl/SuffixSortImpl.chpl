@@ -1921,21 +1921,21 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
           countBucketsWithCommon += 1;
         }
 
-        var localSA: [bucketStart..bucketEnd] SA.eltType;
-        localSA = SA[bucketStart..bucketEnd];
+        //var localSA: [bucketStart..bucketEnd] SA.eltType;
+        //localSA = SA[bucketStart..bucketEnd];
 
         const localCover = cfg.cover;
 
-        local {
+        //local {
         sortSuffixesCompletely(cfg, thetext, n=n,
                                SampleText, charsPerMod,
-                               localSA, bucketStart..bucketEnd,
+                               SA, bucketStart..bucketEnd,
                                localCover,
                                myPartitionTime, myLookupTime,
                                mySortEachNonsampleTime, myMergeTime);
-        }
+        //}
 
-        SA[bucketStart..bucketEnd] = localSA;
+        //SA[bucketStart..bucketEnd] = localSA;
 
         partitionTime += myPartitionTime;
         lookupTime += myLookupTime;
