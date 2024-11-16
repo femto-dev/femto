@@ -63,8 +63,7 @@ config param PARTITION_SORT_SAMPLE = true;
 // if this is set, separately sort each nonsample, and do k-way merge.
 // this should be faster for large problem sizes since the merge step
 // depends on the cover size rather than log n.
-config param IMPROVED_SORT_ALL = false; // TODO: re-enable
-                                        // after identifying communication
+config param IMPROVED_SORT_ALL = true;
 
 
 /**
@@ -1240,6 +1239,7 @@ proc sortSuffixesCompletely(const cfg:ssortConfig(?),
                             const SampleRanks, charsPerMod: cfg.offsetType,
                             ref A: [], // integral or offsetAndCached(?)
                             region: range(?),
+                            cover: differenceCover(?),
                             // these are for gathering timing data
                             out partitionTime:real,
                             out lookupTime:real,
@@ -1247,7 +1247,6 @@ proc sortSuffixesCompletely(const cfg:ssortConfig(?),
                             out mergeTime:real) {
   type wordType = cfg.loadWordType;
   type characterType = cfg.characterType;
-  const ref cover = cfg.cover;
   param coverPrefix = cfg.getPrefixSize(cover.period);
 
   record finalComparator : relativeComparator {
@@ -1925,10 +1924,13 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
         var localSA: [bucketStart..bucketEnd] SA.eltType;
         localSA = SA[bucketStart..bucketEnd];
 
+        const localCover = cfg.cover;
+
         local {
         sortSuffixesCompletely(cfg, thetext, n=n,
                                SampleText, charsPerMod,
                                localSA, bucketStart..bucketEnd,
+                               localCover,
                                myPartitionTime, myLookupTime,
                                mySortEachNonsampleTime, myMergeTime);
         }
