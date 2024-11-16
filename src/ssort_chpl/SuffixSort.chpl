@@ -20,10 +20,10 @@
 module SuffixSort {
 
 
-config param DEFAULT_PERIOD = 133;
+config param DEFAULT_PERIOD = 7;
 config param DEFAULT_LCP_SAMPLE = 64;
 config param EXTRA_CHECKS = false;
-config param TRACE = false;
+config param TRACE = true;
 config param TIMING = false;
 config type CACHED_DATA_TYPE = nothing;
 config type LOAD_WORD_TYPE = uint;
