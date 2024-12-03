@@ -206,16 +206,6 @@ proc findUnique(SA: [], SparsePLCP: [], thetext: [], fileStarts: [] int,
     }
   }
 
-  if numFiles > 1 {
-    // Assume there is a padding byte at the end of each document.
-    // we should not exceed the padding byte in terms of min unique strings.
-    // We set this to 1 so that the next step doesn't rule out a preceding
-    // unique byte.
-    forall doc in 0..<numFiles {
-      MinUnique[fileStarts[doc+1]-1] = 1;
-    }
-  }
-
   // Set MinUnique[i] = 0 if MinUnique[i] > MinUnique[i+1]
   {
     var nTasks = computeNumTasks();
@@ -240,22 +230,30 @@ proc findUnique(SA: [], SparsePLCP: [], thetext: [], fileStarts: [] int,
       for i in taskStart..<taskEnd {
         if MinUnique[i] > MinUnique[i+1] {
           MinUnique[i] = 0;
-        } else if numFiles > 1 && i < n {
-          // TODO: binary search not necessary here
-          const doc = offsetToFileIdx(fileStarts, i);
-          MinUnique[i] = adjustForFileBoundaries(MinUnique[i], i+1, doc,
-                                                 fileStarts);
         }
       }
 
       // handle the final element
       if MinUnique[taskEnd] > NextTaskValue[tid] {
         MinUnique[taskEnd] = 0;
-      } else if numFiles > 1 && taskEnd < n {
-        const doc = offsetToFileIdx(fileStarts, taskEnd);
-        MinUnique[taskEnd] =
-          adjustForFileBoundaries(MinUnique[taskEnd], taskEnd+1, doc,
-                                  fileStarts);
+      }
+    }
+  }
+
+  // Process MinUnique to remove any unique matches that cross a file boundary.
+  // This is only done for numFiles > 1 because otherwise we don't assume
+  // that there are padding bytes after each file.
+  if numFiles > 1 {
+    forall (i,x) in zip(MinUnique.domain, MinUnique) {
+      if i < n {
+        // TODO: binary search not really necessary here
+        // since adjacent elements are in the same document.
+        const doc = offsetToFileIdx(fileStarts, i);
+        const docEnd = fileStarts[doc+1];
+        const matchEnd = i + (x:int);
+        if matchEnd >= docEnd {
+          x = 0;
+        }
       }
     }
   }
@@ -299,7 +297,11 @@ proc ref uniqueStats.add(length: int) {
   histogram[bin] += 1;
 }
 
-// Returns MinUnique
+// Returns MinUnique, which is an array of size matching thetext.size,
+// where each position contains the length of a unique sequence starting
+// at that position, stored as a uint(8). That means that this function
+// cannot find unique strings longer than 255.
+//
 // OutputUniqueForFile[doc] is true if unique strings should be output
 // for that file.
 // NumUnique has the number of unique substrings for each document.
@@ -450,9 +452,6 @@ proc writeOutput(MinUnique: [], IgnoreDocs: [], FileStats: [],
       }
     }
   }
-}
-
-proc niaveClustering() {
 }
 
 proc main(args: [] string) throws {

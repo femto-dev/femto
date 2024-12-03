@@ -41,11 +41,11 @@ import Path;
 
 proc main() throws {
   if INPUT == "" {
-    writeln("please use --INPUT <filename> to specify an input file");
+    writeln("please use --input <filename> to specify an input file");
     return 1;
   }
   if UNIQUE == "" {
-    writeln("please use --UNIQUE <filename> to specify a .unique file");
+    writeln("please use --unique <filename> to specify a .unique file");
     writeln("FindUnique can generate these");
     return 1;
   }
@@ -130,6 +130,7 @@ proc main() throws {
       // OK, now emit the unique substrings
       for i in 0..<contigLen {
         const len = MinUnique[textOffset + i]: int;
+        // skip kmers unique due to being at the end of string
         if len > 0 && (K == 0 || len <= K) {
           const useK = if K == 0 then len else K;
           const amtBefore = (useK-len)/2;

@@ -117,6 +117,54 @@ module TestFindUnique {
       012345 (offsets)
      */
 
+    /*
+      abcdefg
+      0123456
+
+               SA  LCP  1+max(LCP[i],LCP[i+1])
+      abcdefg  0   0    1
+      bcdefg   1   0    1
+      cdefg    2   0    1
+      defg     3   0    1
+      efg      4   0    1
+      fg       5   0    1
+      g        6   0    1
+
+      last column permuted to input positions (row i sets MinUnique[SA[i]])
+
+      1111111 (MinUnique)
+      0123456 (offsets)
+
+      setting elts to 0 when MinUnique[i] > MinUnique[i+1]
+
+      1111111 (MinUnique)
+      0123456 (offsets)
+     */
+
+    /*
+      aabbcc
+      012345
+
+               SA  LCP  1+max(LCP[i],LCP[i+1])
+      aabbcc   0   0    2
+      abbcc    1   1    2
+      bbcc     2   0    2
+      bcc      3   1    2
+      c        5   0    2
+      cc       4   1    2
+
+      last column permuted to input positions (row i sets MinUnique[SA[i]])
+
+      222222 (MinUnique)
+      012345 (offsets)
+
+      setting elts to 0 when MinUnique[i] > MinUnique[i+1]
+
+      222222 (MinUnique)
+      012345 (offsets)
+     */
+
+
     const testCases = [
       ("banana", [1, 0, 3, 0, 0, 0, 0]),
       ("abcdefg", [1, 1, 1, 1, 1, 1, 0, 0]),
@@ -144,7 +192,7 @@ module TestFindUnique {
 
       var result = findUnique(SA, SparsePLCP, thetext, fileStarts, ignoreDocs);
       if debugOutput {
-        writeln("Result: ", result);
+        writeln("Result:            ", result);
       }
 
       for i in 0..#result.size {
@@ -160,7 +208,10 @@ module TestFindUnique {
       ("aaa0bbb0", [0, 4, 8], [1, 1, 1, 0, 1, 1, 1, 0, 0]),
       ("aba0bab0", [0, 4, 8], [3, 0, 0, 0, 3, 0, 0, 0, 0]),
       ("aab0bba0", [0, 4, 8], [2, 2, 0, 0, 2, 2, 0, 0, 0]),
+      ("aaba0abaa0", [0, 5, 10], [3, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0]),
       ("aaaa0aaab0abab0", [0, 5, 10, 15], [4,0,0,0,0,0,3,0,0,0,0,2,0,0,0,0]),
+      ("aabbcc0cba0", [0, 7, 11], [2, 2, 2, 2, 2, 0, 0, 2, 2, 0, 0, 0])
+                                // aa ab bb bc cc c0 0  cb ba
     ];
 
     for (input, fileStarts, expected) in testCases {
@@ -186,7 +237,7 @@ module TestFindUnique {
       var result = findUnique(SA, SparsePLCP, thetext, fileStarts, ignoreDocs);
 
       if debugOutput {
-        writeln("Result: ", result);
+        writeln("Result:            ", result);
       }
 
       for i in 0..#result.size {
