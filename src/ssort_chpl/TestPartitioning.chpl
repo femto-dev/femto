@@ -73,8 +73,12 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
+  const useNLocales = min(nTasks, Locales.size);
+  const targetLocales = for i in 0..<useNLocales do Locales[i];
   const counts =
-    partition(Input, Output, sp, myDefaultComparator, 0, n-1, nTasks);
+    partition(Input, Output, sp, replicateSplitters(sp, targetLocales),
+              myDefaultComparator, 0, n-1,
+              locales=targetLocales, nTasks=nTasks);
   assert(counts.size == nBuckets);
 
   const ends = + scan counts;
@@ -146,7 +150,9 @@ proc testPartitionsEven(n: int, nSplit: int) {
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
-  const counts = partition(Input, Output, sp, myDefaultComparator, 0, n-1, 1);
+  const counts = partition(Input, Output, sp, replicateSplitters(sp, [here]),
+                           myDefaultComparator, 0, n-1,
+                           locales=none, nTasks=1);
   assert(counts.size == nBuckets);
 
   var minSize = max(int);
@@ -186,7 +192,9 @@ proc testPartitionSingleSplitter(n: int) {
   assert(sp.hasEqualityBuckets);
   assert(nBuckets == 3); // < == and > buckets
 
-  const counts = partition(Input, Output, sp, myDefaultComparator, 0, n-1, 1);
+  const counts = partition(Input, Output, sp, replicateSplitters(sp, [here]),
+                           myDefaultComparator, 0, n-1,
+                           locales=none, nTasks=1);
   assert(counts.size == nBuckets);
 
   var total = 0;
@@ -495,12 +503,11 @@ proc testPartitions() {
 proc main() {
   testMultiWayMerge();
 
-  return 0;
-
+  /* commented out due to some odd problems once added replicated
   serial {
-    writeln("Testing partitioning with one task");
+    writeln("Testing partitioning within serial block");
     testPartitions();
-  }
+  }*/
 
   writeln("Testing partitioning with many tasks");
   testPartitions();

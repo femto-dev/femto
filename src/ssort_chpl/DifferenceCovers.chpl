@@ -97,6 +97,29 @@ private proc makeSampleTable(param period): period*int {
   return sampleTable;
 }
 
+private proc makeNextTable(param period): period*int {
+  const cover = coverTuple(period);
+  const sampleSize = cover.size;
+  const sampleTable = makeSampleTable(period);
+  var nextTable: period*int;
+
+  for i in 0..<period {
+    nextTable[i] = -1;
+  }
+
+  for i in 0..<period {
+    for j in 0..<period {
+      if sampleTable[(i+j)%period] != -1 && nextTable[i] == -1 {
+        nextTable[i] = j;
+        break;
+      }
+    }
+  }
+
+  return nextTable;
+}
+
+
 record differenceCover {
   /** the period of the difference cover
       aka v in Karkkainen Sanders Burkhardt */
@@ -110,6 +133,10 @@ record differenceCover {
   /** sample[i mod v]=index s.t. cover[index]=i, else -1 */
   /*private*/ const sampleTable: period*int;
 
+  /** nextTable[i mod v] = smallest j such that i + j is in the difference
+      cover */
+  const nextTable: period*int;
+
   /** returns the size of the difference cover, that is, cover.size */
   proc sampleSize param : int { return coverTuple(period).size; }
   /** returns period - sampleSize */
@@ -121,6 +148,7 @@ record differenceCover {
     this.period = period;
     this.ellTable = makeEllTable(period);
     this.sampleTable = makeSampleTable(period);
+    this.nextTable = makeNextTable(period);
   }
 
   /**
@@ -173,6 +201,17 @@ record differenceCover {
       assert(0 <= i && i < period);
     }
     return sampleTable[i] : i.type;
+  }
+
+  /**
+   Given offset i with 0 <= i < period, returns the number j,
+   so that i + j is in the difference cover.
+   */
+  inline proc nextCoverIndex(i: integral) : i.type {
+    if EXTRA_CHECKS {
+      assert(0 <= i && i < period);
+    }
+    return nextTable[i];
   }
 }
 

@@ -25,11 +25,12 @@ module Partitioning {
 
 import SuffixSort.EXTRA_CHECKS;
 
-import Utility.computeNumTasks;
+import Utility.{computeNumTasks,makeBlockDomain,maybeDistributed};
 import Reflection.canResolveMethod;
 import Sort.{sort, DefaultComparator, keyPartStatus};
 import Math.{log2, divCeil};
 import CTypes.c_array;
+import ReplicatedDist.replicatedDist;
 
 // These settings control the sample sort and classification process
 param classifyUnrollFactor = 7;
@@ -188,6 +189,11 @@ record splitters : writeSerializable {
   var storage: [0..<myNumBuckets] eltType;
   // filled from 0..myNumBuckets-2; myNumBuckets-1 is a duplicate of previous
   var sortedStorage: [0..<myNumBuckets] eltType;
+
+  proc init(type eltType) {
+    // default init, creates invalid splitters, but useful for replicating
+    this.eltType = eltType;
+  }
 
   // Create splitters based on some precomputed, already sorted splitters
   // useSplitters needs to be of size 2**n and the last element will
@@ -411,6 +417,44 @@ record splitters : writeSerializable {
   }
 } // end record splitters
 
+// TODO: adjust this to use replicate()
+
+class ReplicatedSplittersWrapper {
+  var x;
+}
+
+/* helper that returns a replicated array of splitters, or 'none'
+   if there is no need for replication.
+   'sp' is normally a 'record splitters'.
+   'locales' is normally an array of locales but can be 'none'. */
+proc replicateSplitters(sp, locales) {
+  if maybeDistributed() && locales.type != nothing {
+    const DomOne = {1..1};
+    const ReplDom = DomOne dmapped new replicatedDist();
+    var Result: [ReplDom] owned ReplicatedSplittersWrapper(sp.type)?;
+
+    // now set the replicand on each Locale
+    coforall loc in locales {
+      on loc {
+        Result[1] = new ReplicatedSplittersWrapper(sp);
+      }
+    }
+
+    return Result;
+  } else {
+    return none;
+  }
+}
+
+/* helper that return the current splitter */
+inline proc localSplitter(sp, replicatedSplitters) const ref {
+  if maybeDistributed() && replicatedSplitters.type != nothing {
+    return replicatedSplitters[1]!.x;
+  } else {
+    return sp;
+  }
+}
+
 class PerTaskState {
   var nBuckets: int;
   var localCounts: [0..<nBuckets] int;
@@ -430,6 +474,13 @@ class PerTaskState {
    ended up in each bucket.
 
    This is done in parallel.
+
+   'split' is the splitters and it should be either 'record splitters'
+   or something else that behaves similarly to it.
+   'rsplit' should be the result of calling 'replicateSplitters' on 'split'.
+   'locales' is the locales that are to be used, or 'none' if
+   it should not be distributed.
+
 
    If equality buckets are not in use:
      Bucket 0 consists of elts with
@@ -466,17 +517,33 @@ class PerTaskState {
        split.sortedSplitter((numBuckets-2)/2) < elts
 
  */
-proc partition(const Input, ref Output, split, comparator,
+proc partition(const Input, ref Output, split, rsplit, comparator,
                start: int, end: int,
-               nTasks: int = computeNumTasks()) {
+               locales,
+               nTasks: int = locales.size * computeNumTasks()) {
 
-  // check that the splitters are sorted according to comparator
-  if EXTRA_CHECKS && isSubtype(split.type,splitters) {
-    assert(isSorted(split.sortedStorage[0..<split.myNumBuckets-1], comparator));
+  //writeln("partition with locales=", locales, " nTasks=", nTasks);
+
+  // check that nTasks is reasonable. It should have a task per locale in use.
+  if locales.type != nothing {
+    assert(locales.size <= nTasks);
   }
 
-  const nBuckets = split.numBuckets;
+  const nBuckets; // set below
   const n = end - start + 1;
+
+  {
+    // access the local replicand to do some checking and get # buckets
+    const ref mysplit = localSplitter(split, rsplit);
+    nBuckets = mysplit.numBuckets;
+
+    // check that the splitters are sorted according to comparator
+    if EXTRA_CHECKS && isSubtype(mysplit.type,splitters) {
+      assert(isSorted(mysplit.sortedStorage[0..<mysplit.myNumBuckets-1],
+                      comparator));
+    }
+  }
+
 
   // Divide the input into nTasks chunks.
   const countsSize = nTasks * nBuckets;
@@ -484,10 +551,9 @@ proc partition(const Input, ref Output, split, comparator,
   const nBlocks = divCeil(n, blockSize);
 
   // create the arrays that drive the counting and distributing process
-  var localState:[0..<nTasks] owned PerTaskState?;
-  coforall i in 0..<nTasks {
-    localState[i] = new PerTaskState(nBuckets);
-  }
+  const tasksDom = makeBlockDomain({0..<nTasks}, targetLocales=locales);
+  var localState:[tasksDom] owned PerTaskState =
+    forall i in tasksDom do new PerTaskState(nBuckets);
 
   // globalCounts stores counts like this:
   //   count for bin 0, task 0
@@ -496,21 +562,28 @@ proc partition(const Input, ref Output, split, comparator,
   //   count for bin 1, task 0
   //   count for bin 1, task 1
   // i.e. bin*nTasks + taskId
-  var globalCounts:[0..<countsSize] int;
+  const globalCountsDom = makeBlockDomain({0..<countsSize},
+                                          targetLocales=locales);
+  var globalCounts:[globalCountsDom] int;
 
   // Step 1: Count
-  coforall tid in 0..<nTasks {
+  forall (locState,tid) in zip(localState,tasksDom) {
     var taskStart = start + tid * blockSize;
     var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
+    // get the local replicand
+    const ref mysplit = localSplitter(split, rsplit);
 
-    ref counts = localState[tid]!.localCounts;
-    for bin in 0..<nBuckets {
+    ref counts = locState.localCounts;
+    foreach bin in 0..<nBuckets {
       counts[bin] = 0;
     }
 
-    for (_,bin) in split.classify(Input, taskStart, taskEnd, comparator) {
+    // this loop must really be serial. it can be run in parallel
+    // within the forall because it's updating state local to each task.
+    for (_,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
       counts[bin] += 1;
     }
+
     // Now store the counts into the global counts array
     foreach bin in 0..<nBuckets {
       globalCounts[bin*nTasks + tid] = counts[bin];
@@ -521,20 +594,25 @@ proc partition(const Input, ref Output, split, comparator,
   const globalEnds = + scan globalCounts;
 
   // Step 3: Distribute
-  coforall tid in 0..<nTasks {
+  forall (locState,tid) in zip(localState,tasksDom) {
     var taskStart = start + tid * blockSize;
     var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
+    // get the local replicand
+    const ref mysplit = localSplitter(split, rsplit);
 
-    ref nextOffsets = localState[tid]!.localCounts;
+    ref nextOffsets = locState.localCounts;
     // initialize nextOffsets
-    for bin in 0..<nBuckets {
+    foreach bin in 0..<nBuckets {
       var globalBin = bin*nTasks+tid;
       nextOffsets[bin] = if globalBin > 0
                          then start+globalEnds[globalBin-1]
                          else start;
     }
 
-    for (elt,bin) in split.classify(Input, taskStart, taskEnd, comparator) {
+    // as above,
+    // this loop must really be serial. it can be run in parallel
+    // within the forall because it's updating state local to each task.
+    for (elt,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
       // Store it in the right bin
       ref next = nextOffsets[bin];
       Output[next] = elt;
@@ -543,8 +621,9 @@ proc partition(const Input, ref Output, split, comparator,
   }
 
   // Compute the total counts to return them
-  var counts:[0..<nBuckets] int;
-  forall bin in 0..<nBuckets {
+  const countsDom = makeBlockDomain({0..<nBuckets}, targetLocales=locales);
+  var counts:[countsDom] int;
+  forall (c,bin) in zip(counts,countsDom) {
     var total = 0;
     for tid in 0..<nTasks {
       total += globalCounts[bin*nTasks + tid];
@@ -570,7 +649,7 @@ proc partition(const Input, ref Output, split, comparator,
    */
 proc multiWayMerge(Input: [] ?eltType,
                    InputRanges: [] range,
-                   ref Output: [] eltType,
+                   ref Output: [] ?outEltType,
                    outputRange: range,
                    comparator,
                    type readEltType=eltType) {
@@ -581,7 +660,7 @@ proc multiWayMerge(Input: [] ?eltType,
     var pos = outputRange.low;
     for r in InputRanges {
       for i in r {
-        Output[pos] = Input[i];
+        Output[pos] = Input[i]:outEltType;
         pos += 1;
       }
     }
@@ -743,7 +822,7 @@ proc multiWayMerge(Input: [] ?eltType,
 
     // output the champion
     //writeln("outputting ", ExternalNodes[championAddr]);
-    Output[outPos] = ExternalNodes[championAddr] : eltType;
+    Output[outPos] = ExternalNodes[championAddr] : outEltType;
     outPos += 1;
 
     // input the new value

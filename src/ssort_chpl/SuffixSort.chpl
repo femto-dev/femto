@@ -20,12 +20,21 @@
 module SuffixSort {
 
 
-config param DEFAULT_PERIOD = 133;
+config param DEFAULT_PERIOD = 7;
 config param DEFAULT_LCP_SAMPLE = 64;
 config param EXTRA_CHECKS = false;
-config param TRACE = false;
+config param TRACE = true;
+config param TIMING = false;
 config type CACHED_DATA_TYPE = nothing;
 config type LOAD_WORD_TYPE = uint;
+
+// these control readAllFiles / recursive subproblems
+//config param TEXT_REPLICATED = false;
+//config param TEXT_BLOCK = false;
+//config param TEXT_NON_DIST = false;
+
+// don't fall back on non-distributed arrays for CHPL_COMM=none
+config param DISTRIBUTE_EVEN_WITH_COMM_NONE = false;
 
 // how much padding does the algorithm need at the end of the input?
 param INPUT_PADDING = 8;
@@ -63,7 +72,8 @@ proc computeSuffixArray(input: [], const n: input.domain.idxType) {
                               offsetType = input.idxType,
                               cachedDataType = CACHED_DATA_TYPE,
                               loadWordType = LOAD_WORD_TYPE,
-                              cover = new differenceCover(DEFAULT_PERIOD));
+                              cover = new differenceCover(DEFAULT_PERIOD),
+                              locales = Locales);
 
   return ssortDcx(cfg, input, n);
 }
@@ -135,6 +145,7 @@ proc main(args: [] string) throws {
   const fileStarts; //: [] int;
   const totalSize: int;
   readAllFiles(inputFilesList,
+               Locales,
                allData=allData,
                allPaths=allPaths,
                concisePaths=concisePaths,

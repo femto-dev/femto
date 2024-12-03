@@ -28,8 +28,11 @@ import List.list;
 import OS.EofError;
 import Path;
 import Sort.{sort,isSorted};
+import BlockDist.blockDist;
+import ReplicatedDist.replicatedDist;
+import ChplConfig.CHPL_COMM;
 
-import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING};
+import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING, DISTRIBUTE_EVEN_WITH_COMM_NONE};
 
 /* Compute the number of tasks to be used for a data parallel operation */
 proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
@@ -46,6 +49,92 @@ proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
   }
 
   return nTasks;
+}
+
+/* are we running distributed according to CHPL_COMM ? */
+proc maybeDistributed() param {
+  return CHPL_COMM!="none" || DISTRIBUTE_EVEN_WITH_COMM_NONE;
+}
+
+/*
+   Make a BlockDist domain usually, but just return the local 'dom' unmodified
+   in some cases:
+    * if 'targetLocales' is 'none'
+    * if CHPL_COMM=none.
+*/
+proc makeBlockDomain(dom, targetLocales) {
+  if maybeDistributed() && targetLocales.type != nothing {
+    return blockDist.createDomain(dom, targetLocales=targetLocales);
+  } else {
+    return dom;
+  }
+}
+
+class ReplicatedWrapper {
+  var x;
+}
+
+proc replicate(in x, targetLocales) {
+  if maybeDistributed() && targetLocales.type != nothing {
+    var minIdV = max(int);
+    var maxIdV = min(int);
+    for loc in targetLocales {
+      minIdV = min(minIdV, loc.id);
+      maxIdV = max(maxIdV, loc.id);
+    }
+    const D = blockDist.createDomain({minIdV..maxIdV},
+                                     targetLocales=targetLocales);
+    var Result: [D] owned ReplicatedWrapper(x.type)?;
+
+    proc helpReplicate(from, i) {
+
+      // should already be on this locale...
+      assert(here == targetLocales[i]);
+
+      // create a local copy
+      Result[here.id] = new ReplicatedWrapper(from);
+      // get a reference to the copy we just created
+      const ref newFrom = Result[here.id]!.x;
+
+      // if 2*i is in the domain, replicate from Result[targetLocales[i].id]
+      // but skip this case for i == 0 to avoid infinite loop
+      if targetLocales.domain.contains(2*i) && i != 0 {
+        begin {
+          on targetLocales[2*i] {
+            helpReplicate(newFrom, 2*i);
+          }
+        }
+      }
+
+      // ditto for 2*i+1
+      if targetLocales.domain.contains(2*i+1) {
+        begin {
+          on targetLocales[2*i+1] {
+            helpReplicate(newFrom, 2*i+1);
+          }
+        }
+      }
+    }
+
+    sync {
+      if targetLocales.domain.contains(targetLocales.domain.low) {
+        helpReplicate(x, targetLocales.domain.low);
+      }
+    }
+
+    return Result;
+  } else {
+    return x;
+  }
+}
+
+proc getLocalReplicand(replicated, targetLocales) const ref {
+  if maybeDistributed() && targetLocales.type != nothing {
+    return replicated.localAccess[here.id]!.x;
+  } else {
+    // return the value, which was copied to 'replicated'
+    return replicated;
+  }
 }
 
 /* This function gives the size of an array of triangular indices
@@ -276,20 +365,25 @@ proc trimPaths(ref paths:[] string) {
    * a corresponding array of file sizes
    * a corresponding list of offsets where each file starts,
      which, contains an extra entry for the total size
+
+ The resulting arrays will be Block distributed among 'locales'.
  */
 proc readAllFiles(const ref files: list(string),
+                  locales: [ ] locale,
                   out allData: [] uint(8),
                   out allPaths: [] string,
                   out concisePaths: [] string,
                   out fileSizes: [] int,
                   out fileStarts: [] int,
                   out totalSize: int) throws {
-  var paths = files.toArray();
-  for p in paths {
+  var locPaths = files.toArray();
+  for p in locPaths {
     p = Path.normPath(p);
   }
-  sort(paths);
+  sort(locPaths);
 
+  const ByFileDom = makeBlockDomain({0..<locPaths.size}, targetLocales=locales);
+  const paths:[ByFileDom] string = forall i in ByFileDom do locPaths[i];
   const nFiles = paths.size;
 
   if nFiles == 0 {
@@ -306,7 +400,9 @@ proc readAllFiles(const ref files: list(string),
   const fileEnds = + scan sizes;
   const total = fileEnds.last;
 
-  var thetext:[0..<total+INPUT_PADDING] uint(8);
+  const TextDom = makeBlockDomain({0..<total+INPUT_PADDING},
+                                  targetLocales=locales);
+  var thetext:[TextDom] uint(8);
 
   // read each file
   forall (path, sz, end) in zip(paths, sizes, fileEnds) {
@@ -316,7 +412,8 @@ proc readAllFiles(const ref files: list(string),
   }
 
   // compute fileStarts
-  var starts:[0..nFiles] int;
+  const StartsDom = makeBlockDomain({0..nFiles}, targetLocales=locales);
+  var starts:[StartsDom] int;
   starts[0] = 0;
   starts[1..nFiles] = fileEnds;
 
