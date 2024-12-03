@@ -1599,8 +1599,8 @@ proc ssortDcx(const cfg:ssortConfig(?), const thetext, n: cfg.offsetType,
       const bucketEnd = bucketStart + bucketSize - 1;
 
       if TRACE {
-        writeln("final sort bucket ", bucketIdx,
-                " has ", bucketSize, " suffixes");
+        //writeln("final sort bucket ", bucketIdx,
+        //        " has ", bucketSize, " suffixes");
         /*if SampleSplitters.bucketHasLowerBound(bucketIdx) {
           writeln("lower bound ", SampleSplitters.bucketLowerBound(bucketIdx));
         }
