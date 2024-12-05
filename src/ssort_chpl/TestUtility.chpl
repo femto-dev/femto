@@ -98,10 +98,40 @@ private proc arrToString(arr: [] uint(8)) {
   return result;
 }
 
+private proc bytesToArray(s: bytes) {
+  const nWithPadding = s.size; // no padding for this test
+  const A:[0..<nWithPadding] uint(8) =
+    for i in 0..<nWithPadding do
+      if i < s.size then s[i] else 0;
+
+  return A;
+}
+
+private proc bytesToArray(s: string) {
+  return bytesToArray(s:bytes);
+}
+
+proc testRevComp() {
+  writeln("testRevComp");
+  var A:[0..<20] uint(8);
+  A[0..<10] = bytesToArray("ACNTTAGGTA");
+  reverseComplement(A, 0..<10, A, 10..<20);
+  var Expect:[0..<20] uint(8);
+  Expect[0..<10]  = bytesToArray("ACNTTAGGTA");
+  Expect[10..<20] = bytesToArray("TACCTAANGT");
+  assert(A.equals(Expect));
+  // check reverseComplement(reverseComplement(input)) == input
+  reverseComplement(A, 10..<20, A, 0..<10);
+  assert(A.equals(Expect));
+}
+
 proc testFastaFiles() throws {
   writeln("testFastaFiles");
   var fileContents = "> test \t seq\nA\n\rC\tG  TTA\nGGT\n\n\nA\n> seq 2\nCCG";
   var expect = ">ACGTTAGGTA>CCG";
+  if Utility.INCLUDE_REVERSE_COMPLEMENT {
+    expect +=  ">CGG>TACCTAACGT";
+  }
   var n = expect.size;
   var filename = "tmp-testFastaFiles-test.fna";
   {
@@ -148,6 +178,7 @@ proc testAtomicMinMax() {
 proc main() throws {
   testTriangles();
   testBsearch();
+  testRevComp();
   testFastaFiles();
   serial {
     testAtomicMinMax();
