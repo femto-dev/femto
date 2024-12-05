@@ -126,12 +126,23 @@ proc main() throws {
 
       // output the kmer if it doesn't go beyond the end
       if startOffset + useK <= n {
-        for j in 0..<useK {
-          writef("%c", Text[startOffset + j]);
+        var ignoreDueToSequenceBoundary = false;
+        if isFasta {
+          for j in 0..<useK {
+            if Text[startOffset+j] == ">".toByte() {
+              ignoreDueToSequenceBoundary = true;
+            }
+          }
         }
 
-        write(" 0 ", useFilename, " 1 ", desc, " ", i);
-        writeln();
+        if !ignoreDueToSequenceBoundary {
+          for j in 0..<useK {
+            writef("%c", Text[startOffset + j]);
+          }
+
+          write(" 0 ", useFilename, " 1 ", desc, " ", i);
+          writeln();
+        }
       }
     }
   }
