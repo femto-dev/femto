@@ -31,6 +31,9 @@ import Sort.{sort,isSorted};
 
 import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING};
 
+/* For FASTA files, when reading them, also read in the reverse complement */
+config param INCLUDE_REVERSE_COMPLEMENT=true;
+
 /* Compute the number of tasks to be used for a data parallel operation */
 proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
   if __primitive("task_get_serial") {
@@ -124,6 +127,46 @@ proc gatherFiles(ref files: list(string), path: string) throws {
   }
 }
 
+private inline proc toUpper(x: uint(8)): uint(8) {
+  extern proc toupper(c: c_int): c_int;
+  return toupper(x):uint(8);
+}
+
+// assumes that the input is already upper case
+private inline proc complement(x: uint(8)): uint(8) {
+  param A = "A".toByte();
+  param T = "T".toByte();
+  param G = "G".toByte();
+  param C = "C".toByte();
+
+  if x == C then return G;
+  if x == G then return C;
+  if x == A then return T;
+  if x == T then return A;
+
+  // otherwise, assume not DNA
+  return x;
+}
+
+/* Computes the reverse complement of a region of an input array and stores it
+   in a region of the output array. The input and output arrays can be the same
+   array provided that the regions are non-overlapping. */
+proc reverseComplement(const ref input: [] uint(8),
+                       inputRegion: range,
+                       ref output: [] uint(8),
+                       outputRegion: range) {
+  if EXTRA_CHECKS {
+    assert(inputRegion.size == outputRegion.size);
+  }
+
+  const n = inputRegion.size;
+  for i in 0..<n {
+    const inputIdx = i + inputRegion.first;
+    const outputIdx = n - 1 - i + outputRegion.first;
+    output[outputIdx] = complement(input[inputIdx]);
+  }
+}
+
 private const fastaExtensions = [".fasta", ".fas", ".fa", ".fna",
                                  ".ffn", ".faa", ".mpfa", ".frn"];
 
@@ -158,7 +201,7 @@ proc computeFastaFileSize(path: string) throws {
       var byte = r.readByte();
       if byte == ">".toByte() {
         inDescLine = true;
-        count += 1;
+        count += 1; // we will put > characters to divide sequences
       } else if byte == "\n".toByte() && inDescLine {
         inDescLine = false;
       }
@@ -169,6 +212,11 @@ proc computeFastaFileSize(path: string) throws {
       break;
     }
   }
+
+  if INCLUDE_REVERSE_COMPLEMENT {
+    count = 2*count;
+  }
+
   return count;
 }
 
@@ -213,13 +261,25 @@ proc readFastaFileSequence(path: string,
         desc.appendCodepointValues(byte);
       } else if isspace(byte) == 0 {
         if count < n {
-          data[dataStart + count] = byte;
+          data[dataStart + count] = toUpper(byte);
         }
         count += 1;
       }
     } catch e: EofError {
       break;
     }
+  }
+
+  if INCLUDE_REVERSE_COMPLEMENT {
+    // store the reverse complement just after the original sequence;
+    // except the initial > would be a trailing >,
+    // so emit a separator and don't revcomp the initial >
+    data[dataStart + count] = ">".toByte();
+    const countLessOne = count - 1; // don't revcomp the initial separator,
+                                    // because it would end up at the end
+    reverseComplement(data, dataStart+1..#countLessOne,
+                      data, dataStart+1+count..#countLessOne);
+    count = 2*count;
   }
 
   if n != count {

@@ -71,89 +71,69 @@ proc main() throws {
     useFilename = REPLACE_FILENAME;
   }
 
+  var desc = "-";
   if isFasta {
     var r = IO.openReader(INPUT);
+    // read the description
+    // ASSUMPTION: other sections of the file are the same organism
+
     // process the input file, Text, and MinUnique together
     // use the input file just to get the descriptions
-
-
     var textOffset: int = 0;
 
     // read until next description
-    while textOffset < n {
-      var desc: string;
-      try {
-        r.advanceTo(">");
-        r.readLine(desc, stripNewline=true);
-        // verify that Text[textOffset] is a >
-        if Text[textOffset] != ">".toByte() {
-          halt("Contig misalignment");
-        }
-        textOffset += 1;
-      } catch e: EofError {
-        break;
+    try {
+      r.advanceTo(">");
+      r.readLine(desc, stripNewline=true);
+      // verify that Text[textOffset] is a >
+      if Text[textOffset] != ">".toByte() {
+        halt("Contig misalignment");
       }
-      // check that the first line matches
-      var check: bytes;
-      r.mark();
-      // read until we get a non-empty line
-      while r.readLine(check, stripNewline=true) &&
-            !check.isEmpty() {
-      }
-      r.revert();
-
-      desc = desc.strip(">", leading=true, trailing=false);
-      desc = desc.replace(" ", "_");
-      desc = desc.replace("\t", "_");
-
-      // verify that 'check' matches Text[textOffset..]
-      if !check.isEmpty() {
-        var len = min(n - textOffset, check.size);
-        for i in 0..len {
-          if Text[textOffset+i] != check[i] {
-            halt("Nucleotide did not match");
-          }
-        }
-      }
-
-      // find the end of this contig in Text
-      var contigLen = 0;
-      while textOffset + contigLen < n {
-        if Text[textOffset + contigLen] == ">".toByte() {
-          break;
-        }
-        contigLen += 1;
-      }
-      // now Text[textOffset + contigLen] == > or is at n
-      const contigEnd = textOffset + contigLen;
-
-      // OK, now emit the unique substrings
-      for i in 0..<contigLen {
-        const len = MinUnique[textOffset + i]: int;
-        // skip kmers unique due to being at the end of string
-        if len > 0 && (K == 0 || len <= K) {
-          const useK = if K == 0 then len else K;
-          const amtBefore = (useK-len)/2;
-          var startOffset = textOffset + i - amtBefore; 
-          // but don't let start offset be earlier than the contig start
-          startOffset = max(startOffset, textOffset);
-
-          // output the kmer
-          if startOffset + useK <= contigEnd {
-            for j in 0..<useK {
-              writef("%c", Text[startOffset + j]);
-            }
-          }
-
-          write(" 0 ", useFilename, " 1 ", desc, " ", i);
-          writeln();
-        }
-      }
-
-      textOffset += contigLen;
+      textOffset += 1;
+    } catch e: EofError {
+      desc = "eof";
     }
-  } else {
-    halt("Not implemented yet");
+    // check that the first line matches
+    var check: bytes;
+    r.mark();
+    // read until we get a non-empty line
+    while r.readLine(check, stripNewline=true) &&
+          !check.isEmpty() {
+    }
+    r.revert();
+
+    desc = desc.strip(">", leading=true, trailing=false);
+    desc = desc.replace(" ", "_");
+    desc = desc.replace("\t", "_");
+
+    // verify that 'check' matches Text[textOffset..]
+    if !check.isEmpty() {
+      var len = min(n - textOffset, check.size);
+      for i in 0..len {
+        if Text[textOffset+i] != check[i] {
+          halt("Nucleotide did not match");
+        }
+      }
+    }
+  }
+
+  for i in 0..<n {
+    const len = MinUnique[i]: int;
+    if len > 0 && (K == 0 || len <= K) {
+      const useK = if K == 0 then len else K;
+      const amtBefore = (useK-len)/2;
+      var startOffset = max(i - amtBefore, 0); // don't go before
+
+      // output the kmer if it doesn't go beyond the end
+      if startOffset + useK <= n {
+        for j in 0..<useK {
+          writef("%c", Text[startOffset + j]);
+        }
+
+        write(" 0 ", useFilename, " 1 ", desc, " ", i);
+        writeln();
+      }
+    }
   }
 
   return 0;
