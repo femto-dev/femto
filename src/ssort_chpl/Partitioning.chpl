@@ -353,7 +353,7 @@ record splitters : writeSerializable {
       bk = 2*bk + (mycompare(splitter(bk), a, comparator) < 0):int;
     }
     if equalBuckets {
-      bk = 2*bk + (mycompare(a, sortedSplitter(bk-myNumBuckets), comparator) == 0):int;
+      bk = 2*bk + (mycompare(sortedSplitter(bk-myNumBuckets), a, comparator) == 0):int;
     }
     return bk - (if equalBuckets then 2*myNumBuckets else myNumBuckets);
   }
