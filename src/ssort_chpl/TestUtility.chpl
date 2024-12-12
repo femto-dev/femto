@@ -23,6 +23,7 @@ module TestUtility {
 use Utility;
 import IO;
 import FileSystem;
+import BlockDist;
 
 proc testTriangles() {
   writeln("testTriangles");
@@ -161,7 +162,7 @@ proc testFastaFiles() throws {
 
 config const n = 100_000;
 proc testAtomicMinMax() {
-
+  writeln("testAtomicMinMax");
   var amin: atomic int = max(int);
   var amax: atomic int = min(int);
 
@@ -176,15 +177,52 @@ proc testAtomicMinMax() {
 }
 
 proc testReplicate() {
+  writeln("testReplicate");
   const v = "hello";
   const rep = replicate(v, Locales);
   coforall loc in Locales {
     on loc {
-      const ref locv = getLocalReplicand(rep, Locales);
+      const ref locv = getLocalReplicand(v, rep);
       assert(locv.locale == here);
       assert("hello" == locv);
     }
   }
+}
+
+proc testDivideIntoTasks() {
+  writeln("testDivideIntoTasks");
+  const Dom = BlockDist.blockDist.createDomain(0..<n);
+  const nLocales = Dom.targetLocales().size;
+  const nTasksPerLocale = computeNumTasks();
+  var A:[Dom] int = -1; // store task IDs
+  forall (taskId, chunk) in divideIntoTasks(Dom, nTasksPerLocale) {
+    for i in chunk {
+      assert(A[i] == -1); // should not have any overlap
+      A[i] = taskId;
+    }
+  }
+  // check that it works the same even if some tasks are running
+  coforall i in 1..10 {
+    var B:[Dom] int = -1;
+    forall (taskId, chunk) in divideIntoTasks(Dom, nTasksPerLocale) {
+      for i in chunk {
+        assert(B[i] == -1); // should not have any overlap
+        B[i] = taskId;
+      }
+    }
+    assert(B.equals(A));
+  }
+
+  // count the number per task. It should be within 1% of the min/max.
+  var countPerTask:[0..<nLocales*nTasksPerLocale] int;
+  for x in A {
+    countPerTask[x] += 1;
+  }
+  const minCount = min reduce countPerTask;
+  const maxCount = max reduce countPerTask;
+  writeln("minCount = ", minCount, " maxCount = ", maxCount);
+  assert(minCount <= maxCount &&
+         maxCount <= minCount + 1 + 0.01*minCount);
 }
 
 proc main() throws {
@@ -198,6 +236,7 @@ proc main() throws {
   testAtomicMinMax();
 
   testReplicate();
+  testDivideIntoTasks();
 }
 
 

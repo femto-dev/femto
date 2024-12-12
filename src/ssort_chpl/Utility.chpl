@@ -29,8 +29,9 @@ import OS.EofError;
 import Path;
 import Sort.{sort,isSorted};
 import BlockDist.blockDist;
-import ReplicatedDist.replicatedDist;
 import ChplConfig.CHPL_COMM;
+import RangeChunk;
+import Version;
 
 import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING, DISTRIBUTE_EVEN_WITH_COMM_NONE};
 
@@ -65,19 +66,32 @@ proc maybeDistributed() param {
     * if 'targetLocales' is 'none'
     * if CHPL_COMM=none.
 */
-proc makeBlockDomain(dom, targetLocales) {
+proc makeBlockDomain(dom: domain(?), targetLocales) {
   if maybeDistributed() && targetLocales.type != nothing {
     return blockDist.createDomain(dom, targetLocales=targetLocales);
   } else {
     return dom;
   }
 }
+/* Helper for the above to accept a range */
+proc makeBlockDomain(rng: range(?), targetLocales) {
+  return makeBlockDomain({rng}, targetLocales);
+}
 
+/* Helper for replicate() */
 class ReplicatedWrapper {
   var x;
 }
 
-proc replicate(in x, targetLocales) {
+/* Returns a distributed array containing replicated copies of 'x',
+   or 'none' if replication is not necessary.
+
+   targetLocales should be an array of Locales or 'none' if
+   replication is not necessary.
+
+   Returns 'none' if 'maybeDistributed()' returns 'false'.
+ */
+proc replicate(x, targetLocales) {
   if maybeDistributed() && targetLocales.type != nothing {
     var minIdV = max(int);
     var maxIdV = min(int);
@@ -127,16 +141,69 @@ proc replicate(in x, targetLocales) {
 
     return Result;
   } else {
+    return none;
+  }
+}
+
+/* Accesses the result of 'replicate()' to get the local copy.
+
+   'x' should be the same input that was provided to 'replicate()'
+ */
+proc getLocalReplicand(const ref x, replicated) const ref {
+  if maybeDistributed() && replicated.type != nothing {
+    return replicated.localAccess[here.id]!.x;
+  } else {
+    // return the value
     return x;
   }
 }
 
-proc getLocalReplicand(replicated, targetLocales) const ref {
-  if maybeDistributed() && targetLocales.type != nothing {
-    return replicated.localAccess[here.id]!.x;
-  } else {
-    // return the value, which was copied to 'replicated'
-    return replicated;
+/* Given a Block distributed domain or non-distributed domain,
+   this iterator divides it into nLocales*nTasksPerLocale chunks
+   (where nLocales=Dom.targetLocales().size) to be processed by a
+   different task. Each task will only process local elements.
+
+   A forall loop running this iterator will be distributed
+   (if Dom is distributed) and parallel according to nTasksPerLocale.
+
+   Yields (taskId, chunk) for each chunk.
+
+   chunk is a non-strided range.
+
+   taskIds start will be in 0..<nLocales*nTasksPerLocale.
+ */
+iter divideIntoTasks(const Dom: domain(?), nTasksPerLocale: int) {
+  if Dom.rank != 1 then compilerError("divideIntoTasks only supports 1-D");
+  if Dom.dim(0).strides != strideKind.one then
+    compilerError("divideIntoTasks only supports non-strided domains");
+  writeln("serial divideIntoTasks should not be called");
+  yield (0, Dom.dim(0));
+}
+iter divideIntoTasks(param tag: iterKind,
+                     const Dom: domain(?),
+                     nTasksPerLocale: int)
+ where tag == iterKind.standalone {
+
+  if Dom.rank != 1 then compilerError("divideIntoTasks only supports 1-D");
+  if Dom.dim(0).strides != strideKind.one then
+    compilerError("divideIntoTasks only supports non-strided domains");
+  if !Dom.hasSingleLocalSubdomain() {
+    compilerError("divideIntoTasks only supports dists " +
+                  "with single local subdomain");
+    // note: it'd be possible to support; would just need to be written
+    // differently, and consider both
+    //  # local subdomains < nTasksPerLocale and the inverse.
+  }
+
+  const nTargetLocales = Dom.targetLocales().size;
+  coforall (loc, locId) in zip(Dom.targetLocales(), 0..) {
+    on loc {
+      const ref locDom = Dom.localSubdomain();
+      coforall (chunk,taskId) in
+               zip(RangeChunk.chunks(locDom.dim(0), nTasksPerLocale), 0..) {
+        yield (nTasksPerLocale*locId + taskId, chunk);
+      }
+    }
   }
 }
 
@@ -442,7 +509,7 @@ proc readAllFiles(const ref files: list(string),
   }
   sort(locPaths);
 
-  const ByFileDom = makeBlockDomain({0..<locPaths.size}, targetLocales=locales);
+  const ByFileDom = makeBlockDomain(0..<locPaths.size, locales);
   const paths:[ByFileDom] string = forall i in ByFileDom do locPaths[i];
   const nFiles = paths.size;
 
@@ -460,8 +527,7 @@ proc readAllFiles(const ref files: list(string),
   const fileEnds = + scan sizes;
   const total = fileEnds.last;
 
-  const TextDom = makeBlockDomain({0..<total+INPUT_PADDING},
-                                  targetLocales=locales);
+  const TextDom = makeBlockDomain(0..<total+INPUT_PADDING, locales);
   var thetext:[TextDom] uint(8);
 
   // read each file
@@ -472,7 +538,7 @@ proc readAllFiles(const ref files: list(string),
   }
 
   // compute fileStarts
-  const StartsDom = makeBlockDomain({0..nFiles}, targetLocales=locales);
+  const StartsDom = makeBlockDomain(0..nFiles, locales);
   var starts:[StartsDom] int;
   starts[0] = 0;
   starts[1..nFiles] = fileEnds;
@@ -515,25 +581,31 @@ proc printSuffix(offset: int, thetext: [], fileStarts: [] int, lcp: int, amt: in
 
 
 proc atomicStoreMinRelaxed(ref dst: atomic int, src: int) {
-  // TODO: call atomic store min once issue #22867 is resolved
-  var t = dst.read(memoryOrder.relaxed);
-  while min(src, t) != t {
-    // note: dst.compareExchangeWeak updates 't' if it fails
-    // to the current value
-    if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
-      return;
+  if Version.chplVersion >= new Version.versionValue(2,3) {
+    dst.min(src, memoryOrder.relaxed);
+  } else {
+    var t = dst.read(memoryOrder.relaxed);
+    while min(src, t) != t {
+      // note: dst.compareExchangeWeak updates 't' if it fails
+      // to the current value
+      if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
+        return;
+      }
     }
   }
 }
 
 proc atomicStoreMaxRelaxed(ref dst: atomic int, src: int) {
-  // TODO: call atomic store max once issue #22867 is resolved
-  var t = dst.read(memoryOrder.relaxed);
-  while max(src, t) != t {
-    // note: dst.compareExchangeWeak updates 't' if it fails
-    // to the current value
-    if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
-      return;
+  if Version.chplVersion >= new Version.versionValue(2,3) {
+    dst.max(src, memoryOrder.relaxed);
+  } else {
+    var t = dst.read(memoryOrder.relaxed);
+    while max(src, t) != t {
+      // note: dst.compareExchangeWeak updates 't' if it fails
+      // to the current value
+      if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
+        return;
+      }
     }
   }
 }

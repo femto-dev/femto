@@ -24,6 +24,7 @@ import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.TRACE;
 
 use Partitioning;
+use Utility;
 
 import Sort.{isSorted, DefaultComparator};
 import Random;
@@ -38,8 +39,15 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   writeln("testPartition(n=", n, ", nSplit=", nSplit, ", ",
           "useEqualBuckets=", useEqualBuckets, ", nTasks=", nTasks, ")");
 
-  var Input: [0..<n] int = 0..<n by -1;
-  var Output: [0..<n] int = -1;
+  const useNLocales = min(nTasks, Locales.size);
+  const nTasksPerLocale = min(1, nTasks / useNLocales);
+  const targetLocales = for i in 0..<useNLocales do Locales[i];
+
+  const InputDom = makeBlockDomain(0..<n, targetLocales);
+  const OutputDom = makeBlockDomain(0..<n, targetLocales);
+
+  var Input: [InputDom] int = 0..<n by -1;
+  var Output: [OutputDom] int = -1;
 
   var InputCounts:Map.map(int, int);
 
@@ -73,12 +81,12 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
-  const useNLocales = min(nTasks, Locales.size);
-  const targetLocales = for i in 0..<useNLocales do Locales[i];
   const counts =
-    partition(Input, Output, sp, replicateSplitters(sp, targetLocales),
-              myDefaultComparator, 0, n-1,
-              locales=targetLocales, nTasks=nTasks);
+    partition(Input.domain, Input,
+              Output.domain, Output,
+              sp, replicate(sp, targetLocales),
+              myDefaultComparator,
+              nTasksPerLocale=nTasksPerLocale);
   assert(counts.size == nBuckets);
 
   const ends = + scan counts;
@@ -150,9 +158,11 @@ proc testPartitionsEven(n: int, nSplit: int) {
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
-  const counts = partition(Input, Output, sp, replicateSplitters(sp, [here]),
-                           myDefaultComparator, 0, n-1,
-                           locales=none, nTasks=1);
+  const counts = partition(Input.domain, Input,
+                           Output.domain, Output,
+                           sp, replicate(sp, [here]),
+                           myDefaultComparator,
+                           nTasksPerLocale=1);
   assert(counts.size == nBuckets);
 
   var minSize = max(int);
@@ -192,9 +202,11 @@ proc testPartitionSingleSplitter(n: int) {
   assert(sp.hasEqualityBuckets);
   assert(nBuckets == 3); // < == and > buckets
 
-  const counts = partition(Input, Output, sp, replicateSplitters(sp, [here]),
-                           myDefaultComparator, 0, n-1,
-                           locales=none, nTasks=1);
+  const counts = partition(Input.domain, Input,
+                           Output.domain, Output,
+                           sp, replicate(sp, [here]),
+                           myDefaultComparator,
+                           nTasksPerLocale=1);
   assert(counts.size == nBuckets);
 
   var total = 0;
