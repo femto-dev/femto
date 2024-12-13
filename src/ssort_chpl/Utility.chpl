@@ -27,7 +27,9 @@ import IO;
 import List.list;
 import OS.EofError;
 import Path;
+import BitOps;
 import Sort.{sort,isSorted};
+import Math.divCeil;
 import BlockDist.blockDist;
 import ChplConfig.CHPL_COMM;
 import RangeChunk;
@@ -610,5 +612,177 @@ proc atomicStoreMaxRelaxed(ref dst: atomic int, src: int) {
   }
 }
 
+/**
+  Pack the input. Return an array of words where each word contains packed
+  characters, and set bitsPerChar to indicate how many bits each character
+  occupies in the packed data.
+
+  Throws if:
+   * n <= 0
+   * Input does not have appropriate padding after n (enough for word)
+   * character range > 2**16
+   * computed bits per character > bits in wordType
+  */
+proc packInput(type wordType,
+               Input: [],
+               const n: Input.domain.idxType,
+               out bitsPerChar: int) throws {
+  type characterType = Input.eltType;
+
+  if !isUintType(wordType) {
+    compilerError("packInput requires wordType is a uint(w)");
+  }
+
+  // n should be > 0
+  if n <= 0 {
+    throw new Error("n <= 0 in packInput");
+  }
+  const neededPadding = numBits(wordType)/8;
+  if n + neededPadding > Input.size {
+    throw new Error("Input not padded in packInput");
+  }
+  // padding should be zeros.
+  for x in Input[n..#neededPadding] {
+    if x != 0 {
+      throw new Error("Input is not zero-padded in packInput");
+    }
+  }
+
+  // compute the minimum and maximum character in the input
+  var minCharacter = max(int);
+  var maxCharacter = -1;
+  forall (x,i) in zip(Input, Input.domain)
+    with (min reduce minCharacter, max reduce maxCharacter) {
+    if i < n {
+      const asInt = x:int;
+      minCharacter reduce= asInt;
+      maxCharacter reduce= asInt;
+    }
+  }
+
+  if maxCharacter - minCharacter > 2**16 {
+    throw new Error("character range too big in packInput");
+  }
+
+  var alphaMap:[minCharacter..maxCharacter] int;
+  forall (x,i) in zip(Input, Input.domain) with (+ reduce alphaMap) {
+    if i < n {
+      alphaMap[x] += 1;
+    }
+  }
+
+  // set each element to 1 if it is present, 0 otherwise
+  // (could be handled with || reduce and an array of bools)
+  forall x in alphaMap {
+    if x > 0 then x = 1;
+  }
+
+  // now count the number of unique characters
+  const nUniqueChars = + reduce alphaMap;
+
+  // now set the value of each character
+  {
+    const tmp = + scan alphaMap;
+    alphaMap = tmp - 1;
+  }
+
+  const newMaxChar = max(1, nUniqueChars-1):wordType;
+  bitsPerChar = numBits(newMaxChar.type) - BitOps.clz(newMaxChar):int;
+
+  if numBits(wordType) < bitsPerChar {
+    throw new Error("packInput requires wordType bits >= bitsPerChar");
+  }
+
+  // create the packed input array
+  param bitsPerWord = numBits(wordType);
+  const endBit = n*bitsPerChar;
+  const nWords = divCeil(n*bitsPerChar, bitsPerWord);
+  const PackedDom = makeBlockDomain(0..<nWords+INPUT_PADDING,
+                                    Input.targetLocales());
+  var PackedInput:[PackedDom] wordType;
+
+  // now remap the input
+  forall (word, wordIdx) in zip(PackedInput, PackedInput.domain)
+    with (in alphaMap) {
+
+    // What contributes to wordIdx in PackedInput?
+    // It contains the bits bitsPerWord*wordIdx..#bitsPerWord
+    const startBit = bitsPerWord*wordIdx;
+
+    // get started
+    var w:wordType = 0;
+    var charIdx = startBit / bitsPerChar;
+    var skip = startBit % bitsPerChar;
+    var bitsRead = 0;
+    if skip != 0 && startBit < endBit {
+      // handle reading only the right part of the 1st character
+      // skip the top 'skip' bits and read the rest
+      var nBottomBitsToRead = bitsPerChar - skip;
+      const char = alphaMap[Input[charIdx]]:wordType;
+      var bottomBits = char & ((1:wordType << nBottomBitsToRead) - 1);
+      w |= bottomBits;
+      bitsRead += nBottomBitsToRead;
+      charIdx += 1;
+    }
+
+    while bitsRead + bitsPerChar <= bitsPerWord &&
+          startBit + bitsRead + bitsPerChar <= endBit {
+      // read a whole character
+      const char = alphaMap[Input[charIdx]]:wordType;
+      w <<= bitsPerChar;
+      w |= char;
+      bitsRead += bitsPerChar;
+      charIdx += 1;
+    }
+
+    if bitsRead < bitsPerWord && startBit + bitsRead < endBit {
+      // handle reading only the left part of the last character
+      const nTopBitsToRead = bitsPerWord - bitsRead;
+      const nBottomBitsToSkip = bitsPerChar - nTopBitsToRead;
+      const char = alphaMap[Input[charIdx]]:wordType;
+      var topBits = char >> nBottomBitsToSkip;
+      w <<= nTopBitsToRead;
+      w |= topBits;
+      bitsRead += nTopBitsToRead;
+      charIdx += 1;
+    }
+
+    if bitsRead < bitsPerWord {
+      // pad with 0 if anything is not yet read
+      w <<= bitsPerWord - bitsRead;
+    }
+
+    // store the word we computed back to the array
+    word = w;
+  }
+
+  return PackedInput;
+}
+
+/* Loads a word full of character data from a PackedInput
+   starting at character offset i */
+proc loadWord(PackedInput: [],
+              const i: int,
+              const bitsPerChar: int) {
+  // load word 1 and word 2
+  type wordType = PackedInput.eltType;
+
+  const startBit = i*bitsPerChar;
+  const wordIdx = startBit / numBits(wordType);
+  const shift = startBit % numBits(wordType);
+  const word0 = PackedInput[wordIdx];
+  const word1 = PackedInput[wordIdx+1];
+  return loadWordWithWords(word0, word1, i, bitsPerChar);
+}
+/* Like loadWord, but assumes that the relevant
+   potential words that are needed are already loaded. */
+inline proc loadWordWithWords(word0: ?wordType, word1: wordType,
+                              const i: int, const bitsPerChar: int) {
+  const startBit = i*bitsPerChar;
+  const shift = startBit % numBits(wordType);
+  const ret =  if shift == 0 then word0
+               else word0 << shift | word1 >> (numBits(wordType) - shift);
+  return ret;
+}
 
 }

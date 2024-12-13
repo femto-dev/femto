@@ -223,6 +223,111 @@ proc testDivideIntoTasks() {
   writeln("minCount = ", minCount, " maxCount = ", maxCount);
   assert(minCount <= maxCount &&
          maxCount <= minCount + 1 + 0.01*minCount);
+
+  // check that the tasks divide the work in an increasing order,
+  // that is, the task assignment in A is only increasing.
+  // this is important for making the partition stable.
+  for i in Dom {
+    if i > 0 {
+      assert(A[i-1] <= A[i]);
+    }
+  }
+}
+
+proc testPackInput() {
+  writeln("testPackInput");
+
+  var Input = [0b111, 0b101, 0b011, 0b101, 0b000, 0b100, 0b100, 0b111,
+               0b001, 0b000, 0b010, 0b100, 0b000, 0b001, 0b110, 0b101,
+               0b101, 0b010, 0b011, 0b110, 0b111, 0b011, 0b010, 0b001,
+
+               0b100, 0b000, 0b010, 0b100, 0b101, 0b010, 0b011, 0b011,
+               0b000, 0b001, 0b010, 0b011, 0b100, 0b101, 0b110, 0b111,
+               0b111, 0b110, 0b101, 0b100, 0b011, 0b010, 0b001, 0b000,
+
+               0b110, 0b111, 0, 0, 0, 0, 0, 0, 0, 0];
+  const n = 50;
+  var bitsPerChar: int;
+  var PackedByte = try! packInput(uint(8), Input, n, bitsPerChar);
+  assert(bitsPerChar == 3);
+  // each line corresponds to a 24-bit row above
+  var ba = 0b11110101, bb = 0b11010001, bc = 0b00100111,
+      bd = 0b00100001, be = 0b01000000, bf = 0b01110101,
+      bg = 0b10101001, bh = 0b11101110, bi = 0b11010001,
+
+      bj = 0b10000001, bk = 0b01001010, bl = 0b10011011,
+      bm = 0b00000101, bn = 0b00111001, bo = 0b01110111,
+      bp = 0b11111010, bq = 0b11000110, br = 0b10001000,
+
+      bs = 0b11011100;
+
+  assert(PackedByte[0] == ba && PackedByte[1] == bb && PackedByte[2] == bc);
+  assert(PackedByte[3] == bd && PackedByte[4] == be && PackedByte[5] == bf);
+  assert(PackedByte[6] == bg && PackedByte[7] == bh && PackedByte[8] == bi);
+  assert(PackedByte[9] == bj && PackedByte[10] == bk && PackedByte[11] == bl);
+  assert(PackedByte[12] == bm && PackedByte[13] == bn && PackedByte[14] == bo);
+  assert(PackedByte[15] == bp && PackedByte[16] == bq && PackedByte[17] == br);
+  assert(PackedByte[18] == bs);
+  assert(PackedByte.size >= 18+8); // should have a words worth of padding
+  for x in PackedByte[19..] {
+    assert(x == 0);
+  }
+
+  // test loading words
+  for i in 0..<n {
+    assert(Input[i] == loadWord(PackedByte, i, bitsPerChar) >> (8-3));
+  }
+
+  var PackedUint = try! packInput(uint, Input, n, bitsPerChar);
+  assert(bitsPerChar == 3);
+  // compute the words based on the above bytes
+  var word0:uint;
+  var word1:uint;
+  var word2:uint;
+
+  // the first 8 bytes go into word0
+  word0 <<= 8; word0 |= ba;
+  word0 <<= 8; word0 |= bb;
+  word0 <<= 8; word0 |= bc;
+  word0 <<= 8; word0 |= bd;
+  word0 <<= 8; word0 |= be;
+  word0 <<= 8; word0 |= bf;
+  word0 <<= 8; word0 |= bg;
+  word0 <<= 8; word0 |= bh;
+
+  // the next 8 bytes go into word1
+  word1 <<= 8; word1 |= bi;
+  word1 <<= 8; word1 |= bj;
+  word1 <<= 8; word1 |= bk;
+  word1 <<= 8; word1 |= bl;
+  word1 <<= 8; word1 |= bm;
+  word1 <<= 8; word1 |= bn;
+  word1 <<= 8; word1 |= bo;
+  word1 <<= 8; word1 |= bp;
+
+  // the last bytes go into word2
+  word2 <<= 8; word2 |= bq;
+  word2 <<= 8; word2 |= br;
+  word2 <<= 8; word2 |= bs;
+  word2 <<= 8; // rest are zeros
+  word2 <<= 8;
+  word2 <<= 8;
+  word2 <<= 8;
+  word2 <<= 8;
+
+  assert(PackedUint[0] == word0);
+  assert(PackedUint[1] == word1);
+  assert(PackedUint[2] == word2);
+  assert(PackedUint.size >= 3+8); // should have padding
+  for x in PackedUint[3..] {
+    assert(x == 0);
+  }
+
+  // test loading words
+  for i in 0..<n {
+    assert(Input[i] == loadWord(PackedUint, i, bitsPerChar) >> (64-3));
+  }
+
 }
 
 proc main() throws {
@@ -237,6 +342,10 @@ proc main() throws {
 
   testReplicate();
   testDivideIntoTasks();
+  serial {
+    testPackInput();
+  }
+  testPackInput();
 }
 
 
