@@ -204,7 +204,7 @@ record differenceCover {
   }
 
   /**
-   Given offset i with 0 <= i < period, returns the number j,
+   Given offset i with 0 <= i < period, returns the smallest number j
    so that i + j is in the difference cover.
    */
   inline proc nextCoverIndex(i: integral) : i.type {
