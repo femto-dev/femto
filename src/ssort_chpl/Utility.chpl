@@ -57,6 +57,12 @@ proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
   return nTasks;
 }
 
+/* check to see if a domain is of a type that can be distributed */
+proc isDistributedDomain(dom) param {
+  // this uses unstable / undocumented features. a better way is preferred.
+  return !chpl_domainDistIsLayout(dom);
+}
+
 /* are we running distributed according to CHPL_COMM ? */
 proc maybeDistributed() param {
   return CHPL_COMM!="none" || DISTRIBUTE_EVEN_WITH_COMM_NONE;
@@ -97,11 +103,11 @@ proc replicate(x, targetLocales) {
   if maybeDistributed() && targetLocales.type != nothing {
     var minIdV = max(int);
     var maxIdV = min(int);
-    for loc in targetLocales {
-      minIdV = min(minIdV, loc.id);
-      maxIdV = max(maxIdV, loc.id);
+    forall loc in targetLocales with (min reduce minIdV, max reduce maxIdV) {
+      minIdV reduce= loc.id;
+      maxIdV reduce= loc.id;
     }
-    const D = blockDist.createDomain({minIdV..maxIdV},
+    const D = blockDist.createDomain(minIdV..maxIdV,
                                      targetLocales=targetLocales);
     var Result: [D] owned ReplicatedWrapper(x.type)?;
 
@@ -178,8 +184,8 @@ iter divideIntoTasks(const Dom: domain(?), nTasksPerLocale: int) {
   if Dom.rank != 1 then compilerError("divideIntoTasks only supports 1-D");
   if Dom.dim(0).strides != strideKind.one then
     compilerError("divideIntoTasks only supports non-strided domains");
-  writeln("serial divideIntoTasks should not be called");
   yield (0, Dom.dim(0));
+  halt("serial divideIntoTasks should not be called");
 }
 iter divideIntoTasks(param tag: iterKind,
                      const Dom: domain(?),
@@ -208,6 +214,150 @@ iter divideIntoTasks(param tag: iterKind,
     }
   }
 }
+
+/**
+ This iterator creates distributed parallelism to yield
+ a bucket index for each task to process.
+
+ Yields (region of bucket, bucket index, taskId)
+
+ BucketCounts should be the size of each bucket
+ BucketEnds should be the indices (in Arr) of the end of each bucket
+ Arr is a potentially distributed array that drives the parallelism.
+
+ The Arr.targetLocales() must be in an increasing order by locale ID.
+ */
+iter divideByBuckets(const Arr: [],
+                     const BucketCounts: [] int,
+                     const BucketEnds: [] int,
+                     nTasksPerLocale: int) {
+  if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
+  if Arr.domain.dim(0).strides != strideKind.one then
+    compilerError("divideByBuckets only supports non-strided domains");
+  yield (0);
+  halt("serial divideByBuckets should not be called");
+}
+iter divideByBuckets(param tag: iterKind,
+                     const Arr: [],
+                     const BucketCounts: [] int,
+                     const BucketEnds: [] int,
+                     const nTasksPerLocale: int)
+ where tag == iterKind.standalone {
+
+  if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
+  if Arr.domain.dim(0).strides != strideKind.one then
+    compilerError("divideByBuckets only supports non-strided domains");
+  if !Arr.domain.hasSingleLocalSubdomain() {
+    compilerError("divideByBuckets only supports dists " +
+                  "with single local subdomain");
+    // note: it'd be possible to support; would just need to be written
+    // differently, and consider both
+    //  # local subdomains < nTasksPerLocale and the inverse.
+  }
+
+  var minIdV = max(int);
+  var maxIdV = min(int);
+  forall loc in Arr.targetLocales()
+  with (min reduce minIdV, max reduce maxIdV) {
+    minIdV = min(minIdV, loc.id);
+    maxIdV = max(maxIdV, loc.id);
+  }
+
+  if EXTRA_CHECKS {
+    var lastId = -1;
+    for loc in Arr.targetLocales() {
+      if loc.id == lastId {
+        halt("divideByBuckets requires increasing locales assignment");
+      }
+    }
+  }
+
+  const arrShift = Arr.domain.low;
+  const arrEnd = Arr.domain.high;
+  const bucketsEnd = BucketCounts.domain.high;
+
+  var NBucketsPerLocale: [minIdV..maxIdV] int;
+  forall (bucketSize,bucketEnd) in zip(BucketCounts, BucketEnds)
+  with (+ reduce NBucketsPerLocale) {
+    const bucketStart = bucketEnd - bucketSize;
+    // count it towards the locale owning the middle of the bucket
+    var checkIdx = bucketStart + bucketSize/2 + arrShift;
+    // any 0-size buckets at the end of buckets to the last locale
+    if checkIdx > arrEnd then checkIdx = arrEnd;
+    const localeId = Arr[checkIdx].locale.id;
+    NBucketsPerLocale[localeId] += 1;
+  }
+
+  const EndBucketPerLocale = + scan NBucketsPerLocale;
+
+  coforall (loc, locId) in zip(Arr.targetLocales(), 0..) {
+    on loc {
+      const countBucketsHere = NBucketsPerLocale[loc.id];
+      const endBucketHere = EndBucketPerLocale[loc.id];
+      const startBucketHere = endBucketHere - countBucketsHere;
+
+      // compute the array offset where work on this locale begins
+      const startHere =
+        if startBucketHere <= bucketsEnd
+        then BucketEnds[startBucketHere] - BucketCounts[startBucketHere]
+        else BucketEnds[bucketsEnd-1] - BucketCounts[bucketsEnd-1];
+
+      // compute the total number of elements to be processed on this locale
+      var eltsHere = 0;
+      forall bucketIdx in startBucketHere..<endBucketHere
+      with (+ reduce eltsHere) {
+        eltsHere += BucketCounts[bucketIdx];
+      }
+
+      const perTask = divCeil(eltsHere, nTasksPerLocale);
+
+      //writeln("locale bucket region ", startBucketHere..<endBucketHere,
+      //        " elts ", eltsHere, " perTask ", perTask);
+
+      // compute the number of buckets for each task
+      // assuming that we just divide start..end into nTasksPerLocale equally
+      var useNTasksPerLocale = nTasksPerLocale;
+      if eltsHere == 0 {
+        // set it to 0 to create an empty array to do no work on this locale
+        useNTasksPerLocale = 0;
+      }
+      var NBucketsPerTask: [0..<useNTasksPerLocale] int;
+
+      if eltsHere > 0 {
+        forall bucketIdx in startBucketHere..<endBucketHere
+        with (+ reduce NBucketsPerTask) {
+          const bucketEnd = BucketEnds[bucketIdx];
+          const bucketSize = BucketCounts[bucketIdx];
+          const bucketStart = bucketEnd - bucketSize;
+          var checkIdx = bucketStart + bucketSize/2 - startHere;
+          // any 0-size buckets at the end of buckets to the last task
+          if checkIdx >= eltsHere then checkIdx = eltsHere-1;
+          const taskId = checkIdx / perTask;
+          NBucketsPerTask[taskId] += 1;
+        }
+      }
+
+      const EndBucketPerTask = + scan NBucketsPerTask;
+
+      coforall (nBucketsThisTask, endBucketThisTask, taskId)
+      in zip(NBucketsPerTask, EndBucketPerTask, 0..)
+      {
+        const startBucketThisTask = endBucketThisTask - nBucketsThisTask;
+        const startBucket = startBucketHere + startBucketThisTask;
+        const endBucket = startBucket + nBucketsThisTask;
+        for bucketIdx in startBucket..<endBucket {
+          const bucketSize = BucketCounts[bucketIdx];
+          const bucketStart = BucketEnds[bucketIdx] - bucketSize;
+          const start = bucketStart + arrShift;
+          const end = start + bucketSize;
+          yield (start..<end, bucketIdx,
+                 nTasksPerLocale*locId + taskId);
+        }
+      }
+    }
+  }
+}
+
 
 /* This function gives the size of an array of triangular indices
    for use with flattenTriangular.
@@ -760,25 +910,21 @@ proc packInput(type wordType,
 }
 
 /* Loads a word full of character data from a PackedInput
-   starting at character offset i */
-proc loadWord(PackedInput: [],
-              const i: int,
-              const bitsPerChar: int) {
+   starting at the bit offset startBit */
+proc loadWord(PackedInput: [], const startBit: int) {
   // load word 1 and word 2
   type wordType = PackedInput.eltType;
 
-  const startBit = i*bitsPerChar;
   const wordIdx = startBit / numBits(wordType);
   const shift = startBit % numBits(wordType);
   const word0 = PackedInput[wordIdx];
   const word1 = PackedInput[wordIdx+1];
-  return loadWordWithWords(word0, word1, i, bitsPerChar);
+  return loadWordWithWords(word0, word1, startBit);
 }
 /* Like loadWord, but assumes that the relevant
    potential words that are needed are already loaded. */
 inline proc loadWordWithWords(word0: ?wordType, word1: wordType,
-                              const i: int, const bitsPerChar: int) {
-  const startBit = i*bitsPerChar;
+                              const startBit: int) {
   const shift = startBit % numBits(wordType);
   const ret =  if shift == 0 then word0
                else word0 << shift | word1 >> (numBits(wordType) - shift);

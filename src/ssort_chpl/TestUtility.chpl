@@ -24,6 +24,21 @@ use Utility;
 import IO;
 import FileSystem;
 import BlockDist;
+import Random;
+
+// problem size for various tests
+config const n = 100_000;
+config const nBuckets = 8*numLocales*computeNumTasks(ignoreRunning=true);
+
+proc testIsDistributed() {
+  writeln("testIsDistributed");
+
+  const BlockDomain = BlockDist.blockDist.createDomain(0..100);
+  const DefaultDomain = {0..100};
+
+  assert(isDistributedDomain(BlockDomain));
+  assert(!isDistributedDomain(DefaultDomain));
+}
 
 proc testTriangles() {
   writeln("testTriangles");
@@ -160,7 +175,6 @@ proc testFastaFiles() throws {
   FileSystem.remove(filename);
 }
 
-config const n = 100_000;
 proc testAtomicMinMax() {
   writeln("testAtomicMinMax");
   var amin: atomic int = max(int);
@@ -234,6 +248,135 @@ proc testDivideIntoTasks() {
   }
 }
 
+proc testDivideByBuckets(n: int, nBuckets: int,
+                         nTasksPerLocale: int,
+                         skew: bool) {
+  writeln("testDivideByBuckets(n=", n, ", nBuckets=", nBuckets,
+                               ", nTasksPerLocale=", nTasksPerLocale,
+                               ", skew=", skew, ")");
+
+  const Dom = BlockDist.blockDist.createDomain(0..<n);
+  var Input:[Dom] int;
+  if skew == false {
+    Random.fillRandom(Input, min=0, max=nBuckets-1, seed=1);
+  } else {
+    Random.fillRandom(Input, min=0, max=(nBuckets-1)/2, seed=1);
+    forall x in Input {
+      if x < 2 && nBuckets > 2 {
+        x = nBuckets-2;
+      }
+    }
+  }
+  var Counts:[0..<nBuckets] int;
+  for x in Input {
+    Counts[x] += 1;
+  }
+  var Ends = + scan Counts;
+
+  var BucketIdsCheck:[Dom] int = -1; // store bucket IDs
+
+  for (count,end,bucketIdx) in zip(Counts, Ends, 0..) {
+    const start = end - count;
+    if start < end {
+      BucketIdsCheck[start..<end] = bucketIdx;
+    }
+  }
+
+  var BucketIds:[Dom] int = -1; // store bucket IDs
+  var TaskIds:[Dom] int = -1; // store task IDs
+  var LocaleIds:[Dom] int = -1; // store locale IDs
+
+  forall (region, bucketIdx, taskId)
+  in divideByBuckets(Input, Counts, Ends, nTasksPerLocale) {
+    // check that the region's start is either 0 or an entry in Ends
+    var foundCount = false;
+    for c in Counts {
+      if region.size == c then foundCount = true;
+    }
+    assert(foundCount);
+    var foundEnd = false;
+    for e in Ends {
+      if region.low + region.size == e then foundEnd = true;
+    }
+    assert(foundEnd);
+
+    if region.size > 0 {
+      BucketIds[region] = bucketIdx;
+      TaskIds[region] = taskId;
+      LocaleIds[region] = here.id;
+    }
+  }
+
+  assert(BucketIds.equals(BucketIdsCheck));
+
+  // check that the task assignment divides work in an increasing order
+  for i in Dom {
+    if i > 0 {
+      assert(TaskIds[i-1] <= TaskIds[i]);
+    }
+  }
+
+  // check that each bucket is on the same task
+  for bkt in 0..<nBuckets {
+    const end = Ends[bkt];
+    const count = Counts[bkt];
+    const start = end - count;
+    for i in start+1..<end {
+      assert(TaskIds[i-1] == TaskIds[i]);
+    }
+  }
+
+  // count the number of buckets containing items on the wrong locale
+  // it should be <= number of locales
+  var bktsWithWrongLocale = 0;
+  var eltsWithWrongLocale = 0;
+  for bkt in 0..<nBuckets {
+    const end = Ends[bkt];
+    const count = Counts[bkt];
+    const start = end - count;
+    var nWrongLocaleThisBkt = 0;
+    for i in start..<end {
+      if LocaleIds[i] != Input[i].locale.id {
+        nWrongLocaleThisBkt += 1;
+      }
+    }
+    eltsWithWrongLocale += nWrongLocaleThisBkt;
+    if nWrongLocaleThisBkt > 0 {
+      bktsWithWrongLocale += 1;
+    }
+  }
+
+  assert(bktsWithWrongLocale <= numLocales);
+  writeln(" % elements on wrong locale = ", 100.0*eltsWithWrongLocale/n);
+
+  // check that the tasks are dividing relatively evenly
+  var maxTask = max reduce TaskIds;
+  var CountByTask:[0..maxTask] int;
+  for elt in TaskIds {
+    CountByTask[elt] += 1;
+  }
+  var minEltsPerTask = min reduce CountByTask;
+  var maxEltsPerTask = max reduce CountByTask;
+  writeln(" minEltsPerTask = ", minEltsPerTask,
+          " maxEltsPerTask = ", maxEltsPerTask);
+  if nBuckets > 4*nTasksPerLocale*numLocales && !skew {
+    assert(maxEltsPerTask <= 2.0*minEltsPerTask);
+  }
+}
+
+proc testDivideByBuckets() {
+  testDivideByBuckets(10, 3, 1, false);
+  testDivideByBuckets(10, 3, 2, false);
+  testDivideByBuckets(10, 3, 2, true);
+  testDivideByBuckets(100, 10, 5, false);
+  testDivideByBuckets(100, 7, 3, false);
+  testDivideByBuckets(100, 7, 3, true);
+
+  var nTasksPerLocale = computeNumTasks(ignoreRunning=true);
+  testDivideByBuckets(n, nBuckets, nTasksPerLocale, false);
+  testDivideByBuckets(n, nBuckets, nTasksPerLocale, true);
+}
+
 proc testPackInput() {
   writeln("testPackInput");
 
@@ -275,7 +418,7 @@ proc testPackInput() {
 
   // test loading words
   for i in 0..<n {
-    assert(Input[i] == loadWord(PackedByte, i, bitsPerChar) >> (8-3));
+    assert(Input[i] == loadWord(PackedByte, i*bitsPerChar) >> (8-3));
   }
 
   var PackedUint = try! packInput(uint, Input, n, bitsPerChar);
@@ -325,12 +468,13 @@ proc testPackInput() {
 
   // test loading words
   for i in 0..<n {
-    assert(Input[i] == loadWord(PackedUint, i, bitsPerChar) >> (64-3));
+    assert(Input[i] == loadWord(PackedUint, i*bitsPerChar) >> (64-3));
   }
 
 }
 
 proc main() throws {
+  testIsDistributed();
   testTriangles();
   testBsearch();
   testRevComp();
@@ -341,7 +485,17 @@ proc main() throws {
   testAtomicMinMax();
 
   testReplicate();
+
+  serial {
+    testDivideIntoTasks();
+  }
   testDivideIntoTasks();
+
+  serial {
+    testDivideByBuckets();
+  }
+  testDivideByBuckets();
+
   serial {
     testPackInput();
   }
