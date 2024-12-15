@@ -437,6 +437,13 @@ class PerTaskState {
    an array with a 'proc this' and an 'eltType' to generate element i.
 
    Output is expected to be an array over OutputDomain.
+   If Output is 'none', this function will only count,
+   and skip the partition step.
+
+   'filterBucket' provides a mechanism to only process certain buckets.
+   If 'filterBucket' is provided and not 'none', it will be called as
+   'filterBucket(bucketForRecord(Input[i]))' to check if that bucket should
+   be processed. Only elements where it returns 'true' will be processed.
 
    Return an array of counts to indicate how many elements
    ended up in each bucket.
@@ -488,7 +495,8 @@ proc partition(const InputDomain: domain(?),
                const OutputDomain: domain(?),
                ref Output,
                split, rsplit, comparator,
-               nTasksPerLocale: int = computeNumTasks()) {
+               nTasksPerLocale: int = computeNumTasks(),
+               filterBucket: ?t = none) {
 
   const nBuckets; // set below
   const ref locales =
@@ -556,7 +564,9 @@ proc partition(const InputDomain: domain(?),
     // this loop must really be serial. it can be run in parallel
     // within the forall because it's updating state local to each task.
     for (_,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
-      counts[bin] += 1;
+      if filterBucket.type == nothing || filterBucket(bin) {
+        counts[bin] += 1;
+      }
     }
 
     // Now store the counts into the global counts array
@@ -565,32 +575,36 @@ proc partition(const InputDomain: domain(?),
     }
   }
 
-  // Step 2: Scan
-  const globalEnds = + scan globalCounts;
+  if Output.type != nothing {
+    // Step 2: Scan
+    const globalEnds = + scan globalCounts;
 
-  // Step 3: Distribute
-  forall (taskId, chunk) in divideIntoTasks(InputDomain, nTasksPerLocale) {
-    ref nextOffsets = localState[taskId]!.localCounts;
-    const ref mysplit = getLocalReplicand(split, rsplit);
-    const taskStart = chunk.first;
-    const taskEnd = chunk.last; // inclusive
+    // Step 3: Distribute
+    forall (taskId, chunk) in divideIntoTasks(InputDomain, nTasksPerLocale) {
+      ref nextOffsets = localState[taskId]!.localCounts;
+      const ref mysplit = getLocalReplicand(split, rsplit);
+      const taskStart = chunk.first;
+      const taskEnd = chunk.last; // inclusive
 
-    // initialize nextOffsets
-    foreach bin in 0..<nBuckets {
-      var globalBin = bin*nTasks + taskId;
-      nextOffsets[bin] = if globalBin > 0
-                         then outputStart + globalEnds[globalBin-1]
-                         else outputStart;
-    }
+      // initialize nextOffsets
+      foreach bin in 0..<nBuckets {
+        var globalBin = bin*nTasks + taskId;
+        nextOffsets[bin] = if globalBin > 0
+                           then outputStart + globalEnds[globalBin-1]
+                           else outputStart;
+      }
 
-    // as above,
-    // this loop must really be serial. it can be run in parallel
-    // within the forall because it's updating state local to each task.
-    for (elt,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
-      // Store it in the right bin
-      ref next = nextOffsets[bin];
-      Output[next] = elt;
-      next += 1;
+      // as above,
+      // this loop must really be serial. it can be run in parallel
+      // within the forall because it's updating state local to each task.
+      for (elt,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
+        if filterBucket.type == nothing || filterBucket(bin) {
+          // Store it in the right bin
+          ref next = nextOffsets[bin];
+          Output[next] = elt;
+          next += 1;
+        }
+      }
     }
   }
 

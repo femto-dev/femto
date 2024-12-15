@@ -142,6 +142,19 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   assert(InputCounts == OutputCounts);
 
   assert(total == n);
+
+
+  // check also that the partitioning is stable
+  Input = 0..<n;
+  Output = -1;
+  var ExpectOutput = Input;
+  const counts2 =
+    partition(Input.domain, Input,
+              Output.domain, Output,
+              sp, replicate(sp, targetLocales),
+              myDefaultComparator,
+              nTasksPerLocale=nTasksPerLocale);
+  assert(Output.equals(ExpectOutput));
 }
 
 proc testPartitionsEven(n: int, nSplit: int) {
