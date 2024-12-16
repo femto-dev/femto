@@ -647,13 +647,101 @@ proc insertionSort(ref elts: [], ref keys: [], region: range) {
       }
     }
     if (!inserted) {
-      keys[low] = elti;
+      keys[low] = keyi;
       elts[low] = elti;
     }
   }
 }
 
+proc shellSort(ref elts: [], ref keys: [], region: range) {
+  const start = region.low,
+        end = region.high;
+
+  // Based on Sedgewick's Shell Sort -- see
+  // Analysis of Shellsort and Related Algorithms 1996
+  // and see Marcin Ciura - Best Increments for the Average Case of Shellsort
+  // for the choice of these increments.
+  var js, hs: int;
+  var keyi: keys.eltType;
+  var elti: elts.eltType;
+  const incs = (701, 301, 132, 57, 23, 10, 4, 1);
+  for h in incs {
+    hs = h + start;
+    for is in hs..end {
+      keyi = keys[is];
+      elti = elts[is];
+      js = is;
+      while js >= hs && keyi < keys[js-h] {
+        keys[js] = keys[js - h];
+        elts[js] = elts[js - h];
+        js -= h;
+      }
+      keys[js] = keyi;
+      elts[js] = elti;
+    }
+  }
+}
+
 /*
+  An LSB-radix sorter that sorts keys that have been already collected.
+
+  'keys' must be an arrays of unsigned integral type.
+
+  'region' indicates the portion of 'elts' / 'keys' to sort.
+ */
+proc lsbRadixSort(ref elts: [], ref keys: [], region: range,
+                  ref eltsSpace: [], ref keysSpace: [],
+                  ref counts: [] int, param bitsPerPass) {
+  // TODO
+}
+
+// mark the boundaries in boundaries when elt[i-1] != elt[i]
+proc markBoundaries(ref keys: [], ref boundaries: [], region: range) {
+  const start = region.low;
+  const end = region.high;
+  var cur = start;
+  type t = boundaries.eltType;
+
+  // handle bits until the phase becomes aligned
+  while cur <= end {
+    var phase = cur % numBits(t);
+    if phase == 0 {
+      break;
+    }
+    // otherwise, handle index 'start' and increment it
+    if cur == start || keys[cur-1] != keys[cur] {
+      setBit(boundaries, cur);
+    }
+    cur += 1;
+  }
+
+  // handle setting a word at a time
+  while cur + numBits(t) <= end {
+    // handle numBits(t) at a time
+    var word:t = 0;
+    var wordIdx = cur / numBits(t);
+    for i in 0..<numBits(t) {
+      var bit: t = 0;
+      if cur == start {
+        bit = 1;
+      } else if keys[cur-1] != keys[cur] {
+        bit = 1;
+      }
+      word <<= 1; // make room for the bit
+      word |= bit; // add in the bit
+      cur += 1;
+    }
+    boundaries[wordIdx] = word;
+  }
+
+  // handle any leftover bits
+  while cur <= end {
+    if cur == start || keys[cur-1] != keys[cur] {
+      setBit(boundaries, cur);
+    }
+    cur += 1;
+  }
+}
 
 /*
   A radix sorter that uses a separate keys array and tracks where equal elements
@@ -669,9 +757,12 @@ proc insertionSort(ref elts: [], ref keys: [], region: range) {
   (note that boundaries is storing unsigned ints that record multiple such
   bits).
 
+  The boundary for element 0 will always be marked.
  */
 proc radixSortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
-                            region: range) {
+                            region: range,
+                            ref eltsSpace: [], ref keysSpace: [],
+                            ref counts: [] int) {
   if !isUintType(keys.eltType) {
     compilerError("radixSortAndTrackEqual requires unsigned integer keys");
   }
@@ -682,7 +773,7 @@ proc radixSortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
   if region.size == 0 {
     return;
   } else if region.size == 1 {
-    setBit(boundaries, 0);
+    markBoundaries(keys, boundaries, region);
     return;
   } else if region.size == 2 {
     const i = region.low;
@@ -691,50 +782,28 @@ proc radixSortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
       keys[i] <=> keys[j];
       elts[i] <=> elts[j];
     }
+    markBoundaries(keys, boundaries, region);
+    return;
   } else if region.size <= 16 {
-    // insertion sort
-  }
-
-
-  // insertion sort threshold
-
-  if boundsChecking {
-    if region.size > 0 {
-      var minW = region.first / numBits(boundaries.eltType);
-      var maxW = region.last / numBits(boundaries.eltType);
-      assert(boundaries.domain.contains(minW));
-      assert(boundaries.domain.contains(maxW));
-    }
+    insertionSort(elts, keys, region);
+    markBoundaries(keys, boundaries, region);
+    return;
+  } else if region.size <= 500 {
+    shellSort(elts, keys, region);
+    markBoundaries(keys, boundaries, region);
+    return;
+  } else if region.size <= 1 << 15 {
+    lsbRadixSort(elts, keys, region, eltsSpace, keysSpace, counts,
+                 bitsPerPass=8);
+    markBoundaries(keys, boundaries, region);
+    return;
+  } else {
+    lsbRadixSort(elts, keys, region, eltsSpace, keysSpace, counts,
+                 bitsPerPass=16);
+    markBoundaries(keys, boundaries, region);
+    return;
   }
 }
-
-/*
-  A radix sorter that uses a separate keys array and tracks where equal elements
-  occur in the sorted output.
-
-  'keys' and 'boundaries' must be an arrays of unsigned integral type.
-
-  'region' indicates the portion of 'elts' / 'keys' to sort.
-
-  Bits will be set in 'boundaries' to track whether elements differed in the
-  sorted result. In particular, if the process of computing the sorted result
-  revealed that 'elt[i-1] != elt[i]', then bit 'i' will be set in boundaries
-  (note that boundaries is storing unsigned ints that record multiple such
-  bits).
-
- */
-proc radixSortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
-                            region: range) {
-  if !isUintType(keys.eltType) {
-    compilerError("radixSortAndTrackEqual requires unsigned integer keys");
-  }
-  if !isUintType(boundaries.eltType) {
-    compilerError("radixSortAndTrackEqual requires unsigned integer keys");
-  }
-
-  // TODO;
-}
-*/
 
 
 /* Use a tournament tree (tree of losers) to perform multi-way merging.

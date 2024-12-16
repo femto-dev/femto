@@ -26,7 +26,7 @@ import SuffixSort.TRACE;
 use Partitioning;
 use Utility;
 
-import Sort.{isSorted, DefaultComparator};
+import Sort.{sort, isSorted, DefaultComparator};
 import Random;
 import Math;
 import Map;
@@ -344,27 +344,81 @@ proc testSplitters() {
 
 }
 
-proc testInsertionSort(n: int, max: int, seed: int) {
+proc testSort(n: int, max: uint, seed: int, sorter:string) {
+
+  writeln("testSort(", n, ", ", max, ", ", seed, ", ", sorter, ")");
 
   var Elts: [0..<n] uint;
   var Keys: [0..<n] uint;
 
-  Random.fillRandom(Elts, min=0, max=max, seed=seed);
-  Elts = ~Keys;
+  Random.fillRandom(Keys, min=0, max=max, seed=seed);
+  Elts = Keys + 100;
+  var KeysCopy = Keys;
 
-  insertionSort(Elts, Keys, 0..<n);
+  //writeln("Keys ", Keys);
+  //writeln("Elts ", Elts);
 
-  for i in 1..n {
+  if sorter == "insertion" {
+    insertionSort(Elts, Keys, 0..<n);
+  } else if sorter == "shell" {
+    shellSort(Elts, Keys, 0..<n);
+  } else {
+    halt("Unknown sorter in testSort");
+  }
+
+  //writeln("after Keys ", Keys);
+  //writeln("after Elts ", Elts);
+
+  for i in 1..<n {
     assert(Keys[i-1] <= Keys[i]);
   }
-  var ExpectElts = ~Keys;
+
+  sort(KeysCopy);
+  assert(Keys.equals(KeysCopy));
+
+  var ExpectElts = Keys + 100;
   assert(ExpectElts.equals(Elts));
 }
-proc testInsertionSort() {
-  testInsertionSort(10, 10, 1);
-  testInsertionSort(10, 5, 2);
-  testInsertionSort(10, 100, 3);
-  testInsertionSort(10, max(uint), 1);
+
+proc testMarkBoundaries(region: range) {
+  writeln("testMarkBoundaries(", region, ")");
+
+  var Keys: [region] uint;
+  const nWords = Math.divCeil(region.high, numBits(uint));
+  var Boundaries: [0..<nWords] uint;
+  var ExpectBoundaries: [0..<nWords] uint;
+  Random.fillRandom(Keys, min=0, max=1, seed=1);
+  for i in region {
+    if i == region.low || Keys[i-1] != Keys[i] {
+      setBit(ExpectBoundaries, i);
+    }
+  }
+
+  // compute it with the routine and check it matches
+  markBoundaries(Keys, Boundaries, region);
+  assert(Boundaries.equals(ExpectBoundaries));
+}
+
+proc testSorts() {
+  for sorter in ["insertion", "shell"] {
+    testSort(10, 0, 0, sorter);
+    testSort(10, 10, 1, sorter);
+    testSort(10, 5, 2, sorter);
+    testSort(10, 100, 3, sorter);
+    testSort(10, 10000, 4, sorter);
+
+    testSort(100, 10, 5, sorter);
+    testSort(100, 5, 6, sorter);
+    testSort(100, 100, 7, sorter);
+    testSort(100, 10000, 8, sorter);
+  }
+
+  // test markBoundaries
+  testMarkBoundaries(1..4);
+  testMarkBoundaries(10..60);
+  testMarkBoundaries(100..200);
+  testMarkBoundaries(1000..2000);
+  testMarkBoundaries(10000..20000);
 }
 
 proc testMultiWayMerge() {
@@ -511,7 +565,14 @@ proc testMultiWayMerge() {
 }
 
 
-proc testPartitions() {
+proc runTests() {
+  // test sorters
+  testSorts();
+
+  // test multi-way merge
+  testMultiWayMerge();
+
+  // test partition
   testPartition(10, 4, false, 1);
   testPartition(10, 4, true, 1);
   testPartition(100, 20, false, 1);
@@ -543,20 +604,17 @@ proc testPartitions() {
 
   // test creating splitters in other cases
   testSplitters();
-
-  // test multi-way merge
-  testMultiWayMerge();
 }
 
 proc main() {
   /* commented out due to some odd problems once added replicated
   serial {
-    writeln("Testing partitioning within serial block");
-    testPartitions();
+    writeln("Testing within serial block");
+    runTests();
   }*/
 
-  writeln("Testing partitioning with many tasks");
-  testPartitions();
+  writeln("Testing with many tasks");
+  runTests();
 
   writeln("TestPartitioning OK");
 }
