@@ -248,6 +248,34 @@ proc testDivideIntoTasks() {
   }
 }
 
+proc testDivideByBucketsCases() {
+  writeln("testDivideByBucketsCases");
+
+  // test a case where the buckets are all a consistent size
+  // and everything divides evenly.
+  const n = numLocales*100;
+  const nBuckets = numLocales*10; // -> each bucket is 10 elements
+  const nTasksPerLocale = 5;
+  const Dom = BlockDist.blockDist.createDomain(0..<n);
+  var Input:[Dom] int;
+  var Counts:[0..<nBuckets] int = 10;
+  var Ends = + scan Counts;
+
+  var BucketIds:[Dom] int = -1; // store bucket IDs
+  var TaskIds:[Dom] int = -1; // store task IDs
+  var LocaleIds:[Dom] int = -1; // store locale IDs
+
+  forall (region, bucketIdx, taskId)
+  in divideByBuckets(Input, Counts, Ends, nTasksPerLocale) {
+    //writeln("region=", region, " bucketIdx=", bucketIdx,
+    //        " taskId=", taskId, " on here.id=", here.id);
+    assert(region.size == 10); // all buckets are 10 elements
+    const start = region.low;
+    assert(start / 20 == taskId);
+    assert(start / 100 == here.id);
+  }
+}
+
 proc testDivideByBuckets(n: int, nBuckets: int,
                          nTasksPerLocale: int,
                          skew: bool) {
@@ -365,6 +393,8 @@ proc testDivideByBuckets(n: int, nBuckets: int,
 }
 
 proc testDivideByBuckets() {
+  testDivideByBucketsCases();
+
   testDivideByBuckets(10, 3, 1, false);
   testDivideByBuckets(10, 3, 2, false);
   testDivideByBuckets(10, 3, 2, true);
