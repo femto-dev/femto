@@ -622,6 +622,120 @@ proc partition(const InputDomain: domain(?),
   return counts;
 }
 
+/*
+  Performs insertion sort with already-computed keys for a
+  region within the arrays.
+ */
+proc insertionSort(ref elts: [], ref keys: [], region: range) {
+  const low = region.low,
+        high = region.high;
+
+  for i in low..high {
+    const keyi = keys[i];
+    const elti = elts[i];
+    var inserted = false;
+    for j in low..i-1 by -1 {
+      const keyj = keys[j];
+      if keyi < keyj {
+        keys[j+1] = keyj;
+        elts[j+1] = elts[j];
+      } else {
+        keys[j+1] = keyi;
+        elts[j+1] = elti;
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) {
+      keys[low] = elti;
+      elts[low] = elti;
+    }
+  }
+}
+
+/*
+
+/*
+  A radix sorter that uses a separate keys array and tracks where equal elements
+  occur in the sorted output.
+
+  'keys' and 'boundaries' must be an arrays of unsigned integral type.
+
+  'region' indicates the portion of 'elts' / 'keys' to sort.
+
+  Bits will be set in 'boundaries' to track whether elements differed in the
+  sorted result. In particular, if the process of computing the sorted result
+  revealed that 'elt[i-1] != elt[i]', then bit 'i' will be set in boundaries
+  (note that boundaries is storing unsigned ints that record multiple such
+  bits).
+
+ */
+proc radixSortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
+                            region: range) {
+  if !isUintType(keys.eltType) {
+    compilerError("radixSortAndTrackEqual requires unsigned integer keys");
+  }
+  if !isUintType(boundaries.eltType) {
+    compilerError("radixSortAndTrackEqual requires unsigned integer keys");
+  }
+
+  if region.size == 0 {
+    return;
+  } else if region.size == 1 {
+    setBit(boundaries, 0);
+    return;
+  } else if region.size == 2 {
+    const i = region.low;
+    const j = region.high;
+    if keys[i] > keys[j] {
+      keys[i] <=> keys[j];
+      elts[i] <=> elts[j];
+    }
+  } else if region.size <= 16 {
+    // insertion sort
+  }
+
+
+  // insertion sort threshold
+
+  if boundsChecking {
+    if region.size > 0 {
+      var minW = region.first / numBits(boundaries.eltType);
+      var maxW = region.last / numBits(boundaries.eltType);
+      assert(boundaries.domain.contains(minW));
+      assert(boundaries.domain.contains(maxW));
+    }
+  }
+}
+
+/*
+  A radix sorter that uses a separate keys array and tracks where equal elements
+  occur in the sorted output.
+
+  'keys' and 'boundaries' must be an arrays of unsigned integral type.
+
+  'region' indicates the portion of 'elts' / 'keys' to sort.
+
+  Bits will be set in 'boundaries' to track whether elements differed in the
+  sorted result. In particular, if the process of computing the sorted result
+  revealed that 'elt[i-1] != elt[i]', then bit 'i' will be set in boundaries
+  (note that boundaries is storing unsigned ints that record multiple such
+  bits).
+
+ */
+proc radixSortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
+                            region: range) {
+  if !isUintType(keys.eltType) {
+    compilerError("radixSortAndTrackEqual requires unsigned integer keys");
+  }
+  if !isUintType(boundaries.eltType) {
+    compilerError("radixSortAndTrackEqual requires unsigned integer keys");
+  }
+
+  // TODO;
+}
+*/
+
 
 /* Use a tournament tree (tree of losers) to perform multi-way merging.
    This does P-way merging, assuming that the P ranges in InputRanges

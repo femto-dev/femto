@@ -344,6 +344,29 @@ proc testSplitters() {
 
 }
 
+proc testInsertionSort(n: int, max: int, seed: int) {
+
+  var Elts: [0..<n] uint;
+  var Keys: [0..<n] uint;
+
+  Random.fillRandom(Elts, min=0, max=max, seed=seed);
+  Elts = ~Keys;
+
+  insertionSort(Elts, Keys, 0..<n);
+
+  for i in 1..n {
+    assert(Keys[i-1] <= Keys[i]);
+  }
+  var ExpectElts = ~Keys;
+  assert(ExpectElts.equals(Elts));
+}
+proc testInsertionSort() {
+  testInsertionSort(10, 10, 1);
+  testInsertionSort(10, 5, 2);
+  testInsertionSort(10, 100, 3);
+  testInsertionSort(10, max(uint), 1);
+}
+
 proc testMultiWayMerge() {
   {
     writeln("12 way merge");
@@ -526,8 +549,6 @@ proc testPartitions() {
 }
 
 proc main() {
-  testMultiWayMerge();
-
   /* commented out due to some odd problems once added replicated
   serial {
     writeln("Testing partitioning within serial block");
