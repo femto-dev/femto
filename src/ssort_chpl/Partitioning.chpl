@@ -623,10 +623,10 @@ proc partition(const InputDomain: domain(?),
 }
 
 /*
-  Performs insertion sort with already-computed keys for a
-  region within the arrays.
+  serial insertionSort with a separate array of already-computed keys
  */
 proc insertionSort(ref elts: [], ref keys: [], region: range) {
+  // note: insertionSort should be stable
   const low = region.low,
         high = region.high;
 
@@ -653,7 +653,9 @@ proc insertionSort(ref elts: [], ref keys: [], region: range) {
   }
 }
 
+/** serial shellSort with a separate array of already-computed keys */
 proc shellSort(ref elts: [], ref keys: [], region: range) {
+  // note: shellSort is not stable
   const start = region.low,
         end = region.high;
 
@@ -683,7 +685,7 @@ proc shellSort(ref elts: [], ref keys: [], region: range) {
 }
 
 /*
-  An LSB-radix sorter that sorts keys that have been already collected.
+  An serial LSB-radix sorter that sorts keys that have been already collected.
 
   'keys' must be an arrays of unsigned integral type.
 
@@ -692,7 +694,79 @@ proc shellSort(ref elts: [], ref keys: [], region: range) {
 proc lsbRadixSort(ref elts: [], ref keys: [], region: range,
                   ref eltsSpace: [], ref keysSpace: [],
                   ref counts: [] int, param bitsPerPass) {
-  // TODO
+  type t = keys.eltType;
+  param nPasses = numBits(t) / bitsPerPass;
+  const bucketsPerPass = 1 << bitsPerPass;
+  const maxBucket = nPasses*bucketsPerPass;
+
+  // check that the counts array is big enough
+  assert(counts.domain.contains(0));
+  assert(counts.domain.contains(maxBucket-1));
+  assert(counts.size >= maxBucket);
+
+  if !isUintType(keys.eltType) {
+    compilerError("keys.eltType must be an unsigned int type in lsbRadixSort");
+  }
+  if nPasses % 2 != 0 {
+    compilerError("nPasses must be even in lsbRadixSort");
+  }
+
+  // initialize the counts
+  for i in 0..<maxBucket {
+    counts = 0;
+  }
+
+  // count all of the passes at once
+  const mask = bucketsPerPass - 1;
+  for i in region {
+    const key = keys[i];
+    for param pass in 0..<nPasses {
+      const startBucket = pass*bucketsPerPass;
+      // get the appropriate bitsPerPass from the key
+      // since this is an LSB sort, pass 0 should get the bottom bits
+      const shift = pass*bitsPerPass;
+      const bkt = (key >> shift) & mask;
+      counts[(startBucket + bkt):int] += 1;
+    }
+  }
+
+  // handle the scan + distribute for each pass
+  for pass in 0..<nPasses {
+    const startBucket = pass*bucketsPerPass;
+    // compute the start positions for each bucket
+    // this is an exclusive scan, but start from region.low,
+    // so that these form the initial output positions for each bucket.
+    var total = region.low;
+    for bkt in 0..<bucketsPerPass {
+      ref x = counts[startBucket + bkt];
+      const c = x; // read the current count
+      x = total;   // set the current count to the total
+      total += c;  // add to total
+    }
+
+    // distribute
+    // pass 0 reads elts and writes eltsSpace
+    // pass 1 reads eltsSpace and writes elts
+    // ...
+    // data ends up in elts as long as nPasses is even, which is checked above
+    const ref inputElts = if pass % 2 == 0 then elts else eltsSpace;
+    const ref inputKeys = if pass % 2 == 0 then keys else keysSpace;
+    ref outputElts = if pass % 2 == 0 then eltsSpace else elts;
+    ref outputKeys = if pass % 2 == 0 then keysSpace else keys;
+    for i in region {
+      const key = inputKeys[i];
+      const elt = inputElts[i];
+      const shift = pass*bitsPerPass;
+      const bkt = (key >> shift) & mask;
+      ref x = counts[(startBucket + bkt):int];
+      // store the key into the appropriate bucket
+      const outIdx = x;
+      outputKeys[outIdx] = key;
+      outputElts[outIdx] = elt;
+      // increment the bucket counter
+      x += 1;
+    }
+  }
 }
 
 // mark the boundaries in boundaries when elt[i-1] != elt[i]

@@ -350,7 +350,10 @@ proc testSort(n: int, max: uint, seed: int, sorter:string) {
 
   var Elts: [0..<n] uint;
   var Keys: [0..<n] uint;
-
+  var EltsSpace: [0..<n] uint;
+  var KeysSpace: [0..<n] uint;
+  const maxCount = (1<<16)*4;
+  var Counts: [0..<maxCount] int = 1;
   Random.fillRandom(Keys, min=0, max=max, seed=seed);
   Elts = Keys + 100;
   var KeysCopy = Keys;
@@ -362,6 +365,12 @@ proc testSort(n: int, max: uint, seed: int, sorter:string) {
     insertionSort(Elts, Keys, 0..<n);
   } else if sorter == "shell" {
     shellSort(Elts, Keys, 0..<n);
+  } else if sorter == "lsb2" {
+    lsbRadixSort(Elts, Keys, 0..<n, EltsSpace, KeysSpace, Counts, 2);
+  } else if sorter == "lsb8" {
+    lsbRadixSort(Elts, Keys, 0..<n, EltsSpace, KeysSpace, Counts, 8);
+  } else if sorter == "lsb16" {
+    lsbRadixSort(Elts, Keys, 0..<n, EltsSpace, KeysSpace, Counts, 16);
   } else {
     halt("Unknown sorter in testSort");
   }
@@ -400,7 +409,7 @@ proc testMarkBoundaries(region: range) {
 }
 
 proc testSorts() {
-  for sorter in ["insertion", "shell"] {
+  for sorter in ["insertion", "shell", "lsb2", "lsb8", "lsb16"] {
     testSort(10, 0, 0, sorter);
     testSort(10, 10, 1, sorter);
     testSort(10, 5, 2, sorter);
