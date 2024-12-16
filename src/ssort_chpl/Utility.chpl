@@ -383,6 +383,36 @@ inline proc flattenTriangular(in i: int, in j: int) {
   return ret;
 }
 
+/* get the i'th bit of 'bits' which should have unsigned int elements */
+proc getBit(const bits: [], i: int) : bits.eltType {
+  if !isUintType(bits.eltType) {
+    compilerError("getBit requires unsigned integer elements");
+  }
+
+  type t = bits.eltType;
+  param wordBits = numBits(t);
+  const wordIdx = i / wordBits;
+  const phase = i % wordBits;
+  const word = bits[wordIdx];
+  const shift = wordBits - 1 - phase;
+  return (word >> shift) & 1;
+}
+
+/* set the i'th bit of 'bits' which should have unsigned int elements */
+proc setBit(ref bits: [], i: int) {
+  if !isUintType(bits.eltType) {
+    compilerError("getBit requires unsigned integer elements");
+  }
+
+  type t = bits.eltType;
+  param wordBits = numBits(t);
+  const wordIdx = i / wordBits;
+  const phase = i % wordBits;
+  const shift = wordBits - 1 - phase;
+  ref word = bits[wordIdx];
+  word = word | (1:t << shift);
+}
+
 /*
   Finds and returns the integer index i such that
 
@@ -911,12 +941,11 @@ proc packInput(type wordType,
 
 /* Loads a word full of character data from a PackedInput
    starting at the bit offset startBit */
-proc loadWord(PackedInput: [], const startBit: int) {
+inline proc loadWord(PackedInput: [], const startBit: int) {
   // load word 1 and word 2
   type wordType = PackedInput.eltType;
 
   const wordIdx = startBit / numBits(wordType);
-  const shift = startBit % numBits(wordType);
   const word0 = PackedInput[wordIdx];
   const word1 = PackedInput[wordIdx+1];
   return loadWordWithWords(word0, word1, startBit);

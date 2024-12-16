@@ -25,6 +25,7 @@ import IO;
 import FileSystem;
 import BlockDist;
 import Random;
+import Math;
 
 // problem size for various tests
 config const n = 100_000;
@@ -90,6 +91,35 @@ proc testTriangles() {
   assert(flattenTriangular(1,3) == 4);
   assert(flattenTriangular(3,2) == 5);
   assert(flattenTriangular(2,3) == 5);
+}
+
+proc testBits(type t) {
+  writeln("testBits(", t:string, ")");
+
+  var A: [0..<n] int;
+  Random.fillRandom(A, min=0, max=1, seed=1);
+
+  const nWords = Math.divCeil(n, numBits(t));
+  var bits: [0..<nWords] t;
+
+  for i in 0..<n {
+    if A[i] != 0 {
+      setBit(bits, i);
+    }
+  }
+
+  for i in 0..<n {
+    const expectBit = A[i] != 0;
+    const gotBit = getBit(bits, i);
+    assert(gotBit == expectBit);
+  }
+}
+
+proc testBits() {
+  testBits(uint(8));
+  testBits(uint(16));
+  testBits(uint(32));
+  testBits(uint);
 }
 
 proc testBsearch() {
@@ -506,6 +536,7 @@ proc testPackInput() {
 proc main() throws {
   testIsDistributed();
   testTriangles();
+  testBits();
   testBsearch();
   testRevComp();
   testFastaFiles();
