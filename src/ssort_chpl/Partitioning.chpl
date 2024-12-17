@@ -625,7 +625,7 @@ proc partition(const InputDomain: domain(?),
 /*
   serial insertionSort with a separate array of already-computed keys
  */
-proc insertionSort(ref elts: [], ref keys: [], region: range) {
+/*proc insertionSort(ref elts: [], ref keys: [], region: range) {
   // note: insertionSort should be stable
   const low = region.low,
         high = region.high;
@@ -651,10 +651,10 @@ proc insertionSort(ref elts: [], ref keys: [], region: range) {
       elts[low] = elti;
     }
   }
-}
+}*/
 
 /** serial shellSort with a separate array of already-computed keys */
-proc shellSort(ref elts: [], ref keys: [], region: range) {
+/*proc shellSort(ref elts: [], ref keys: [], region: range) {
   // note: shellSort is not stable
   const start = region.low,
         end = region.high;
@@ -682,7 +682,7 @@ proc shellSort(ref elts: [], ref keys: [], region: range) {
       elts[js] = elti;
     }
   }
-}
+}*/
 
 /*
   An serial LSB-radix sorter that sorts keys that have been already collected.
@@ -691,6 +691,7 @@ proc shellSort(ref elts: [], ref keys: [], region: range) {
 
   'region' indicates the portion of 'elts' / 'keys' to sort.
  */
+/*
 proc lsbRadixSort(ref elts: [], ref keys: [], region: range,
                   ref eltsSpace: [], ref keysSpace: [],
                   ref counts: [] int, param bitsPerPass) {
@@ -769,7 +770,7 @@ proc lsbRadixSort(ref elts: [], ref keys: [], region: range,
     elts[region] = eltsSpace[region];
     keys[region] = keysSpace[region];
   }
-}
+}*/
 
 // mark the boundaries in boundaries when elt[i-1] != elt[i]
 proc markBoundaries(keys, ref boundaries: [], region: range) {
@@ -840,7 +841,7 @@ TODO: the standard library sorter is quite a lot faster
       using that.
 
  */
-proc sortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
+/*proc sortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
                        region: range,
                        ref eltsSpace: [], ref keysSpace: [],
                        ref counts: [] int) {
@@ -884,7 +885,7 @@ proc sortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
     markBoundaries(keys, boundaries, region);
     return;
   }
-}
+}*/
 
 
 /* Use a tournament tree (tree of losers) to perform multi-way merging.

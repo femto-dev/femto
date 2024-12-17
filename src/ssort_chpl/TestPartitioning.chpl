@@ -347,6 +347,7 @@ proc testSplitters() {
 
 }
 
+/*
 proc testSort(n: int, max: uint, seed: int, sorter:string) {
 
   writeln("testSort(", n, ", ", max, ", ", seed, ", ", sorter, ")");
@@ -391,6 +392,7 @@ proc testSort(n: int, max: uint, seed: int, sorter:string) {
   var ExpectElts = Keys + 100;
   assert(ExpectElts.equals(Elts));
 }
+*/
 
 proc testMarkBoundaries(region: range) {
   writeln("testMarkBoundaries(", region, ")");
@@ -411,6 +413,7 @@ proc testMarkBoundaries(region: range) {
   assert(Boundaries.equals(ExpectBoundaries));
 }
 
+/*
 proc testSortAndTrackEqual(n: int) {
   writeln("testSortAndTrackEqual(", n, ")");
 
@@ -456,10 +459,10 @@ proc testSortAndTrackEqual(n: int) {
 
   var ExpectElts = ~Keys;
   assert(ExpectElts.equals(Elts));
-}
+}*/
 
 proc testSorts() {
-  for sorter in ["insertion", "shell", "lsb2", "lsb8", "lsb16"] {
+  /*for sorter in ["insertion", "shell", "lsb2", "lsb8", "lsb16"] {
     if skipslow && sorter == "lsb16" then continue;
     testSort(10, 0, 0, sorter);
     testSort(10, 10, 1, sorter);
@@ -471,7 +474,7 @@ proc testSorts() {
     testSort(100, 5, 6, sorter);
     testSort(100, 100, 7, sorter);
     testSort(100, 10000, 8, sorter);
-  }
+  }*/
 
   // test markBoundaries
   testMarkBoundaries(1..4);
@@ -480,6 +483,7 @@ proc testSorts() {
   testMarkBoundaries(1000..2000);
   testMarkBoundaries(10000..20000);
 
+  /*
   testSortAndTrackEqual(0);
   testSortAndTrackEqual(1);
   testSortAndTrackEqual(2);
@@ -488,7 +492,7 @@ proc testSorts() {
   testSortAndTrackEqual(1000);
   testSortAndTrackEqual(10000);
   testSortAndTrackEqual(100000);
-  testSortAndTrackEqual(1000000);
+  testSortAndTrackEqual(1000000);*/
 }
 
 proc testMultiWayMerge() {
@@ -676,7 +680,7 @@ proc runTests() {
   testSplitters();
 }
 
-proc testTiming() {
+/*proc testTiming() {
 
   var maxn = 10**8;
   var Elts: [0..<maxn] uint;
@@ -731,15 +735,15 @@ proc testTiming() {
 
     n *= 10;
   }
-}
+}*/
 
-config const timing = false;
+//config const timing = false;
 
 proc main() {
-  if timing {
+  /*if timing {
     testTiming();
     return;
-  }
+  }*/
 
   /* commented out due to some odd problems once added replicated
   serial {
