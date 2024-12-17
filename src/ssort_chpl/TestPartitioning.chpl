@@ -30,6 +30,9 @@ import Sort.{sort, isSorted, DefaultComparator};
 import Random;
 import Math;
 import Map;
+import Time;
+
+config const skipslow = false;
 
 const myDefaultComparator = new DefaultComparator();
 
@@ -408,8 +411,56 @@ proc testMarkBoundaries(region: range) {
   assert(Boundaries.equals(ExpectBoundaries));
 }
 
+proc testSortAndTrackEqual(n: int) {
+  writeln("testSortAndTrackEqual(", n, ")");
+
+  var Elts: [10..#n] uint;
+  var Keys: [10..#n] uint;
+  var EltsSpace: [10..#n] uint;
+  var KeysSpace: [10..#n] uint;
+  const maxCount = (1<<16)*4;
+  var Counts: [0..<maxCount] int = 1;
+  Random.fillRandom(Keys, min=0, max=max(uint), seed=1);
+  Elts = ~Keys;
+  var KeysCopy = Keys;
+
+  var Boundaries: [0..<Math.divCeil(10+n,numBits(uint))] uint;
+
+  //writeln("Keys ", Keys);
+  //writeln("Elts ", Elts);
+
+  sortAndTrackEqual(Elts, Keys, Boundaries, 10..#n,
+                    EltsSpace, KeysSpace, Counts);
+
+  // nothing to compare for n == 0
+  if n == 0 then return;
+
+  /*writeln("after Keys ", Keys);
+  writeln("after Elts ", Elts);
+  writeln("after Boundaries ");
+  for i in 10..#n {
+    write(getBit(Boundaries, i));
+  }
+  writeln();*/
+
+  assert(getBit(Boundaries, 10) == 1);
+  for i in 10..#n {
+    if i == 10 then continue;
+    assert(Keys[i-1] <= Keys[i]);
+    var bit = Keys[i-1] != Keys[i];
+    assert(getBit(Boundaries, i) == bit);
+  }
+
+  sort(KeysCopy);
+  assert(Keys.equals(KeysCopy));
+
+  var ExpectElts = ~Keys;
+  assert(ExpectElts.equals(Elts));
+}
+
 proc testSorts() {
   for sorter in ["insertion", "shell", "lsb2", "lsb8", "lsb16"] {
+    if skipslow && sorter == "lsb16" then continue;
     testSort(10, 0, 0, sorter);
     testSort(10, 10, 1, sorter);
     testSort(10, 5, 2, sorter);
@@ -428,6 +479,16 @@ proc testSorts() {
   testMarkBoundaries(100..200);
   testMarkBoundaries(1000..2000);
   testMarkBoundaries(10000..20000);
+
+  testSortAndTrackEqual(0);
+  testSortAndTrackEqual(1);
+  testSortAndTrackEqual(2);
+  testSortAndTrackEqual(10);
+  testSortAndTrackEqual(100);
+  testSortAndTrackEqual(1000);
+  testSortAndTrackEqual(10000);
+  testSortAndTrackEqual(100000);
+  testSortAndTrackEqual(1000000);
 }
 
 proc testMultiWayMerge() {
@@ -615,7 +676,71 @@ proc runTests() {
   testSplitters();
 }
 
+proc testTiming() {
+
+  var maxn = 10**8;
+  var Elts: [0..<maxn] uint;
+  var Keys: [0..<maxn] uint;
+  var EltsSpace: [0..<maxn] uint;
+  var KeysSpace: [0..<maxn] uint;
+  const maxCount = (1<<16)*4;
+  var Counts: [0..<maxCount] int = 1;
+  var Boundaries: [0..<Math.divCeil(maxn,numBits(uint))] uint;
+  var Tups: [0..<maxn] 2*uint;
+
+  var ntrials = 3;
+  var n = 1;
+  while n <= maxn {
+
+    var t: Time.stopwatch;
+    for trial in 0..<ntrials {
+      Boundaries=0;
+      Random.fillRandom(Keys[0..<n], min=0, max=max(uint), seed=1);
+      t.start();
+      sortAndTrackEqual(Elts, Keys, Boundaries, 0..<n,
+                        EltsSpace, KeysSpace, Counts);
+      t.stop();
+    }
+
+    var s: Time.stopwatch;
+    for trial in 0..<ntrials {
+      Boundaries=0;
+      Random.fillRandom(Keys[0..<n], min=0, max=max(uint), seed=1);
+      forall i in 0..<n {
+        Tups[i][0] = Keys[i];
+      }
+      s.start();
+      serial { sort(Tups, myDefaultComparator, 0..<n); }
+      record getter {
+        proc this(i) {
+          return Tups[i][0];
+        }
+      }
+      markBoundaries(new getter(), Boundaries, 0..<n);
+      s.stop();
+    }
+
+    if n == 1 {
+      writef("% <14s % <14s % <14s\n", "n", "mysort MB/s", "std sort MB/s\n");
+    }
+
+    writef("% <14i % <14r % <14r\n",
+           n,
+           n / 1000.0 / 1000.0 / (t.elapsed()/ntrials),
+           n / 1000.0 / 1000.0 / (s.elapsed()/ntrials));
+
+    n *= 10;
+  }
+}
+
+config const timing = false;
+
 proc main() {
+  if timing {
+    testTiming();
+    return;
+  }
+
   /* commented out due to some odd problems once added replicated
   serial {
     writeln("Testing within serial block");

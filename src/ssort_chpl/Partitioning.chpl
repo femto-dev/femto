@@ -695,7 +695,7 @@ proc lsbRadixSort(ref elts: [], ref keys: [], region: range,
                   ref eltsSpace: [], ref keysSpace: [],
                   ref counts: [] int, param bitsPerPass) {
   type t = keys.eltType;
-  param nPasses = numBits(t) / bitsPerPass;
+  param nPasses = divCeil(numBits(t), bitsPerPass);
   const bucketsPerPass = 1 << bitsPerPass;
   const maxBucket = nPasses*bucketsPerPass;
 
@@ -706,9 +706,6 @@ proc lsbRadixSort(ref elts: [], ref keys: [], region: range,
 
   if !isUintType(keys.eltType) {
     compilerError("keys.eltType must be an unsigned int type in lsbRadixSort");
-  }
-  if nPasses % 2 != 0 {
-    compilerError("nPasses must be even in lsbRadixSort");
   }
 
   // initialize the counts
@@ -767,10 +764,15 @@ proc lsbRadixSort(ref elts: [], ref keys: [], region: range,
       x += 1;
     }
   }
+
+  if nPasses % 2 != 0 {
+    elts[region] = eltsSpace[region];
+    keys[region] = keysSpace[region];
+  }
 }
 
 // mark the boundaries in boundaries when elt[i-1] != elt[i]
-proc markBoundaries(ref keys: [], ref boundaries: [], region: range) {
+proc markBoundaries(keys, ref boundaries: [], region: range) {
   const start = region.low;
   const end = region.high;
   var cur = start;
@@ -832,11 +834,16 @@ proc markBoundaries(ref keys: [], ref boundaries: [], region: range) {
   bits).
 
   The boundary for element 0 will always be marked.
+
+TODO: the standard library sorter is quite a lot faster
+      even with the memory allocation. need to shift to just
+      using that.
+
  */
-proc radixSortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
-                            region: range,
-                            ref eltsSpace: [], ref keysSpace: [],
-                            ref counts: [] int) {
+proc sortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
+                       region: range,
+                       ref eltsSpace: [], ref keysSpace: [],
+                       ref counts: [] int) {
   if !isUintType(keys.eltType) {
     compilerError("radixSortAndTrackEqual requires unsigned integer keys");
   }
@@ -862,11 +869,11 @@ proc radixSortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
     insertionSort(elts, keys, region);
     markBoundaries(keys, boundaries, region);
     return;
-  } else if region.size <= 500 {
+  } else if region.size <= 2000 {
     shellSort(elts, keys, region);
     markBoundaries(keys, boundaries, region);
     return;
-  } else if region.size <= 1 << 15 {
+  } else if region.size <= 1 << 16 {
     lsbRadixSort(elts, keys, region, eltsSpace, keysSpace, counts,
                  bitsPerPass=8);
     markBoundaries(keys, boundaries, region);
