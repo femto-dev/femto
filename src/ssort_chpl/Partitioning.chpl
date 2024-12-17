@@ -46,7 +46,7 @@ proc log2int(n: int) {
 
 // compare two records according to a comparator, but allow them
 // to be different types.
-private inline proc mycompare(a, b, comparator) {
+inline proc mycompare(a, b, comparator) {
   if canResolveMethod(comparator, "key", a) &&
      canResolveMethod(comparator, "key", b) {
     // Use the default comparator to compare the integer keys
@@ -522,7 +522,9 @@ proc partition(const InputDomain: domain(?),
         assert(locales.type != nothing);
       }
     }
-    assert(InputDomain.size == OutputDomain.size);
+    if filterBucket.type == nothing {
+      assert(InputDomain.size == OutputDomain.size);
+    }
     if OutputDomain.rank != 1 || OutputDomain.dim(0).strides != strideKind.one {
       compilerError("partition only supports non-strided 1-D OutputDomain");
     }
