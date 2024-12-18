@@ -49,23 +49,17 @@ config const sampleRatio = 1.5;
 config const seed = 1;
 config const minBucketsPerTask = 8;
 config const minBucketsSpace = 2_000_000; // a size in bytes
+config const simpleSortLimit = 1000; // for sizes >= this,
+                                     // use radix sort + multi-way merge
+config const finalSortPasses = 8;
 
 // upper-case names for the config constants to better identify them in code
 const SAMPLE_RATIO = min(1.0, sampleRatio);
 const SEED = seed;
 const MIN_BUCKETS_PER_TASK = minBucketsPerTask;
 const MIN_BUCKETS_SPACE = minBucketsSpace;
-
-// use a partition-based sorting startegy for improved parallelism
-// and memory usage
-config param PARTITION_SORT_ALL = true;
-// and also for sorting the sample by the first characters
-config param PARTITION_SORT_SAMPLE = true;
-// if this is set, separately sort each nonsample, and do k-way merge.
-// this should be faster for large problem sizes since the merge step
-// depends on the cover size rather than log n.
-config param IMPROVED_SORT_ALL = true;
-
+const SIMPLE_SORT_LIMIT = simpleSortLimit;
+const FINAL_SORT_NUM_PASSES = finalSortPasses;
 
 /**
  This record contains the configuration for the suffix sorting
@@ -101,6 +95,12 @@ record ssortConfig {
   const locales; // an array of locales to use
 
   const nTasksPerLocale: int;
+
+  // these are implementation details & can be overridden for testing
+  const finalSortNumPasses: int = FINAL_SORT_NUM_PASSES;
+  const finalSortSimpleSortLimit: int = SIMPLE_SORT_LIMIT;
+  const minBucketsPerTask: int = MIN_BUCKETS_PER_TASK;
+  const minBucketsSpace: int = MIN_BUCKETS_SPACE; 
 }
 
 /**
@@ -145,7 +145,8 @@ proc offsetAndCachedT(type offsetType, type cacheType) type {
 record prefix : writeSerializable {
   type wordType; // should be cfg.loadWordType
   param nWords;
-  var words: c_array(wordType, nWords);
+  //var words: c_array(wordType, nWords);
+  var words: nWords*wordType;
   // it would be a tuple nWords*wordType but that compiles slower
 
   // this function is a debugging aid
@@ -186,7 +187,8 @@ record sampleRanks : writeSerializable {
   type rankType; // should be cfg.unsignedOffsetType
   param nRanks;
 
-  var ranks: c_array(rankType, nRanks);
+  //var ranks: c_array(rankType, nRanks);
+  var ranks: nRanks*rankType;
   // it would be a tuple nRanks*rankType but that compiles slower
 
   // this function is a debugging aid
@@ -365,11 +367,11 @@ proc makePrefix(const cfg: ssortConfig(?), offset: cfg.offsetType,
     var word: wordType = 0;
     if bitsPerChar == numBits(wordType) {
       if offset < n {
-        result.words[i] = PackedText[offset+i];
+        word = PackedText[offset+i];
       }
     } else {
       if bitIdx < nBits {
-        result.words[i] = loadWord(PackedText, bitIdx);
+        word = loadWord(PackedText, bitIdx);
       }
     }
     result.words[i] = word;
@@ -1155,10 +1157,11 @@ proc sortOffsetsInRegionBySampleRanks(
                             region: range,
                             cover: differenceCover(?)) {
 
-  writeln("in sortOffsetsInRegionBySampleRanks ", region,
-          " size=", region.size);
+  //writeln("in sortOffsetsInRegionBySampleRanks ", region, " size=", region.size);
 
   const n = cfg.n;
+  const finalSortSimpleSortLimit = cfg.finalSortSimpleSortLimit;
+
   // the comparator to sort by sample ranks
   record finalComparator : relativeComparator {
     proc compare(a: offsetAndCached(?), b: offsetAndCached(?)) {
@@ -1172,14 +1175,13 @@ proc sortOffsetsInRegionBySampleRanks(
     }
   }
 
-  if region.size < 1000 {
+  if region.size < finalSortSimpleSortLimit {
     // just run a comparison sort
     sortRegion(A, new finalComparator(), region);
     return;
   }
 
-  writeln("in sortOffsetsInRegionBySampleRanks running v-way merge",
-          " for size=", region.size);
+  writeln("in sortOffsetsInRegionBySampleRanks running v-way merge", " for size=", region.size);
 
   var maxDistanceTmp = 0;
   for i in 0..<cover.period {
@@ -1412,11 +1414,15 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
 
   // we process the input in a bunch of passes to reduce memory
   // usage while caching some of each suffixes prefix when sorting.
-  const nPasses = 8; // how many passes to do
+
+  // decide how many passes to do
+  const nPasses = min(cfg.finalSortNumPasses, Splitters.numBuckets);
 
   var UnusedOutput = none;
 
   writeln("outer partition");
+  writeln("Splitters are");
+  writeln(Splitters);
 
   const OuterCounts = partition(TextDom, InputProducer,
                                 SA.domain, /* count only here */ UnusedOutput,
@@ -1429,6 +1435,10 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   writeln("TextDom = ", TextDom, " SA.domain = ", SA.domain);
 
   var nBucketsPerPass = divCeil(Splitters.numBuckets, nPasses);
+
+  for (count, bktIdx) in zip (OuterCounts, OuterCounts.domain) {
+    writeln(bktIdx, " bucket has ", count, " elements");
+  }
 
   // process the input in nPasses passes
   // each pass handles nBucketsPerPass buckets.
@@ -1826,8 +1836,8 @@ proc ssortDcx(const cfg:ssortConfig(?),
   // compute number of buckets for sample partition & after recursion partition
   const splitterSize = c_sizeof(unusedSplitter.type):int;
   var nTasks = ResultDom.targetLocales().size * cfg.nTasksPerLocale;
-  var requestedNumBuckets = max(MIN_BUCKETS_PER_TASK * nTasks,
-                                MIN_BUCKETS_SPACE / splitterSize);
+  var requestedNumBuckets = max(cfg.minBucketsPerTask * nTasks,
+                                cfg.minBucketsSpace / splitterSize);
 
   // create space for splitters now to avoid memory fragmentation
   var saveSplitters:[0..<2*requestedNumBuckets] unusedSplitter.type;
@@ -1896,7 +1906,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
     }
 
     // create splitters and store them in saveSplitters
-    record sampleCreator2 {
+    record sampleCreator {
       proc eltType type do return unusedSplitter.type;
       proc size do return sampleN;
       proc this(i: int) {
@@ -1904,12 +1914,15 @@ proc ssortDcx(const cfg:ssortConfig(?),
         // find the offset in the subproblem
         var subOffset = offset(SubSA[i]);
         // find the index in the parent problem.
-        var off = subproblemOffsetToOffset(subOffset, cover, charsPerMod);
-        return makePrefixAndSampleRanks(cfg, off, PackedText, SampleText);
+        var off = sampleRankIndexToOffset(subOffset, cover);
+        var ret = makePrefixAndSampleRanks(cfg, off, PackedText, SampleText);
+        writeln("sampleCreator(", i, ") :: SA[i] = ", subOffset, " -> offset ",
+            off, " -> ", ret);
+        return ret;
       }
     }
 
-    record sampleComparator2 : relativeComparator {
+    record sampleComparator : relativeComparator {
       proc compare(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?)) {
         return comparePrefixAndSampleRanks(cfg, a, b,
                                            PackedText, n,
@@ -1917,15 +1930,18 @@ proc ssortDcx(const cfg:ssortConfig(?),
       }
     }
 
-    const comparator = new sampleComparator2();
-    const tmp  = new splitters(new sampleCreator2(),
+    const tmp  = new splitters(new sampleCreator(),
                                requestedNumBuckets,
-                               comparator,
+                               new sampleComparator(),
                                howSorted=sortLevel.approximately);
 
     // save the splitters for later
     nSaveSplitters = tmp.myNumBuckets;
     saveSplitters[0..<nSaveSplitters] = tmp.sortedStorage[0..<nSaveSplitters];
+
+    writeln("requestedNumBuckets is ", requestedNumBuckets);
+    writeln("saveSplitters have ", nSaveSplitters, " buckets and are");
+    writeln(saveSplitters);
   }
 
   //// Step 2: Sort everything all together ////

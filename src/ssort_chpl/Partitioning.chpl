@@ -253,11 +253,11 @@ record splitters : writeSerializable {
     writer.write("\n equalBuckets=", equalBuckets);
     writer.write("\n storage=");
     for i in 0..<myNumBuckets {
-      writer.write((try! " %xt".format(storage[i])));
+      writer.writeln(storage[i]);
     }
     writer.write("\n sortedStorage=");
     for i in 0..<myNumBuckets {
-      writer.write(try! " %xt".format(sortedStorage[i]));
+      writer.writeln(sortedStorage[i]);
     }
     writer.write(")\n");
   }
