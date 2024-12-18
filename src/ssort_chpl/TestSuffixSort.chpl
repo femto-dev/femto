@@ -911,17 +911,18 @@ proc testOtherCase(input: string, expectSA: [] int,
 
   type offsetType = int; // always int for this test
 
-  const cfg = new ssortConfig(idxType=inputArr.idxType,
-                              characterType=inputArr.eltType,
+  const cfg = new ssortConfig(idxType=int,
                               offsetType=offsetType,
-                              cachedDataType=cachedDataType,
-                              loadWordType=
-                                (if cachedDataType != nothing
-                                 then cachedDataType
-                                 else inputArr.eltType),
+                              bitsPerChar=8,
+                              n=n,
                               cover=new differenceCover(period),
-                              locales=Locales);
-  const SA = ssortDcx(cfg, inputArr, n:offsetType);
+                              locales=Locales,
+                              nTasksPerLocale=1);
+
+  const Packed = packInput(cfg.loadWordType,
+                           inputArr, n, cfg.bitsPerChar);
+
+  const SA = ssortDcx(cfg, Packed);
 
   if TRACE && n <= 10 {
     writeln("Expect SA ", expectSA);
@@ -1338,8 +1339,8 @@ proc runTests() {
   testComparisons();
   testSorts();
   testSeeresses();
-/*  testOthers();
-  testRepeats();
+  testOthers();
+/*  testRepeats();
   testDescending();*/
 }
 
