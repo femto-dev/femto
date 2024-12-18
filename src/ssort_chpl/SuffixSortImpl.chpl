@@ -1546,10 +1546,11 @@ proc subproblemOffsetToOffset(subOffset: integral, cover, charsPerMod: integral)
    This is different from offsetToSubproblemOffset because it
    uses a more packed form, where the sample ranks are in offset order. */
 proc offsetToSampleRanksOffset(offset: integral, const cover) {
-  const group = offset / cover.period;
   // compute j such that offset + j is in the difference cover
   const j = cover.nextCoverIndex(offset % cover.period);
-  const coverIdx = cover.coverIndex((offset + j) % cover.period);
+  const sampleOffset = offset + j;
+  const group = sampleOffset / cover.period;
+  const coverIdx = cover.coverIndex((sampleOffset) % cover.period);
   const sampleRankOffset = group*cover.sampleSize + coverIdx;
   return sampleRankOffset : offset.type;
 }

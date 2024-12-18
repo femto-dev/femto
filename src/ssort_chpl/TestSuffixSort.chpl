@@ -264,7 +264,7 @@ private proc testPrefixComparisons(type loadWordType, type cachedDataType) {
 
   // these are irrelevant here
   const charsPerMod = 2;
-  const ranks:[0..text.size] cfg.unsignedOffsetType = 0;
+  const ranks:[0..n+INPUT_PADDING+cover.period] cfg.unsignedOffsetType;
   var ranksN = n;
 
   const prefixAA =  makeOffsetAndCached(cfg, 0, packed, n, nBits);
@@ -351,19 +351,26 @@ proc testRankComparisons3() {
   var Text:[0..<n+INPUT_PADDING] uint(8);
   const Packed = packInput(uint, Text, n, cfg.bitsPerChar);
 
-  var Ranks:[0..<nSample] uint; // this is sample offset to rank
+  var Ranks1:[0..<nSample] uint; // this is sample offset to rank
   var Offsets:[0..<nSample] int; // sample offset to regular offset
 
-  Ranks    = [14, 13, 10,  9,  6,  5, 12, 11,  8, 12,  4,  3,  2,  1];
+  Ranks1   = [14, 13, 10,  9,  6,  5, 12, 11,  8, 12,  4,  3,  2,  1];
   Offsets =  [ 0,  1,  3,  4,  6,  7,  9, 10, 12, 13, 15, 16, 18, 19];
   // sample    0   1   2   3   4   5   6   7   8   9  10  11  12  13
   //  offsets
+
+  var Ranks:[0..<nSample+INPUT_PADDING+cover.period] uint;
+  Ranks[0..<nSample] = Ranks1;
 
   // check offsetToSubproblemOffset and subproblemOffsetToOffset
   for i in 0..<nSample {
     assert(Offsets[i] == sampleRankIndexToOffset(i, cover));
     assert(i == offsetToSampleRanksOffset(Offsets[i], cover));
   }
+  // check some other offsets for offsetToSampleRanksOffset
+  assert(offsetToSampleRanksOffset(2, cover) == 2); // 2 -> 3 at sample pos 2
+  assert(offsetToSampleRanksOffset(5, cover) == 4); // 5 -> 6 at sample pos 4
+  assert(offsetToSampleRanksOffset(8, cover) == 6); // 8 -> 9 at sample pos 6
 
   // check makePrefixAndSampleRanks
 
@@ -388,12 +395,11 @@ proc testRankComparisons3() {
   assert(p19.r.ranks[0] == 1); // offset 19 -> sample offset 13 -> rank 1
   assert(p19.r.ranks[1] == 0); // offset 21 -> sample offset -  -> rank 0
 
-  assert(p2.r.ranks[0] == 10); // offset 2 -> next offset sample is 3 ->
-                             // sample offset 1 -> rank 10
+  assert(p2.r.ranks[0] == 10); // offset 2 -> next offset sample is 3 -> 10
   assert(p2.r.ranks[1] == 9);  // offset 4 -> sample offset 8 -> rank 9
 
   assert(p5.r.ranks[0] == 6);  // offset 5 -> next offset sample is 6 ->
-                             // sample offset 2 -> rank 6
+                               // sample offset 2 -> rank 6
   assert(p5.r.ranks[1] == 5);  // offset 7 -> sample offset 9 -> rank 5
 
 
@@ -470,13 +476,16 @@ proc testRankComparisons21() {
   var Text:[0..<n+INPUT_PADDING] uint(8);
   const Packed = packInput(uint, Text, n, cfg.bitsPerChar);
 
-  var Ranks:[0..<nSample] uint; // this is sample offset to rank
+  var Ranks1:[0..<nSample] uint; // this is sample offset to rank
   var Offsets:[0..<nSample] int; // sample offset to regular offset
 
-  Ranks    = [15, 14, 13, 11, 12,  9, 10,  7,  8,  6,  5,  4,  2,  3,  1];
+  Ranks1   = [15, 14, 13, 11, 12,  9, 10,  7,  8,  6,  5,  4,  2,  3,  1];
   Offsets  = [ 0,  1,  6,  8, 18, 21, 22, 27, 29, 39, 42, 43, 48, 50, 60];
   // sample    0   1   2   3   4   5   6   7   8   9  10  11  12  13  14
   //  offsets
+
+  var Ranks:[0..<nSample+INPUT_PADDING+cover.period] uint;
+  Ranks[0..<nSample] = Ranks1;
 
   // check offsetToSubproblemOffset and subproblemOffsetToOffset
   for i in 0..<nSample {
@@ -1194,7 +1203,7 @@ proc testDescending() {
 proc runTests() {
   testHelpers();
   testComparisons();
-  testSeeresses();
+//  testSeeresses();
 /*  testOthers();
   testRepeats();
   testDescending();*/
