@@ -177,7 +177,7 @@ record differenceCover {
       assert(0 <= ell && ell < period);
     }
 
-    return ell;
+    return ell: i.type;
   }
 
   /**
@@ -211,7 +211,7 @@ record differenceCover {
     if EXTRA_CHECKS {
       assert(0 <= i && i < period);
     }
-    return nextTable[i];
+    return nextTable[i] : i.type;
   }
 }
 
