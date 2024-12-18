@@ -440,19 +440,21 @@ proc testDivideByBuckets() {
 proc testPackInput() {
   writeln("testPackInput");
 
-  var Input = [0b111, 0b101, 0b011, 0b101, 0b000, 0b100, 0b100, 0b111,
-               0b001, 0b000, 0b010, 0b100, 0b000, 0b001, 0b110, 0b101,
-               0b101, 0b010, 0b011, 0b110, 0b111, 0b011, 0b010, 0b001,
+  var InputElts = [0b111, 0b101, 0b011, 0b101, 0b000, 0b100, 0b100, 0b111,
+                   0b001, 0b000, 0b010, 0b100, 0b000, 0b001, 0b110, 0b101,
+                   0b101, 0b010, 0b011, 0b110, 0b111, 0b011, 0b010, 0b001,
 
-               0b100, 0b000, 0b010, 0b100, 0b101, 0b010, 0b011, 0b011,
-               0b000, 0b001, 0b010, 0b011, 0b100, 0b101, 0b110, 0b111,
-               0b111, 0b110, 0b101, 0b100, 0b011, 0b010, 0b001, 0b000,
+                   0b100, 0b000, 0b010, 0b100, 0b101, 0b010, 0b011, 0b011,
+                   0b000, 0b001, 0b010, 0b011, 0b100, 0b101, 0b110, 0b111,
+                   0b111, 0b110, 0b101, 0b100, 0b011, 0b010, 0b001, 0b000,
 
-               0b110, 0b111, 0, 0, 0, 0, 0, 0, 0, 0];
+                   0b110, 0b111, 0, 0, 0, 0, 0, 0, 0, 0];
+  const InputUint64 = InputElts : uint(64);
+  const InputUint8  = InputElts : uint(8);
   const n = 50;
-  var bitsPerChar: int;
-  var PackedByte = try! packInput(uint(8), Input, n, bitsPerChar);
+  var bitsPerChar: int = computeBitsPerChar(InputUint8, n);
   assert(bitsPerChar == 3);
+  var PackedByte = packInput(uint(8), InputUint8, n, bitsPerChar);
   // each line corresponds to a 24-bit row above
   var ba = 0b11110101, bb = 0b11010001, bc = 0b00100111,
       bd = 0b00100001, be = 0b01000000, bf = 0b01110101,
@@ -478,11 +480,12 @@ proc testPackInput() {
 
   // test loading words
   for i in 0..<n {
-    assert(Input[i] == loadWord(PackedByte, i*bitsPerChar) >> (8-3));
+    assert(InputUint8[i] == loadWord(PackedByte, i*bitsPerChar) >> (8-3));
   }
 
-  var PackedUint = try! packInput(uint, Input, n, bitsPerChar);
+  bitsPerChar = computeBitsPerChar(InputUint64, n);
   assert(bitsPerChar == 3);
+  var PackedUint = packInput(uint, InputUint64, n, bitsPerChar);
   // compute the words based on the above bytes
   var word0:uint;
   var word1:uint;
@@ -528,9 +531,8 @@ proc testPackInput() {
 
   // test loading words
   for i in 0..<n {
-    assert(Input[i] == loadWord(PackedUint, i*bitsPerChar) >> (64-3));
+    assert(InputUint64[i] == loadWord(PackedUint, i*bitsPerChar) >> (64-3));
   }
-
 }
 
 proc main() throws {

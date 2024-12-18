@@ -792,42 +792,11 @@ proc atomicStoreMaxRelaxed(ref dst: atomic int, src: int) {
   }
 }
 
-/**
-  Pack the input. Return an array of words where each word contains packed
-  characters, and set bitsPerChar to indicate how many bits each character
-  occupies in the packed data.
-
-  Throws if:
-   * n <= 0
-   * Input does not have appropriate padding after n (enough for word)
-   * character range > 2**16
-   * computed bits per character > bits in wordType
-  */
-proc packInput(type wordType,
-               Input: [],
-               const n: Input.domain.idxType,
-               out bitsPerChar: int) throws {
-  type characterType = Input.eltType;
-
-  if !isUintType(wordType) {
-    compilerError("packInput requires wordType is a uint(w)");
-  }
-
-  // n should be > 0
-  if n <= 0 {
-    throw new Error("n <= 0 in packInput");
-  }
-  const neededPadding = numBits(wordType)/8;
-  if n + neededPadding > Input.size {
-    throw new Error("Input not padded in packInput");
-  }
-  // padding should be zeros.
-  for x in Input[n..#neededPadding] {
-    if x != 0 {
-      throw new Error("Input is not zero-padded in packInput");
-    }
-  }
-
+// helper for computeBitsPerChar / packInput
+// returns alphaMap and sets newMaxChar
+private proc computeAlphaMap(Input:[],
+                             const n: Input.domain.idxType,
+                             out newMaxChar: int) {
   // compute the minimum and maximum character in the input
   var minCharacter = max(int);
   var maxCharacter = -1;
@@ -840,14 +809,10 @@ proc packInput(type wordType,
     }
   }
 
-  if maxCharacter - minCharacter > 2**16 {
-    throw new Error("character range too big in packInput");
-  }
-
   var alphaMap:[minCharacter..maxCharacter] int;
   forall (x,i) in zip(Input, Input.domain) with (+ reduce alphaMap) {
     if i < n {
-      alphaMap[x] += 1;
+      alphaMap[x:int] += 1;
     }
   }
 
@@ -866,13 +831,38 @@ proc packInput(type wordType,
     alphaMap = tmp - 1;
   }
 
-  const newMaxChar = max(1, nUniqueChars-1):wordType;
-  bitsPerChar = numBits(newMaxChar.type) - BitOps.clz(newMaxChar):int;
+  newMaxChar = max(1, nUniqueChars-1);
 
-  if numBits(wordType) < bitsPerChar {
-    throw new Error("packInput requires wordType bits >= bitsPerChar");
+  return alphaMap;
+}
+
+
+/* Returns a number of bits per character that can be used with packInput */
+proc computeBitsPerChar(Input: [], const n: Input.domain.idxType) {
+  type characterType = Input.eltType;
+
+  if n <= 0 {
+    return numBits(characterType);
   }
 
+  var newMaxChar = 0;
+  var ignoredAlphaMap = computeAlphaMap(Input, n, /* out */ newMaxChar);
+
+  const bitsPerChar = numBits(uint) - BitOps.clz(newMaxChar);
+
+  assert(newMaxChar < (1 << bitsPerChar));
+
+  return bitsPerChar: int;
+}
+
+// helper for packInput that works with a mapping from
+// characters in Input to the packed version, or 'none' if does not
+// need to be used.
+private proc packInputWithAlphaMap(type wordType,
+                                   Input: [],
+                                   const n: Input.domain.idxType,
+                                   bitsPerChar: int,
+                                   alphaMap) {
   // create the packed input array
   param bitsPerWord = numBits(wordType);
   const endBit = n*bitsPerChar;
@@ -884,6 +874,24 @@ proc packInput(type wordType,
   // now remap the input
   forall (word, wordIdx) in zip(PackedInput, PackedInput.domain)
     with (in alphaMap) {
+
+    // gets the character at Input[charIdx]
+    // including checking bounds & applying alphaMap if it is not 'none'
+    inline proc getPackedChar(charIdx) : wordType {
+      var unpackedChar: Input.eltType = 0;
+      if unpackedChar < n {
+        unpackedChar = Input[charIdx];
+      }
+
+      var packedChar: wordType;
+      if alphaMap.type != nothing {
+        packedChar = alphaMap[unpackedChar:int]:wordType;
+      } else {
+        packedChar = unpackedChar:wordType;
+      }
+
+      return packedChar;
+    }
 
     // What contributes to wordIdx in PackedInput?
     // It contains the bits bitsPerWord*wordIdx..#bitsPerWord
@@ -898,7 +906,7 @@ proc packInput(type wordType,
       // handle reading only the right part of the 1st character
       // skip the top 'skip' bits and read the rest
       var nBottomBitsToRead = bitsPerChar - skip;
-      const char = alphaMap[Input[charIdx]]:wordType;
+      const char = getPackedChar(charIdx);
       var bottomBits = char & ((1:wordType << nBottomBitsToRead) - 1);
       w |= bottomBits;
       bitsRead += nBottomBitsToRead;
@@ -908,7 +916,7 @@ proc packInput(type wordType,
     while bitsRead + bitsPerChar <= bitsPerWord &&
           startBit + bitsRead + bitsPerChar <= endBit {
       // read a whole character
-      const char = alphaMap[Input[charIdx]]:wordType;
+      const char = getPackedChar(charIdx);
       w <<= bitsPerChar;
       w |= char;
       bitsRead += bitsPerChar;
@@ -919,7 +927,7 @@ proc packInput(type wordType,
       // handle reading only the left part of the last character
       const nTopBitsToRead = bitsPerWord - bitsRead;
       const nBottomBitsToSkip = bitsPerChar - nTopBitsToRead;
-      const char = alphaMap[Input[charIdx]]:wordType;
+      const char = getPackedChar(charIdx);
       var topBits = char >> nBottomBitsToSkip;
       w <<= nTopBitsToRead;
       w |= topBits;
@@ -937,6 +945,57 @@ proc packInput(type wordType,
   }
 
   return PackedInput;
+}
+
+/**
+  Pack the input. Return an array of words where each word contains packed
+  characters, and set bitsPerChar to indicate how many bits each character
+  occupies in the packed data.
+
+  bitsPerChar can be computed with computeBitsPerChar.
+  */
+proc packInput(type wordType,
+               Input: [],
+               const n: Input.domain.idxType,
+               bitsPerChar: int) {
+  type characterType = Input.eltType;
+
+  if !isUintType(wordType) {
+    compilerError("packInput requires wordType is a uint(w)");
+  }
+  if !isUintType(characterType) {
+    compilerError("packInput requires Input.eltType is a uint(w)");
+  }
+  if numBits(wordType) < numBits(characterType) {
+    compilerError("packInput requires" +
+                  " numBits(wordType) >= numBits(Input.eltType)" +
+                  " note wordType=" + wordType:string +
+                  " has " + numBits(wordType):string + " bits" +
+                  " eltType=" + Input.eltType:string +
+                  " has " + numBits(characterType):string + " bits");
+  }
+
+  if EXTRA_CHECKS {
+    assert(bitsPerChar >= computeBitsPerChar(Input, n));
+  }
+
+  if n <= 0 {
+    const PackedDom = makeBlockDomain(0..<1+INPUT_PADDING,
+                                      Input.targetLocales());
+    var PackedInput:[PackedDom] wordType;
+    return PackedInput;
+  }
+
+  if bitsPerChar <= 16 {
+    var newMaxChar = 0;
+    const alphaMap = computeAlphaMap(Input, n, /* out */ newMaxChar);
+    assert(newMaxChar < (1 << bitsPerChar));
+
+    return packInputWithAlphaMap(wordType, Input, n, bitsPerChar, alphaMap);
+  }
+
+  // otherwise, pack but don't use alpha map
+  return packInputWithAlphaMap(wordType, Input, n, bitsPerChar, none);
 }
 
 /* Loads a word full of character data from a PackedInput

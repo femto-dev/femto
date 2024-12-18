@@ -70,65 +70,41 @@ proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
 
   type characterType = Input.eltType;
   type offsetType = Input.idxType;
-  if numBits(characterType) <= 16 &&
-     numBits(characterType) <= numBits(offsetType) {
-    try {
-      var bitsPerChar = 0;
-      type wordType = uint(numBits(offsetType));
-      const packed = packInput(wordType, Input, n, /*out*/ bitsPerChar);
-      assert(1 <= bitsPerChar && bitsPerChar <= numBits(characterType));
+  type wordType = uint(numBits(offsetType));
 
-      proc helper(param pBitsPerChar) {
-        assert(pBitsPerChar == bitsPerChar);
-        const cfg = new ssortConfig(idxType = Input.idxType,
-                                    offsetType = Input.idxType,
-                                    unsignedOffsetType = wordType,
-                                    loadWordType = wordType,
-                                    bitsPerChar = pBitsPerChar,
-                                    n = n,
-                                    cover = new differenceCover(DEFAULT_PERIOD),
-                                    locales = Locales,
-                                    nTasksPerLocale = nTasksPerLocale);
-        return ssortDcx(cfg, packed);
-      }
+  const bitsPerChar = computeBitsPerChar(Input, n);
 
-      // dispatch to the version instantiated for bitsPerChar
-           if bitsPerChar ==  1 { return helper(1); }
-      else if bitsPerChar ==  2 { return helper(2); }
-      else if bitsPerChar ==  3 { return helper(3); }
-      else if bitsPerChar ==  4 { return helper(4); }
-      else if bitsPerChar ==  5 { return helper(5); }
-      else if bitsPerChar ==  6 { return helper(6); }
-      else if bitsPerChar ==  7 { return helper(7); }
-      else if bitsPerChar ==  8 { return helper(8); }
-      else if bitsPerChar ==  9 { return helper(9); }
-      else if bitsPerChar == 10 { return helper(10); }
-      else if bitsPerChar == 11 { return helper(11); }
-      else if bitsPerChar == 12 { return helper(12); }
-      else if bitsPerChar == 13 { return helper(13); }
-      else if bitsPerChar == 14 { return helper(14); }
-      else if bitsPerChar == 15 { return helper(16); }
-      else if bitsPerChar == 16 { return helper(16); }
 
-    } catch e: Error {
-      writeln(e);
-      // we can continue without packing
-    }
+  // now proceed with suffix sorting with the packed data
+  // and a compile-time known bitsPerChar
+
+  proc helper(param pBitsPerChar) {
+    // pack using pBitsPerChar
+    const packed = packInput(wordType, Input, n, pBitsPerChar);
+    assert(pBitsPerChar == bitsPerChar);
+    // configure suffix sorter
+    const cfg = new ssortConfig(idxType = Input.idxType,
+                                offsetType = Input.idxType,
+                                unsignedOffsetType = wordType,
+                                loadWordType = wordType,
+                                bitsPerChar = pBitsPerChar,
+                                n = n,
+                                cover = new differenceCover(DEFAULT_PERIOD),
+                                locales = Locales,
+                                nTasksPerLocale = nTasksPerLocale);
+    // suffix sort
+    return ssortDcx(cfg, packed);
   }
 
-  halt("unsupported configuration for computeSuffixArray");
-  // TODO: support with a more flexible packInput.
-  /*
-  const cfg = new ssortConfig(idxType = Input.idxType,
-                              offsetType = Input.idxType,
-                              unsignedOffsetType = uint(numBits(
-                              bitsPerChar = numBits(characterType),
-                              n = n,
-                              cover = new differenceCover(DEFAULT_PERIOD),
-                              locales = Locales,
-                              nTasksPerLocale = nTasksPerLocale);
-
-  return ssortDcx(cfg, Input);*/
+  // dispatch to the version instantiated for a close bitsPerChar
+       if bitsPerChar <=  2 { return helper(2); }
+  else if bitsPerChar <=  4 { return helper(4); }
+  else if bitsPerChar <=  8 { return helper(8); }
+  else if bitsPerChar <= 12 { return helper(12); }
+  else if bitsPerChar <= 16 { return helper(16); }
+  else if bitsPerChar <= 32 { return helper(32); }
+  else if bitsPerChar <= 64 { return helper(64); }
+  else { halt("should not be possible"); }
 }
 
 
