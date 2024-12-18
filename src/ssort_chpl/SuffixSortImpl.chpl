@@ -1203,9 +1203,8 @@ proc sortOffsetsInRegionBySampleRanks(
       foreach i in start_n..end_n {
         const elt = Input[i];
         const off = unmarkedOffset(elt);
-        const phase = off % cover.period;
-        const nextSample = cover.nextCoverIndex(phase);
-        yield (elt, nextSample);
+        const j = cover.nextCoverIndex(off % cover.period);
+        yield (elt, j);
       }
     }
   }
@@ -1215,20 +1214,16 @@ proc sortOffsetsInRegionBySampleRanks(
   // Sample suffixes always have distance 0 to sample suffixes.
   // Other suffixes have a distance according to their phase.
   record fixedDistanceToSampleComparator : keyComparator {
-    const k: int; // offset + k will be in the cover
+    const j: int; // offset + j will be in the cover
 
     proc key(a: offsetAndCached(?)) {
       const off = unmarkedOffset(a);
-      // off + j is the nearest offset in the cover
-      const j = cover.nextCoverIndex(off % cover.period);
-      // now off + k and off + j are both in the cover, what indices?
-      const aPlusKCoverIdx = cover.coverIndex((off + k) % cover.period);
-      const aPlusJCoverIdx = cover.coverIndex((off + j) % cover.period);
-      var aRankIdx = aPlusKCoverIdx - aPlusJCoverIdx;
-      if aRankIdx < 0 then aRankIdx += cover.sampleSize;
-
+      if EXTRA_CHECKS {
+        assert(cover.containedInCover((off + j) % cover.period));
+      }
+      const idx = sampleRankIndex(off, j, cover);
       const ref ranks = LoadedSampleRanks[a.cached:int];
-      return ranks.ranks[aRankIdx];
+      return ranks.ranks[idx];
     }
   }
 
@@ -1264,7 +1259,8 @@ proc sortOffsetsInRegionBySampleRanks(
       const k = bucketIdx; // offset + k will be in the cover
       if EXTRA_CHECKS {
         for i in bucketStart..bucketEnd {
-          assert(cover.containedInCover((offset(B[i]) + k) % cover.period));
+          const off = unmarkedOffset(B[i]);
+          assert(cover.containedInCover((off + k) % cover.period));
         }
       }
 
@@ -1312,6 +1308,18 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                             ref writeAgg: DstAggregator(cfg.offsetType),
                             ref SA: []) {
   const cover = cfg.cover;
+
+  if region.size == 0 {
+    return;
+  }
+
+  if region.size == 1 {
+    // store the result into SA
+    const i = region.low;
+    const elt = Scratch[i];
+    const off = unmarkedOffset(elt);
+    writeAgg.copy(SA[i], off);
+  }
 
   // sort by the first cover.period characters
   sortByPrefixAndMark(cfg, PackedText, Scratch, region, readAgg,
@@ -1422,8 +1430,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   var UnusedOutput = none;
 
   writeln("outer partition");
-  writeln("Splitters are");
-  writeln(Splitters);
+  //writeln("Splitters are");
+  //writeln(Splitters);
 
   const OuterCounts = partition(TextDom, InputProducer,
                                 SA.domain, /* count only here */ UnusedOutput,
@@ -1437,9 +1445,10 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
 
   var nBucketsPerPass = divCeil(Splitters.numBuckets, nPasses);
 
+  /*
   for (count, bktIdx) in zip (OuterCounts, OuterCounts.domain) {
     writeln(bktIdx, " bucket has ", count, " elements");
-  }
+  }*/
 
   // process the input in nPasses passes
   // each pass handles nBucketsPerPass buckets.
@@ -1451,16 +1460,21 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       endPrevBucket = OuterEnds[startBucket-1];
     }
     assert(endBucket > 0);
+
+    // compute the index in the SA that this pass starts at
+    const passEltStart = OuterEnds[startBucket] - OuterCounts[startBucket];
+
     // compute the number of elements to be processed by this pass
     const groupElts = OuterEnds[endBucket-1] - endPrevBucket;
 
-    writeln("pass ", pass, " processing ", groupElts, " elements");
+    writeln("pass ", pass, " processing ", groupElts,
+            " elements starting at ", passEltStart);
 
     if groupElts == 0 {
       continue; // nothing to do if there are no elements
     }
 
-    const ScratchDom = makeBlockDomain(0..<groupElts, cfg.locales);
+    const ScratchDom = makeBlockDomain(passEltStart..#groupElts, cfg.locales);
     var Scratch:[ScratchDom] offsetAndCached(offsetType, wordType);
     writeln("ScratchDom = ", ScratchDom);
 
@@ -1483,8 +1497,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     with (in cfg,
           var readAgg = new SrcAggregator(wordType),
           var writeAgg = new DstAggregator(offsetType)) {
-      // skip empty or singleton buckets
-      if bktRegion.size > 1 {
+      // skip empty buckets
+      if bktRegion.size > 0 {
         const regionDom: domain(1) = {bktRegion,};
         if Scratch.domain.localSubdomain().contains(regionDom) {
           sortAllOffsetsInRegion(cfg, PackedText, SampleRanks,
@@ -1876,7 +1890,14 @@ proc ssortDcx(const cfg:ssortConfig(?),
 
   //// recursively sort the subproblem ////
   {
+    //writeln("Recursive Input");
+    //writeln(SampleText);
+
     const SubSA = ssortDcx(subCfg, SampleText);
+
+    //writeln("Recursive Output");
+    //writeln(SubSA);
+
     if TRACE {
       writeln("back in ssortDcx n=", n);
       //writeln("SubSA is ", SubSA);
@@ -1922,8 +1943,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
         var ret = makePrefixAndSampleRanks(cfg, off,
                                            PackedText, SampleText,
                                            n, nBits);
-        writeln("sampleCreator(", i, ") :: SA[i] = ", subOffset, " -> offset ",
-            off, " -> ", ret);
+        // writeln("sampleCreator(", i, ") :: SA[i] = ", subOffset, " -> offset ", off, " -> ", ret);
         return ret;
       }
     }
@@ -1945,9 +1965,9 @@ proc ssortDcx(const cfg:ssortConfig(?),
     nSaveSplitters = tmp.myNumBuckets;
     saveSplitters[0..<nSaveSplitters] = tmp.sortedStorage[0..<nSaveSplitters];
 
-    writeln("requestedNumBuckets is ", requestedNumBuckets);
-    writeln("saveSplitters have ", nSaveSplitters, " buckets and are");
-    writeln(saveSplitters);
+    //writeln("requestedNumBuckets is ", requestedNumBuckets);
+    //writeln("saveSplitters have ", nSaveSplitters, " buckets and are");
+    //writeln(saveSplitters);
   }
 
   //// Step 2: Sort everything all together ////

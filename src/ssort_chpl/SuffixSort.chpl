@@ -81,7 +81,7 @@ proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
   proc helper(param pBitsPerChar) {
     // pack using pBitsPerChar
     const packed = packInput(wordType, Input, n, pBitsPerChar);
-    assert(pBitsPerChar == bitsPerChar);
+    assert(pBitsPerChar >= bitsPerChar);
     // configure suffix sorter
     const cfg = new ssortConfig(idxType = Input.idxType,
                                 offsetType = Input.idxType,

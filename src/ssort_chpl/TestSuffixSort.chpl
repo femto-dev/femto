@@ -831,6 +831,9 @@ private proc testSeeresses() {
     54601320 0        7
     601320   2        8
 
+    recursive subproblem output suffix array
+    73465102
+
     ranks from recursive subproblem
     76823541
   */
