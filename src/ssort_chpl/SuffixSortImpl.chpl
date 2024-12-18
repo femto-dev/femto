@@ -117,10 +117,15 @@ record offsetAndCached : writeSerializable {
 
   // this function is a debugging aid
   proc serialize(writer, ref serializer) throws {
+    var ismarked = isMarkedOffset(this);
+    var off = unmarkedOffset(this);
     if cacheType == nothing {
-      writer.write(offset);
+      writer.write(off);
     } else {
-      writer.writef("%i (%016xu)", offset, cached);
+      writer.writef("%i (%016xu)", off, cached);
+    }
+    if ismarked {
+      writer.write("*");
     }
   }
 }

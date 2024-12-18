@@ -27,6 +27,7 @@ use Utility;
 use Math;
 use IO;
 use Sort;
+use CopyAggregation;
 
 import SuffixSort.{computeSparsePLCP,lookupLCP};
 import SuffixSort.TRACE;
@@ -344,7 +345,7 @@ proc testRankComparisons3() {
                               locales=Locales,
                               nTasksPerLocale=1);
   const nBits = cfg.nBits;
- 
+
   // create the mapping to the recursive problem
   const charsPerMod = 7;
   const nSample = charsPerMod*cover.sampleSize;
@@ -458,7 +459,7 @@ proc testRankComparisons3() {
 
 proc testRankComparisons21() {
   const cover = new differenceCover(21); // 0 1 6 8 18
-  const n = 24; 
+  const n = 24;
   const cfg = new ssortConfig(idxType=int,
                               offsetType=int,
                               bitsPerChar=8,
@@ -627,6 +628,135 @@ private proc testComparisons() {
   testRankComparisons21();
 }
 
+proc testSorts() {
+  const inputStr = "aaaaaaaaaaaabbbbbbbbbbaA";
+                //            11111111112222
+                //  012345678901234567890123
+
+  /* suffixes
+
+   aaaaaaaaaaaabbbbbbbbbbaa  0
+   aaaaaaaaaaabbbbbbbbbbaa   1
+   aaaaaaaaaabbbbbbbbbbaa    2
+   aaaaaaaaabbbbbbbbbbaa     3
+   aaaaaaaabbbbbbbbbbaa      4
+   aaaaaaabbbbbbbbbbaa       5
+   aaaaaabbbbbbbbbbaa        6
+   aaaaabbbbbbbbbbaa         7
+   aaaabbbbbbbbbbaa          8
+   aaabbbbbbbbbbaa           9
+   aabbbbbbbbbbaa           10
+   abbbbbbbbbbaa            11
+   bbbbbbbbbbaa             12
+   bbbbbbbbbaa              13
+   bbbbbbbbaa               14
+   bbbbbbbaa                15
+   bbbbbbaa                 16
+   bbbbbaa                  17
+   bbbbaa                   18
+   bbbaa                    19
+   bbaa                     20
+   baa                      21
+   aa                       22
+   A                        23
+
+   sorted suffixes
+
+   0 A                        23
+   1 aa                       22
+
+   2 aaaaaaaaaaaabbbbbbbbbbaa  0 this group needs > 1 word
+   3 aaaaaaaaaaabbbbbbbbbbaa   1
+   4 aaaaaaaaaabbbbbbbbbbaa    2
+   5 aaaaaaaaabbbbbbbbbbaa     3
+   6 aaaaaaaabbbbbbbbbbaa      4
+
+   7 aaaaaaabbbbbbbbbbaa       5
+   8 aaaaaabbbbbbbbbbaa        6
+   9 aaaaabbbbbbbbbbaa         7
+  10 aaaabbbbbbbbbbaa          8
+  11 aaabbbbbbbbbbaa           9
+  12 aabbbbbbbbbbaa           10
+  13 abbbbbbbbbbaa            11
+
+  14 baa                      21
+  15 bbaa                     20
+  16 bbbaa                    19
+  17 bbbbaa                   18
+  18 bbbbbaa                  17
+  19 bbbbbbaa                 16
+  20 bbbbbbbaa                15
+
+  21 bbbbbbbbaa               14 this group needs > 1 word
+  22 bbbbbbbbbaa              13
+  23 bbbbbbbbbbaa             12
+  */
+
+  var Expect = [23, 22, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+                21, 20, 19, 18, 17, 16, 15, 14, 13, 12];
+
+  param bitsPerChar=8;
+  const cover = new differenceCover(3);
+  const text = bytesToArray(inputStr);
+  const n = inputStr.size;
+
+  const cfg = new ssortConfig(idxType=int,
+                              offsetType=int,
+                              unsignedOffsetType=uint,
+                              loadWordType=uint,
+                              bitsPerChar=bitsPerChar,
+                              n=n,
+                              cover=cover,
+                              locales=Locales,
+                              nTasksPerLocale=1);
+  const nBits = cfg.nBits;
+
+  const Packed = packInput(cfg.loadWordType, text, n, cfg.bitsPerChar);
+
+  var A: [0..<n] offsetAndCached(cfg.offsetType, cfg.loadWordType);
+  for i in 0..<n {
+    A[i] = makeOffsetAndCached(cfg, i, Packed, n, nBits);
+  }
+
+  var readAgg = new SrcAggregator(cfg.loadWordType);
+
+  /*writeln("input");
+  for i in 0..<n do writeln(i, " ", A[i]);*/
+
+  var B = A;
+  // sort by 1 word
+  sortByPrefixAndMark(cfg, Packed, B, 0..<n, readAgg, 1);
+
+  /*writeln("output");
+  for i in 0..<n do writeln(i, " ", B[i]);*/
+
+  assert(isMarkedOffset(B[2]));
+  assert(isMarkedOffset(B[21]));
+
+  for i in 0..<n {
+    if 2 <= i && i <= 6 {
+      var offset = unmarkedOffset(B[i]);
+      assert(0 <= offset && offset <= 4);
+    } else if 21 <= i && i <= 23 {
+      var offset = unmarkedOffset(B[i]);
+      assert(12 <= offset && offset <= 14);
+    } else {
+      assert(isMarkedOffset(B[i]));
+      var offset = unmarkedOffset(B[i]);
+      assert(offset == Expect[i]);
+    }
+  }
+
+  // sort by 2 words
+  B = A;
+  sortByPrefixAndMark(cfg, Packed, B, 0..<n, readAgg, 16);
+
+  for i in 0..<n {
+    assert(isMarkedOffset(B[i]));
+    var offset = unmarkedOffset(B[i]);
+    assert(offset == Expect[i]);
+  }
+}
 
 // test suffix sorting stuff with "seeresses" as input.
 private proc testSeeresses() {
@@ -1203,7 +1333,8 @@ proc testDescending() {
 proc runTests() {
   testHelpers();
   testComparisons();
-//  testSeeresses();
+  testSorts();
+  testSeeresses();
 /*  testOthers();
   testRepeats();
   testDescending();*/
