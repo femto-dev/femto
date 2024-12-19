@@ -1016,7 +1016,7 @@ proc computeSuffixArrayDirectly(const cfg:ssortConfig(?),
                                 const PackedText: [] cfg.loadWordType,
                                 resultDom: domain(?)) {
 
-  if isDistributedDomain(resultDom) {
+  if isDistributedDomain(resultDom) || isDistributedDomain(PackedText.domain) {
     // When directly computing the suffix array on a distributed array,
     // move everything local first and then copy back to the result array.
     //
@@ -1024,9 +1024,13 @@ proc computeSuffixArrayDirectly(const cfg:ssortConfig(?),
     // sufficient for the base case.
 
     // This could just be = resultDom but this way of writing avoids a warning.
-    var localDom: domain(1) = {resultDom.dim(0),};
-    var localA = computeSuffixArrayDirectly(cfg, PackedText, localDom);
-    const A: [resultDom] cfg.offsetType = localA;
+    const LocalDom: domain(1) = {resultDom.dim(0),};
+    const LocalTextDom: domain(1) = {PackedText.dim(0),};
+    const LocalPackedText: [LocalTextDom] cfg.loadWordType = PackedText;
+
+    var LocalA = computeSuffixArrayDirectly(cfg, LocalPackedText, LocalDom);
+
+    const A: [resultDom] cfg.offsetType = LocalA;
     return A;
   }
 
