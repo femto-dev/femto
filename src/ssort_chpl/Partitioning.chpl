@@ -25,11 +25,13 @@ module Partitioning {
 
 import SuffixSort.EXTRA_CHECKS;
 
-import Utility.computeNumTasks;
+use Utility;
+
 import Reflection.canResolveMethod;
 import Sort.{sort, DefaultComparator, keyPartStatus};
 import Math.{log2, divCeil};
 import CTypes.c_array;
+import BlockDist.blockDist;
 
 // These settings control the sample sort and classification process
 param classifyUnrollFactor = 7;
@@ -44,7 +46,7 @@ proc log2int(n: int) {
 
 // compare two records according to a comparator, but allow them
 // to be different types.
-private inline proc mycompare(a, b, comparator) {
+inline proc mycompare(a, b, comparator) {
   if canResolveMethod(comparator, "key", a) &&
      canResolveMethod(comparator, "key", b) {
     // Use the default comparator to compare the integer keys
@@ -189,6 +191,11 @@ record splitters : writeSerializable {
   // filled from 0..myNumBuckets-2; myNumBuckets-1 is a duplicate of previous
   var sortedStorage: [0..<myNumBuckets] eltType;
 
+  proc init(type eltType) {
+    // default init, creates invalid splitters, but useful for replicating
+    this.eltType = eltType;
+  }
+
   // Create splitters based on some precomputed, already sorted splitters
   // useSplitters needs to be of size 2**n and the last element will
   // not be used.
@@ -246,11 +253,11 @@ record splitters : writeSerializable {
     writer.write("\n equalBuckets=", equalBuckets);
     writer.write("\n storage=");
     for i in 0..<myNumBuckets {
-      writer.write((try! " %xt".format(storage[i])));
+      writer.writeln(storage[i]);
     }
     writer.write("\n sortedStorage=");
     for i in 0..<myNumBuckets {
-      writer.write(try! " %xt".format(sortedStorage[i]));
+      writer.writeln(sortedStorage[i]);
     }
     writer.write(")\n");
   }
@@ -419,17 +426,34 @@ class PerTaskState {
   }
 }
 
-/* Given a way to produce Input
-   (which can be an array or something that can generate input element i),
+/*
+   Stores the elements Input[InputDomain] in a partitioned manner
+   into Output[OutputDomain].
 
-   store the Input elements in a partitioned manner into Output.
-   It is assumed that indices start..end (inclusive) exist
-   within Input and Output.
+   InputDomain and OutputDomain must not be strided. The must be
+   local rectangular domains or Block distributed domains.
+
+   Input can be an array over InputDomain or something that simulates
+   an array with a 'proc this' and an 'eltType' to generate element i.
+
+   Output is expected to be an array over OutputDomain.
+   If Output is 'none', this function will only count,
+   and skip the partition step.
+
+   'filterBucket' provides a mechanism to only process certain buckets.
+   If 'filterBucket' is provided and not 'none', it will be called as
+   'filterBucket(bucketForRecord(Input[i]))' to check if that bucket should
+   be processed. Only elements where it returns 'true' will be processed.
 
    Return an array of counts to indicate how many elements
    ended up in each bucket.
 
    This is done in parallel.
+
+   'split' is the splitters and it should be either 'record splitters'
+   or something else that behaves similarly to it.
+   'rsplit' should be the result of calling 'replicate()' on 'split';
+    as such it should be 'none' when this code is to run locally.
 
    If equality buckets are not in use:
      Bucket 0 consists of elts with
@@ -466,27 +490,55 @@ class PerTaskState {
        split.sortedSplitter((numBuckets-2)/2) < elts
 
  */
-proc partition(const Input, ref Output, split, comparator,
-               start: int, end: int,
-               nTasks: int = computeNumTasks()) {
+proc partition(const InputDomain: domain(?),
+               const Input,
+               const OutputDomain: domain(?),
+               ref Output,
+               split, rsplit, comparator,
+               nTasksPerLocale: int = computeNumTasks(),
+               filterBucket: ?t = none) {
 
-  // check that the splitters are sorted according to comparator
-  if EXTRA_CHECKS && isSubtype(split.type,splitters) {
-    assert(isSorted(split.sortedStorage[0..<split.myNumBuckets-1], comparator));
+  const nBuckets; // set below
+  const ref locales =
+    if rsplit.type == nothing then none else InputDomain.targetLocales();
+  const nLocales =
+    if locales.type == nothing then 1 else locales.size;
+  const outputStart = OutputDomain.first;
+
+  {
+    // access the local replicand to do some checking and get # buckets
+    const ref mysplit = getLocalReplicand(split, rsplit);
+    nBuckets = mysplit.numBuckets;
+
+    // do some checking / input validation
+    if EXTRA_CHECKS {
+      // check that the splitters are sorted according to comparator
+      if isSubtype(mysplit.type,splitters) {
+        assert(isSorted(mysplit.sortedStorage[0..<mysplit.myNumBuckets-1],
+                        comparator));
+      }
+      // check that, if InputDomain is distributed, locales is not none
+      if InputDomain.targetLocales().size > 1 {
+        assert(locales.type != nothing);
+      }
+    }
+    if filterBucket.type == nothing {
+      assert(InputDomain.size == OutputDomain.size);
+    }
+    if OutputDomain.rank != 1 || OutputDomain.dim(0).strides != strideKind.one {
+      compilerError("partition only supports non-strided 1-D OutputDomain");
+    }
   }
 
-  const nBuckets = split.numBuckets;
-  const n = end - start + 1;
-
   // Divide the input into nTasks chunks.
+  const nTasks = nLocales * nTasksPerLocale;
   const countsSize = nTasks * nBuckets;
-  const blockSize = divCeil(n, nTasks);
-  const nBlocks = divCeil(n, blockSize);
 
-  // create the arrays that drive the counting and distributing process
-  var localState:[0..<nTasks] owned PerTaskState?;
-  coforall i in 0..<nTasks {
-    localState[i] = new PerTaskState(nBuckets);
+  // create local state arrays to be used by each task for the counting
+  const tasksDom = makeBlockDomain(0..<nTasks, locales);
+  var localState:[tasksDom] owned PerTaskState?;
+  forall (taskId, _) in divideIntoTasks(InputDomain, nTasksPerLocale) {
+    localState[taskId] = new PerTaskState(nBuckets);
   }
 
   // globalCounts stores counts like this:
@@ -496,55 +548,72 @@ proc partition(const Input, ref Output, split, comparator,
   //   count for bin 1, task 0
   //   count for bin 1, task 1
   // i.e. bin*nTasks + taskId
-  var globalCounts:[0..<countsSize] int;
+  const globalCountsDom = makeBlockDomain(0..<countsSize, locales);
+  var globalCounts:[globalCountsDom] int;
 
   // Step 1: Count
-  coforall tid in 0..<nTasks {
-    var taskStart = start + tid * blockSize;
-    var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
+  forall (taskId, chunk) in divideIntoTasks(InputDomain, nTasksPerLocale) {
+    ref counts = localState[taskId]!.localCounts;
+    const ref mysplit = getLocalReplicand(split, rsplit);
+    const taskStart = chunk.first;
+    const taskEnd = chunk.last; // inclusive
 
-    ref counts = localState[tid]!.localCounts;
-    for bin in 0..<nBuckets {
-      counts[bin] = 0;
+    if EXTRA_CHECKS {
+      // counts should already be 0 after allocation above
+      for x in counts do assert(x==0);
     }
 
-    for (_,bin) in split.classify(Input, taskStart, taskEnd, comparator) {
-      counts[bin] += 1;
+    // this loop must really be serial. it can be run in parallel
+    // within the forall because it's updating state local to each task.
+    for (_,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
+      if filterBucket.type == nothing || filterBucket(bin) {
+        counts[bin] += 1;
+      }
     }
+
     // Now store the counts into the global counts array
     foreach bin in 0..<nBuckets {
-      globalCounts[bin*nTasks + tid] = counts[bin];
+      globalCounts[bin*nTasks + taskId] = counts[bin];
     }
   }
 
-  // Step 2: Scan
-  const globalEnds = + scan globalCounts;
+  if Output.type != nothing {
+    // Step 2: Scan
+    const globalEnds = + scan globalCounts;
 
-  // Step 3: Distribute
-  coforall tid in 0..<nTasks {
-    var taskStart = start + tid * blockSize;
-    var taskEnd = min(taskStart + blockSize - 1, end); // an inclusive bound
+    // Step 3: Distribute
+    forall (taskId, chunk) in divideIntoTasks(InputDomain, nTasksPerLocale) {
+      ref nextOffsets = localState[taskId]!.localCounts;
+      const ref mysplit = getLocalReplicand(split, rsplit);
+      const taskStart = chunk.first;
+      const taskEnd = chunk.last; // inclusive
 
-    ref nextOffsets = localState[tid]!.localCounts;
-    // initialize nextOffsets
-    for bin in 0..<nBuckets {
-      var globalBin = bin*nTasks+tid;
-      nextOffsets[bin] = if globalBin > 0
-                         then start+globalEnds[globalBin-1]
-                         else start;
-    }
+      // initialize nextOffsets
+      foreach bin in 0..<nBuckets {
+        var globalBin = bin*nTasks + taskId;
+        nextOffsets[bin] = if globalBin > 0
+                           then outputStart + globalEnds[globalBin-1]
+                           else outputStart;
+      }
 
-    for (elt,bin) in split.classify(Input, taskStart, taskEnd, comparator) {
-      // Store it in the right bin
-      ref next = nextOffsets[bin];
-      Output[next] = elt;
-      next += 1;
+      // as above,
+      // this loop must really be serial. it can be run in parallel
+      // within the forall because it's updating state local to each task.
+      for (elt,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
+        if filterBucket.type == nothing || filterBucket(bin) {
+          // Store it in the right bin
+          ref next = nextOffsets[bin];
+          Output[next] = elt;
+          next += 1;
+        }
+      }
     }
   }
 
   // Compute the total counts to return them
-  var counts:[0..<nBuckets] int;
-  forall bin in 0..<nBuckets {
+  const countsDom = makeBlockDomain(0..<nBuckets, locales);
+  var counts:[countsDom] int;
+  forall (c,bin) in zip(counts,countsDom) {
     var total = 0;
     for tid in 0..<nTasks {
       total += globalCounts[bin*nTasks + tid];
@@ -554,6 +623,271 @@ proc partition(const Input, ref Output, split, comparator,
 
   return counts;
 }
+
+/*
+  serial insertionSort with a separate array of already-computed keys
+ */
+/*proc insertionSort(ref elts: [], ref keys: [], region: range) {
+  // note: insertionSort should be stable
+  const low = region.low,
+        high = region.high;
+
+  for i in low..high {
+    const keyi = keys[i];
+    const elti = elts[i];
+    var inserted = false;
+    for j in low..i-1 by -1 {
+      const keyj = keys[j];
+      if keyi < keyj {
+        keys[j+1] = keyj;
+        elts[j+1] = elts[j];
+      } else {
+        keys[j+1] = keyi;
+        elts[j+1] = elti;
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) {
+      keys[low] = keyi;
+      elts[low] = elti;
+    }
+  }
+}*/
+
+/** serial shellSort with a separate array of already-computed keys */
+/*proc shellSort(ref elts: [], ref keys: [], region: range) {
+  // note: shellSort is not stable
+  const start = region.low,
+        end = region.high;
+
+  // Based on Sedgewick's Shell Sort -- see
+  // Analysis of Shellsort and Related Algorithms 1996
+  // and see Marcin Ciura - Best Increments for the Average Case of Shellsort
+  // for the choice of these increments.
+  var js, hs: int;
+  var keyi: keys.eltType;
+  var elti: elts.eltType;
+  const incs = (701, 301, 132, 57, 23, 10, 4, 1);
+  for h in incs {
+    hs = h + start;
+    for is in hs..end {
+      keyi = keys[is];
+      elti = elts[is];
+      js = is;
+      while js >= hs && keyi < keys[js-h] {
+        keys[js] = keys[js - h];
+        elts[js] = elts[js - h];
+        js -= h;
+      }
+      keys[js] = keyi;
+      elts[js] = elti;
+    }
+  }
+}*/
+
+/*
+  An serial LSB-radix sorter that sorts keys that have been already collected.
+
+  'keys' must be an arrays of unsigned integral type.
+
+  'region' indicates the portion of 'elts' / 'keys' to sort.
+ */
+/*
+proc lsbRadixSort(ref elts: [], ref keys: [], region: range,
+                  ref eltsSpace: [], ref keysSpace: [],
+                  ref counts: [] int, param bitsPerPass) {
+  type t = keys.eltType;
+  param nPasses = divCeil(numBits(t), bitsPerPass);
+  const bucketsPerPass = 1 << bitsPerPass;
+  const maxBucket = nPasses*bucketsPerPass;
+
+  // check that the counts array is big enough
+  assert(counts.domain.contains(0));
+  assert(counts.domain.contains(maxBucket-1));
+  assert(counts.size >= maxBucket);
+
+  if !isUintType(keys.eltType) {
+    compilerError("keys.eltType must be an unsigned int type in lsbRadixSort");
+  }
+
+  // initialize the counts
+  for i in 0..<maxBucket {
+    counts = 0;
+  }
+
+  // count all of the passes at once
+  const mask = bucketsPerPass - 1;
+  for i in region {
+    const key = keys[i];
+    for param pass in 0..<nPasses {
+      const startBucket = pass*bucketsPerPass;
+      // get the appropriate bitsPerPass from the key
+      // since this is an LSB sort, pass 0 should get the bottom bits
+      const shift = pass*bitsPerPass;
+      const bkt = (key >> shift) & mask;
+      counts[(startBucket + bkt):int] += 1;
+    }
+  }
+
+  // handle the scan + distribute for each pass
+  for pass in 0..<nPasses {
+    const startBucket = pass*bucketsPerPass;
+    // compute the start positions for each bucket
+    // this is an exclusive scan, but start from region.low,
+    // so that these form the initial output positions for each bucket.
+    var total = region.low;
+    for bkt in 0..<bucketsPerPass {
+      ref x = counts[startBucket + bkt];
+      const c = x; // read the current count
+      x = total;   // set the current count to the total
+      total += c;  // add to total
+    }
+
+    // distribute
+    // pass 0 reads elts and writes eltsSpace
+    // pass 1 reads eltsSpace and writes elts
+    // ...
+    // data ends up in elts as long as nPasses is even, which is checked above
+    const ref inputElts = if pass % 2 == 0 then elts else eltsSpace;
+    const ref inputKeys = if pass % 2 == 0 then keys else keysSpace;
+    ref outputElts = if pass % 2 == 0 then eltsSpace else elts;
+    ref outputKeys = if pass % 2 == 0 then keysSpace else keys;
+    for i in region {
+      const key = inputKeys[i];
+      const elt = inputElts[i];
+      const shift = pass*bitsPerPass;
+      const bkt = (key >> shift) & mask;
+      ref x = counts[(startBucket + bkt):int];
+      // store the key into the appropriate bucket
+      const outIdx = x;
+      outputKeys[outIdx] = key;
+      outputElts[outIdx] = elt;
+      // increment the bucket counter
+      x += 1;
+    }
+  }
+
+  if nPasses % 2 != 0 {
+    elts[region] = eltsSpace[region];
+    keys[region] = keysSpace[region];
+  }
+}*/
+
+// mark the boundaries in boundaries when elt[i-1] != elt[i]
+proc markBoundaries(keys, ref boundaries: [], region: range) {
+  const start = region.low;
+  const end = region.high;
+  var cur = start;
+  type t = boundaries.eltType;
+
+  // handle bits until the phase becomes aligned
+  while cur <= end {
+    var phase = cur % numBits(t);
+    if phase == 0 {
+      break;
+    }
+    // otherwise, handle index 'start' and increment it
+    if cur == start || keys[cur-1] != keys[cur] {
+      setBit(boundaries, cur);
+    }
+    cur += 1;
+  }
+
+  // handle setting a word at a time
+  while cur + numBits(t) <= end {
+    // handle numBits(t) at a time
+    var word:t = 0;
+    var wordIdx = cur / numBits(t);
+    for i in 0..<numBits(t) {
+      var bit: t = 0;
+      if cur == start {
+        bit = 1;
+      } else if keys[cur-1] != keys[cur] {
+        bit = 1;
+      }
+      word <<= 1; // make room for the bit
+      word |= bit; // add in the bit
+      cur += 1;
+    }
+    boundaries[wordIdx] = word;
+  }
+
+  // handle any leftover bits
+  while cur <= end {
+    if cur == start || keys[cur-1] != keys[cur] {
+      setBit(boundaries, cur);
+    }
+    cur += 1;
+  }
+}
+
+/*
+  A radix sorter that uses a separate keys array and tracks where equal elements
+  occur in the sorted output.
+
+  'keys' and 'boundaries' must be an arrays of unsigned integral type.
+
+  'region' indicates the portion of 'elts' / 'keys' to sort.
+
+  Bits will be set in 'boundaries' to track whether elements differed in the
+  sorted result. In particular, if the process of computing the sorted result
+  revealed that 'elt[i-1] != elt[i]', then bit 'i' will be set in boundaries
+  (note that boundaries is storing unsigned ints that record multiple such
+  bits).
+
+  The boundary for element 0 will always be marked.
+
+TODO: the standard library sorter is quite a lot faster
+      even with the memory allocation. need to shift to just
+      using that.
+
+ */
+/*proc sortAndTrackEqual(ref elts: [], ref keys: [], ref boundaries: [],
+                       region: range,
+                       ref eltsSpace: [], ref keysSpace: [],
+                       ref counts: [] int) {
+  if !isUintType(keys.eltType) {
+    compilerError("radixSortAndTrackEqual requires unsigned integer keys");
+  }
+  if !isUintType(boundaries.eltType) {
+    compilerError("radixSortAndTrackEqual requires unsigned integer keys");
+  }
+
+  if region.size == 0 {
+    return;
+  } else if region.size == 1 {
+    markBoundaries(keys, boundaries, region);
+    return;
+  } else if region.size == 2 {
+    const i = region.low;
+    const j = region.high;
+    if keys[i] > keys[j] {
+      keys[i] <=> keys[j];
+      elts[i] <=> elts[j];
+    }
+    markBoundaries(keys, boundaries, region);
+    return;
+  } else if region.size <= 16 {
+    insertionSort(elts, keys, region);
+    markBoundaries(keys, boundaries, region);
+    return;
+  } else if region.size <= 2000 {
+    shellSort(elts, keys, region);
+    markBoundaries(keys, boundaries, region);
+    return;
+  } else if region.size <= 1 << 16 {
+    lsbRadixSort(elts, keys, region, eltsSpace, keysSpace, counts,
+                 bitsPerPass=8);
+    markBoundaries(keys, boundaries, region);
+    return;
+  } else {
+    lsbRadixSort(elts, keys, region, eltsSpace, keysSpace, counts,
+                 bitsPerPass=16);
+    markBoundaries(keys, boundaries, region);
+    return;
+  }
+}*/
 
 
 /* Use a tournament tree (tree of losers) to perform multi-way merging.
@@ -570,7 +904,7 @@ proc partition(const Input, ref Output, split, comparator,
    */
 proc multiWayMerge(Input: [] ?eltType,
                    InputRanges: [] range,
-                   ref Output: [] eltType,
+                   ref Output: [] ?outEltType,
                    outputRange: range,
                    comparator,
                    type readEltType=eltType) {
@@ -581,7 +915,7 @@ proc multiWayMerge(Input: [] ?eltType,
     var pos = outputRange.low;
     for r in InputRanges {
       for i in r {
-        Output[pos] = Input[i];
+        Output[pos] = Input[i]:outEltType;
         pos += 1;
       }
     }
@@ -743,7 +1077,7 @@ proc multiWayMerge(Input: [] ?eltType,
 
     // output the champion
     //writeln("outputting ", ExternalNodes[championAddr]);
-    Output[outPos] = ExternalNodes[championAddr] : eltType;
+    Output[outPos] = ExternalNodes[championAddr] : outEltType;
     outPos += 1;
 
     // input the new value

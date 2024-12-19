@@ -476,6 +476,7 @@ proc main(args: [] string) throws {
   const fileStarts; //: [] int;
   const totalSize: int;
   readAllFiles(inputFilesList,
+               Locales,
                allData=allData,
                allPaths=allPaths,
                concisePaths=concisePaths,

@@ -24,8 +24,16 @@ config param DEFAULT_PERIOD = 133;
 config param DEFAULT_LCP_SAMPLE = 64;
 config param EXTRA_CHECKS = false;
 config param TRACE = false;
+config param TIMING = false;
 config type CACHED_DATA_TYPE = nothing;
-config type LOAD_WORD_TYPE = uint;
+
+// these control readAllFiles / recursive subproblems
+//config param TEXT_REPLICATED = false;
+//config param TEXT_BLOCK = false;
+//config param TEXT_NON_DIST = false;
+
+// don't fall back on non-distributed arrays for CHPL_COMM=none
+config param DISTRIBUTE_EVEN_WITH_COMM_NONE = false;
 
 // how much padding does the algorithm need at the end of the input?
 param INPUT_PADDING = 8;
@@ -47,25 +55,56 @@ private import Time;
 private import List;
 private import Help;
 
-proc computeSuffixArray(input: [], const n: input.domain.idxType) {
-  if !(input.domain.rank == 1 &&
-       input.domain.low == 0 &&
-       input.domain.high == input.domain.size-1) {
+proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
+  if !(Input.domain.rank == 1 &&
+       Input.domain.low == 0 &&
+       Input.domain.high == Input.domain.size-1) {
     halt("computeSuffixArray requires 1-d array over 0..n");
   }
-  if n + INPUT_PADDING > input.size {
+  if n + INPUT_PADDING > Input.size {
     halt("computeSuffixArray needs extra space at the end of the array");
     // expect it to be zero-padded past n.
   }
 
-  const cfg = new ssortConfig(idxType = input.idxType,
-                              characterType = input.eltType,
-                              offsetType = input.idxType,
-                              cachedDataType = CACHED_DATA_TYPE,
-                              loadWordType = LOAD_WORD_TYPE,
-                              cover = new differenceCover(DEFAULT_PERIOD));
+  const nTasksPerLocale = computeNumTasks(ignoreRunning=true);
 
-  return ssortDcx(cfg, input, n);
+  type characterType = Input.eltType;
+  type offsetType = Input.idxType;
+  type wordType = uint(numBits(offsetType));
+
+  const bitsPerChar = computeBitsPerChar(Input, n);
+
+
+  // now proceed with suffix sorting with the packed data
+  // and a compile-time known bitsPerChar
+
+  proc helper(param pBitsPerChar) {
+    // pack using pBitsPerChar
+    const packed = packInput(wordType, Input, n, pBitsPerChar);
+    assert(pBitsPerChar >= bitsPerChar);
+    // configure suffix sorter
+    const cfg = new ssortConfig(idxType = Input.idxType,
+                                offsetType = Input.idxType,
+                                unsignedOffsetType = wordType,
+                                loadWordType = wordType,
+                                bitsPerChar = pBitsPerChar,
+                                n = n,
+                                cover = new differenceCover(DEFAULT_PERIOD),
+                                locales = Locales,
+                                nTasksPerLocale = nTasksPerLocale);
+    // suffix sort
+    return ssortDcx(cfg, packed);
+  }
+
+  // dispatch to the version instantiated for a close bitsPerChar
+       if bitsPerChar <=  2 { return helper(2); }
+  else if bitsPerChar <=  4 { return helper(4); }
+  else if bitsPerChar <=  8 { return helper(8); }
+  else if bitsPerChar <= 12 { return helper(12); }
+  else if bitsPerChar <= 16 { return helper(16); }
+  else if bitsPerChar <= 32 { return helper(32); }
+  else if bitsPerChar <= 64 { return helper(64); }
+  else { halt("should not be possible"); }
 }
 
 
@@ -135,6 +174,7 @@ proc main(args: [] string) throws {
   const fileStarts; //: [] int;
   const totalSize: int;
   readAllFiles(inputFilesList,
+               Locales,
                allData=allData,
                allPaths=allPaths,
                concisePaths=concisePaths,
