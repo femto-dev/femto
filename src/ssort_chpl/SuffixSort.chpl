@@ -20,11 +20,12 @@
 module SuffixSort {
 
 
-config param DEFAULT_PERIOD = 133;
+config param DEFAULT_PERIOD = 73;
 config param DEFAULT_LCP_SAMPLE = 64;
 config param EXTRA_CHECKS = false;
 config param TRACE = false;
 config param TIMING = false;
+config param STATS = false;
 config type CACHED_DATA_TYPE = nothing;
 
 // these control readAllFiles / recursive subproblems
