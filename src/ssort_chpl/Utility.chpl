@@ -27,9 +27,15 @@ import IO;
 import List.list;
 import OS.EofError;
 import Path;
+import BitOps;
 import Sort.{sort,isSorted};
+import Math.divCeil;
+import BlockDist.blockDist;
+import ChplConfig.CHPL_COMM;
+import RangeChunk;
+import Version;
 
-import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING};
+import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING, DISTRIBUTE_EVEN_WITH_COMM_NONE};
 
 /* For FASTA files, when reading them, also read in the reverse complement */
 config param INCLUDE_REVERSE_COMPLEMENT=true;
@@ -50,6 +56,308 @@ proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
 
   return nTasks;
 }
+
+/* check to see if a domain is of a type that can be distributed */
+proc isDistributedDomain(dom) param {
+  // this uses unstable / undocumented features. a better way is preferred.
+  return !chpl_domainDistIsLayout(dom);
+}
+
+/* are we running distributed according to CHPL_COMM ? */
+proc maybeDistributed() param {
+  return CHPL_COMM!="none" || DISTRIBUTE_EVEN_WITH_COMM_NONE;
+}
+
+/*
+   Make a BlockDist domain usually, but just return the local 'dom' unmodified
+   in some cases:
+    * if 'targetLocales' is 'none'
+    * if CHPL_COMM=none.
+*/
+proc makeBlockDomain(dom: domain(?), targetLocales) {
+  if maybeDistributed() && targetLocales.type != nothing {
+    return blockDist.createDomain(dom, targetLocales=targetLocales);
+  } else {
+    return dom;
+  }
+}
+/* Helper for the above to accept a range */
+proc makeBlockDomain(rng: range(?), targetLocales) {
+  return makeBlockDomain({rng}, targetLocales);
+}
+
+/* Helper for replicate() */
+class ReplicatedWrapper {
+  var x;
+}
+
+/* Returns a distributed array containing replicated copies of 'x',
+   or 'none' if replication is not necessary.
+
+   targetLocales should be an array of Locales or 'none' if
+   replication is not necessary.
+
+   Returns 'none' if 'maybeDistributed()' returns 'false'.
+ */
+proc replicate(x, targetLocales) {
+  if maybeDistributed() && targetLocales.type != nothing {
+    var minIdV = max(int);
+    var maxIdV = min(int);
+    forall loc in targetLocales with (min reduce minIdV, max reduce maxIdV) {
+      minIdV reduce= loc.id;
+      maxIdV reduce= loc.id;
+    }
+    const D = blockDist.createDomain(minIdV..maxIdV,
+                                     targetLocales=targetLocales);
+    var Result: [D] owned ReplicatedWrapper(x.type)?;
+
+    proc helpReplicate(from, i) {
+
+      // should already be on this locale...
+      assert(here == targetLocales[i]);
+
+      // create a local copy
+      Result[here.id] = new ReplicatedWrapper(from);
+      // get a reference to the copy we just created
+      const ref newFrom = Result[here.id]!.x;
+
+      // if 2*i is in the domain, replicate from Result[targetLocales[i].id]
+      // but skip this case for i == 0 to avoid infinite loop
+      if targetLocales.domain.contains(2*i) && i != 0 {
+        begin {
+          on targetLocales[2*i] {
+            helpReplicate(newFrom, 2*i);
+          }
+        }
+      }
+
+      // ditto for 2*i+1
+      if targetLocales.domain.contains(2*i+1) {
+        begin {
+          on targetLocales[2*i+1] {
+            helpReplicate(newFrom, 2*i+1);
+          }
+        }
+      }
+    }
+
+    sync {
+      if targetLocales.domain.contains(targetLocales.domain.low) {
+        helpReplicate(x, targetLocales.domain.low);
+      }
+    }
+
+    return Result;
+  } else {
+    return none;
+  }
+}
+
+/* Accesses the result of 'replicate()' to get the local copy.
+
+   'x' should be the same input that was provided to 'replicate()'
+ */
+proc getLocalReplicand(const ref x, replicated) const ref {
+  if maybeDistributed() && replicated.type != nothing {
+    return replicated.localAccess[here.id]!.x;
+  } else {
+    // return the value
+    return x;
+  }
+}
+
+/* Given a Block distributed domain or non-distributed domain,
+   this iterator divides it into nLocales*nTasksPerLocale chunks
+   (where nLocales=Dom.targetLocales().size) to be processed by a
+   different task. Each task will only process local elements.
+
+   A forall loop running this iterator will be distributed
+   (if Dom is distributed) and parallel according to nTasksPerLocale.
+
+   Yields (taskId, chunk) for each chunk.
+
+   chunk is a non-strided range.
+
+   taskIds start will be in 0..<nLocales*nTasksPerLocale.
+ */
+iter divideIntoTasks(const Dom: domain(?), nTasksPerLocale: int) {
+  if Dom.rank != 1 then compilerError("divideIntoTasks only supports 1-D");
+  if Dom.dim(0).strides != strideKind.one then
+    compilerError("divideIntoTasks only supports non-strided domains");
+  yield (0, Dom.dim(0));
+  halt("serial divideIntoTasks should not be called");
+}
+iter divideIntoTasks(param tag: iterKind,
+                     const Dom: domain(?),
+                     nTasksPerLocale: int)
+ where tag == iterKind.standalone {
+
+  if Dom.rank != 1 then compilerError("divideIntoTasks only supports 1-D");
+  if Dom.dim(0).strides != strideKind.one then
+    compilerError("divideIntoTasks only supports non-strided domains");
+  if !Dom.hasSingleLocalSubdomain() {
+    compilerError("divideIntoTasks only supports dists " +
+                  "with single local subdomain");
+    // note: it'd be possible to support; would just need to be written
+    // differently, and consider both
+    //  # local subdomains < nTasksPerLocale and the inverse.
+  }
+
+  const nTargetLocales = Dom.targetLocales().size;
+  coforall (loc, locId) in zip(Dom.targetLocales(), 0..) {
+    on loc {
+      const ref locDom = Dom.localSubdomain();
+      coforall (chunk,taskId) in
+               zip(RangeChunk.chunks(locDom.dim(0), nTasksPerLocale), 0..) {
+        yield (nTasksPerLocale*locId + taskId, chunk);
+      }
+    }
+  }
+}
+
+/**
+ This iterator creates distributed parallelism to yield
+ a bucket index for each task to process.
+
+ Yields (region of bucket, bucket index, taskId)
+
+ BucketCounts should be the size of each bucket
+ BucketEnds should be the indices (in Arr) of the end of each bucket
+ Arr is a potentially distributed array that drives the parallelism.
+
+ The Arr.targetLocales() must be in an increasing order by locale ID.
+ */
+iter divideByBuckets(const Arr: [],
+                     const BucketCounts: [] int,
+                     const BucketEnds: [] int,
+                     nTasksPerLocale: int) {
+  if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
+  if Arr.domain.dim(0).strides != strideKind.one then
+    compilerError("divideByBuckets only supports non-strided domains");
+  yield (0);
+  halt("serial divideByBuckets should not be called");
+}
+iter divideByBuckets(param tag: iterKind,
+                     const Arr: [],
+                     const BucketCounts: [] int,
+                     const BucketEnds: [] int,
+                     const nTasksPerLocale: int)
+ where tag == iterKind.standalone {
+
+  if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
+  if Arr.domain.dim(0).strides != strideKind.one then
+    compilerError("divideByBuckets only supports non-strided domains");
+  if !Arr.domain.hasSingleLocalSubdomain() {
+    compilerError("divideByBuckets only supports dists " +
+                  "with single local subdomain");
+    // note: it'd be possible to support; would just need to be written
+    // differently, and consider both
+    //  # local subdomains < nTasksPerLocale and the inverse.
+  }
+
+  var minIdV = max(int);
+  var maxIdV = min(int);
+  forall loc in Arr.targetLocales()
+  with (min reduce minIdV, max reduce maxIdV) {
+    minIdV = min(minIdV, loc.id);
+    maxIdV = max(maxIdV, loc.id);
+  }
+
+  if EXTRA_CHECKS {
+    var lastId = -1;
+    for loc in Arr.targetLocales() {
+      if loc.id == lastId {
+        halt("divideByBuckets requires increasing locales assignment");
+      }
+    }
+  }
+
+  const arrShift = Arr.domain.low;
+  const arrEnd = Arr.domain.high;
+  const bucketsEnd = BucketCounts.domain.high;
+
+  var NBucketsPerLocale: [minIdV..maxIdV] int;
+  forall (bucketSize,bucketEnd) in zip(BucketCounts, BucketEnds)
+  with (+ reduce NBucketsPerLocale) {
+    const bucketStart = bucketEnd - bucketSize;
+    // count it towards the locale owning the middle of the bucket
+    var checkIdx = bucketStart + bucketSize/2 + arrShift;
+    // any 0-size buckets at the end of buckets to the last locale
+    if checkIdx > arrEnd then checkIdx = arrEnd;
+    const localeId = Arr[checkIdx].locale.id;
+    NBucketsPerLocale[localeId] += 1;
+  }
+
+  const EndBucketPerLocale = + scan NBucketsPerLocale;
+
+  coforall (loc, locId) in zip(Arr.targetLocales(), 0..) {
+    on loc {
+      const countBucketsHere = NBucketsPerLocale[loc.id];
+      const endBucketHere = EndBucketPerLocale[loc.id];
+      const startBucketHere = endBucketHere - countBucketsHere;
+
+      // compute the array offset where work on this locale begins
+      const startHere =
+        if startBucketHere <= bucketsEnd
+        then BucketEnds[startBucketHere] - BucketCounts[startBucketHere]
+        else BucketEnds[bucketsEnd-1] - BucketCounts[bucketsEnd-1];
+
+      // compute the total number of elements to be processed on this locale
+      var eltsHere = 0;
+      forall bucketIdx in startBucketHere..<endBucketHere
+      with (+ reduce eltsHere) {
+        eltsHere += BucketCounts[bucketIdx];
+      }
+
+      const perTask = divCeil(eltsHere, nTasksPerLocale);
+
+      //writeln("locale bucket region ", startBucketHere..<endBucketHere,
+      //        " elts ", eltsHere, " perTask ", perTask);
+
+      // compute the number of buckets for each task
+      // assuming that we just divide start..end into nTasksPerLocale equally
+      var useNTasksPerLocale = nTasksPerLocale;
+      if eltsHere == 0 {
+        // set it to 0 to create an empty array to do no work on this locale
+        useNTasksPerLocale = 0;
+      }
+      var NBucketsPerTask: [0..<useNTasksPerLocale] int;
+
+      if eltsHere > 0 {
+        forall bucketIdx in startBucketHere..<endBucketHere
+        with (+ reduce NBucketsPerTask) {
+          const bucketEnd = BucketEnds[bucketIdx];
+          const bucketSize = BucketCounts[bucketIdx];
+          const bucketStart = bucketEnd - bucketSize;
+          var checkIdx = bucketStart + bucketSize/2 - startHere;
+          // any 0-size buckets at the end of buckets to the last task
+          if checkIdx >= eltsHere then checkIdx = eltsHere-1;
+          const taskId = checkIdx / perTask;
+          NBucketsPerTask[taskId] += 1;
+        }
+      }
+
+      const EndBucketPerTask = + scan NBucketsPerTask;
+
+      coforall (nBucketsThisTask, endBucketThisTask, taskId)
+      in zip(NBucketsPerTask, EndBucketPerTask, 0..)
+      {
+        const startBucketThisTask = endBucketThisTask - nBucketsThisTask;
+        const startBucket = startBucketHere + startBucketThisTask;
+        const endBucket = startBucket + nBucketsThisTask;
+        for bucketIdx in startBucket..<endBucket {
+          const bucketSize = BucketCounts[bucketIdx];
+          const bucketStart = BucketEnds[bucketIdx] - bucketSize;
+          const start = bucketStart + arrShift;
+          const end = start + bucketSize;
+          yield (start..<end, bucketIdx,
+                 nTasksPerLocale*locId + taskId);
+        }
+      }
+    }
+  }
+}
+
 
 /* This function gives the size of an array of triangular indices
    for use with flattenTriangular.
@@ -73,6 +381,36 @@ inline proc flattenTriangular(in i: int, in j: int) {
   // now i > j
   var ret = triangleSize(i) + j;
   return ret;
+}
+
+/* get the i'th bit of 'bits' which should have unsigned int elements */
+proc getBit(const bits: [], i: int) : bits.eltType {
+  if !isUintType(bits.eltType) {
+    compilerError("getBit requires unsigned integer elements");
+  }
+
+  type t = bits.eltType;
+  param wordBits = numBits(t);
+  const wordIdx = i / wordBits;
+  const phase = i % wordBits;
+  const word = bits[wordIdx];
+  const shift = wordBits - 1 - phase;
+  return (word >> shift) & 1;
+}
+
+/* set the i'th bit of 'bits' which should have unsigned int elements */
+proc setBit(ref bits: [], i: int) {
+  if !isUintType(bits.eltType) {
+    compilerError("getBit requires unsigned integer elements");
+  }
+
+  type t = bits.eltType;
+  param wordBits = numBits(t);
+  const wordIdx = i / wordBits;
+  const phase = i % wordBits;
+  const shift = wordBits - 1 - phase;
+  ref word = bits[wordIdx];
+  word = word | (1:t << shift);
 }
 
 /*
@@ -336,20 +674,25 @@ proc trimPaths(ref paths:[] string) {
    * a corresponding array of file sizes
    * a corresponding list of offsets where each file starts,
      which, contains an extra entry for the total size
+
+ The resulting arrays will be Block distributed among 'locales'.
  */
 proc readAllFiles(const ref files: list(string),
+                  locales: [ ] locale,
                   out allData: [] uint(8),
                   out allPaths: [] string,
                   out concisePaths: [] string,
                   out fileSizes: [] int,
                   out fileStarts: [] int,
                   out totalSize: int) throws {
-  var paths = files.toArray();
-  for p in paths {
+  var locPaths = files.toArray();
+  for p in locPaths {
     p = Path.normPath(p);
   }
-  sort(paths);
+  sort(locPaths);
 
+  const ByFileDom = makeBlockDomain(0..<locPaths.size, locales);
+  const paths:[ByFileDom] string = forall i in ByFileDom do locPaths[i];
   const nFiles = paths.size;
 
   if nFiles == 0 {
@@ -366,7 +709,8 @@ proc readAllFiles(const ref files: list(string),
   const fileEnds = + scan sizes;
   const total = fileEnds.last;
 
-  var thetext:[0..<total+INPUT_PADDING] uint(8);
+  const TextDom = makeBlockDomain(0..<total+INPUT_PADDING, locales);
+  var thetext:[TextDom] uint(8);
 
   // read each file
   forall (path, sz, end) in zip(paths, sizes, fileEnds) {
@@ -376,7 +720,8 @@ proc readAllFiles(const ref files: list(string),
   }
 
   // compute fileStarts
-  var starts:[0..nFiles] int;
+  const StartsDom = makeBlockDomain(0..nFiles, locales);
+  var starts:[StartsDom] int;
   starts[0] = 0;
   starts[1..nFiles] = fileEnds;
 
@@ -418,28 +763,260 @@ proc printSuffix(offset: int, thetext: [], fileStarts: [] int, lcp: int, amt: in
 
 
 proc atomicStoreMinRelaxed(ref dst: atomic int, src: int) {
-  // TODO: call atomic store min once issue #22867 is resolved
-  var t = dst.read(memoryOrder.relaxed);
-  while min(src, t) != t {
-    // note: dst.compareExchangeWeak updates 't' if it fails
-    // to the current value
-    if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
-      return;
+  if Version.chplVersion >= new Version.versionValue(2,3) {
+    dst.min(src, memoryOrder.relaxed);
+  } else {
+    var t = dst.read(memoryOrder.relaxed);
+    while min(src, t) != t {
+      // note: dst.compareExchangeWeak updates 't' if it fails
+      // to the current value
+      if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
+        return;
+      }
     }
   }
 }
 
 proc atomicStoreMaxRelaxed(ref dst: atomic int, src: int) {
-  // TODO: call atomic store max once issue #22867 is resolved
-  var t = dst.read(memoryOrder.relaxed);
-  while max(src, t) != t {
-    // note: dst.compareExchangeWeak updates 't' if it fails
-    // to the current value
-    if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
-      return;
+  if Version.chplVersion >= new Version.versionValue(2,3) {
+    dst.max(src, memoryOrder.relaxed);
+  } else {
+    var t = dst.read(memoryOrder.relaxed);
+    while max(src, t) != t {
+      // note: dst.compareExchangeWeak updates 't' if it fails
+      // to the current value
+      if dst.compareExchangeWeak(t, src, memoryOrder.relaxed) {
+        return;
+      }
     }
   }
 }
 
+// helper for computeBitsPerChar / packInput
+// returns alphaMap and sets newMaxChar
+private proc computeAlphaMap(Input:[],
+                             const n: Input.domain.idxType,
+                             out newMaxChar: int) {
+  // compute the minimum and maximum character in the input
+  var minCharacter = max(int);
+  var maxCharacter = -1;
+  forall (x,i) in zip(Input, Input.domain)
+    with (min reduce minCharacter, max reduce maxCharacter) {
+    if i < n {
+      const asInt = x:int;
+      minCharacter reduce= asInt;
+      maxCharacter reduce= asInt;
+    }
+  }
+
+  var alphaMap:[minCharacter..maxCharacter] int;
+  forall (x,i) in zip(Input, Input.domain) with (+ reduce alphaMap) {
+    if i < n {
+      alphaMap[x:int] += 1;
+    }
+  }
+
+  // set each element to 1 if it is present, 0 otherwise
+  // (could be handled with || reduce and an array of bools)
+  forall x in alphaMap {
+    if x > 0 then x = 1;
+  }
+
+  // now count the number of unique characters
+  const nUniqueChars = + reduce alphaMap;
+
+  // now set the value of each character
+  {
+    const tmp = + scan alphaMap;
+    alphaMap = tmp - 1;
+  }
+
+  newMaxChar = max(1, nUniqueChars-1);
+
+  return alphaMap;
+}
+
+
+/* Returns a number of bits per character that can be used with packInput */
+proc computeBitsPerChar(Input: [], const n: Input.domain.idxType) {
+  type characterType = Input.eltType;
+
+  if n <= 0 {
+    return numBits(characterType);
+  }
+
+  var newMaxChar = 0;
+  var ignoredAlphaMap = computeAlphaMap(Input, n, /* out */ newMaxChar);
+
+  const bitsPerChar = numBits(uint) - BitOps.clz(newMaxChar);
+
+  assert(newMaxChar < (1 << bitsPerChar));
+
+  return bitsPerChar: int;
+}
+
+// helper for packInput that works with a mapping from
+// characters in Input to the packed version, or 'none' if does not
+// need to be used.
+private proc packInputWithAlphaMap(type wordType,
+                                   Input: [],
+                                   const n: Input.domain.idxType,
+                                   bitsPerChar: int,
+                                   alphaMap) {
+  // create the packed input array
+  param bitsPerWord = numBits(wordType);
+  const endBit = n*bitsPerChar;
+  const nWords = divCeil(n*bitsPerChar, bitsPerWord);
+  const PackedDom = makeBlockDomain(0..<nWords+INPUT_PADDING,
+                                    Input.targetLocales());
+  var PackedInput:[PackedDom] wordType;
+
+  // now remap the input
+  forall (word, wordIdx) in zip(PackedInput, PackedInput.domain)
+    with (in alphaMap) {
+
+    // gets the character at Input[charIdx]
+    // including checking bounds & applying alphaMap if it is not 'none'
+    inline proc getPackedChar(charIdx) : wordType {
+      var unpackedChar: Input.eltType = 0;
+      if unpackedChar < n {
+        unpackedChar = Input[charIdx];
+      }
+
+      var packedChar: wordType;
+      if alphaMap.type != nothing {
+        packedChar = alphaMap[unpackedChar:int]:wordType;
+      } else {
+        packedChar = unpackedChar:wordType;
+      }
+
+      return packedChar;
+    }
+
+    // What contributes to wordIdx in PackedInput?
+    // It contains the bits bitsPerWord*wordIdx..#bitsPerWord
+    const startBit = bitsPerWord*wordIdx;
+
+    // get started
+    var w:wordType = 0;
+    var charIdx = startBit / bitsPerChar;
+    var skip = startBit % bitsPerChar;
+    var bitsRead = 0;
+    if skip != 0 && startBit < endBit {
+      // handle reading only the right part of the 1st character
+      // skip the top 'skip' bits and read the rest
+      var nBottomBitsToRead = bitsPerChar - skip;
+      const char = getPackedChar(charIdx);
+      var bottomBits = char & ((1:wordType << nBottomBitsToRead) - 1);
+      w |= bottomBits;
+      bitsRead += nBottomBitsToRead;
+      charIdx += 1;
+    }
+
+    while bitsRead + bitsPerChar <= bitsPerWord &&
+          startBit + bitsRead + bitsPerChar <= endBit {
+      // read a whole character
+      const char = getPackedChar(charIdx);
+      w <<= bitsPerChar;
+      w |= char;
+      bitsRead += bitsPerChar;
+      charIdx += 1;
+    }
+
+    if bitsRead < bitsPerWord && startBit + bitsRead < endBit {
+      // handle reading only the left part of the last character
+      const nTopBitsToRead = bitsPerWord - bitsRead;
+      const nBottomBitsToSkip = bitsPerChar - nTopBitsToRead;
+      const char = getPackedChar(charIdx);
+      var topBits = char >> nBottomBitsToSkip;
+      w <<= nTopBitsToRead;
+      w |= topBits;
+      bitsRead += nTopBitsToRead;
+      charIdx += 1;
+    }
+
+    if bitsRead < bitsPerWord {
+      // pad with 0 if anything is not yet read
+      w <<= bitsPerWord - bitsRead;
+    }
+
+    // store the word we computed back to the array
+    word = w;
+  }
+
+  return PackedInput;
+}
+
+/**
+  Pack the input. Return an array of words where each word contains packed
+  characters, and set bitsPerChar to indicate how many bits each character
+  occupies in the packed data.
+
+  bitsPerChar can be computed with computeBitsPerChar.
+  */
+proc packInput(type wordType,
+               Input: [],
+               const n: Input.domain.idxType,
+               bitsPerChar: int) {
+  type characterType = Input.eltType;
+
+  if !isUintType(wordType) {
+    compilerError("packInput requires wordType is a uint(w)");
+  }
+  if !isUintType(characterType) {
+    compilerError("packInput requires Input.eltType is a uint(w)");
+  }
+  if numBits(wordType) < numBits(characterType) {
+    compilerError("packInput requires" +
+                  " numBits(wordType) >= numBits(Input.eltType)" +
+                  " note wordType=" + wordType:string +
+                  " has " + numBits(wordType):string + " bits" +
+                  " eltType=" + Input.eltType:string +
+                  " has " + numBits(characterType):string + " bits");
+  }
+
+  if EXTRA_CHECKS {
+    assert(bitsPerChar >= computeBitsPerChar(Input, n));
+  }
+
+  if n <= 0 {
+    const PackedDom = makeBlockDomain(0..<1+INPUT_PADDING,
+                                      Input.targetLocales());
+    var PackedInput:[PackedDom] wordType;
+    return PackedInput;
+  }
+
+  if bitsPerChar <= 16 {
+    var newMaxChar = 0;
+    const alphaMap = computeAlphaMap(Input, n, /* out */ newMaxChar);
+    assert(newMaxChar < (1 << bitsPerChar));
+
+    return packInputWithAlphaMap(wordType, Input, n, bitsPerChar, alphaMap);
+  }
+
+  // otherwise, pack but don't use alpha map
+  return packInputWithAlphaMap(wordType, Input, n, bitsPerChar, none);
+}
+
+/* Loads a word full of character data from a PackedInput
+   starting at the bit offset startBit */
+inline proc loadWord(PackedInput: [], const startBit: int) {
+  // load word 1 and word 2
+  type wordType = PackedInput.eltType;
+
+  const wordIdx = startBit / numBits(wordType);
+  const word0 = PackedInput[wordIdx];
+  const word1 = PackedInput[wordIdx+1];
+  return loadWordWithWords(word0, word1, startBit);
+}
+/* Like loadWord, but assumes that the relevant
+   potential words that are needed are already loaded. */
+inline proc loadWordWithWords(word0: ?wordType, word1: wordType,
+                              const startBit: int) {
+  const shift = startBit % numBits(wordType);
+  const ret =  if shift == 0 then word0
+               else word0 << shift | word1 >> (numBits(wordType) - shift);
+  return ret;
+}
 
 }

@@ -24,11 +24,15 @@ import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.TRACE;
 
 use Partitioning;
+use Utility;
 
-import Sort.{isSorted, DefaultComparator};
+import Sort.{sort, isSorted, DefaultComparator};
 import Random;
 import Math;
 import Map;
+import Time;
+
+config const skipslow = false;
 
 const myDefaultComparator = new DefaultComparator();
 
@@ -38,8 +42,15 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   writeln("testPartition(n=", n, ", nSplit=", nSplit, ", ",
           "useEqualBuckets=", useEqualBuckets, ", nTasks=", nTasks, ")");
 
-  var Input: [0..<n] int = 0..<n by -1;
-  var Output: [0..<n] int = -1;
+  const useNLocales = min(nTasks, Locales.size);
+  const nTasksPerLocale = min(1, nTasks / useNLocales);
+  const targetLocales = for i in 0..<useNLocales do Locales[i];
+
+  const InputDom = makeBlockDomain(0..<n, targetLocales);
+  const OutputDom = makeBlockDomain(0..<n, targetLocales);
+
+  var Input: [InputDom] int = 0..<n by -1;
+  var Output: [OutputDom] int = -1;
 
   var InputCounts:Map.map(int, int);
 
@@ -74,7 +85,11 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
   const counts =
-    partition(Input, Output, sp, myDefaultComparator, 0, n-1, nTasks);
+    partition(Input.domain, Input,
+              Output.domain, Output,
+              sp, replicate(sp, targetLocales),
+              myDefaultComparator,
+              nTasksPerLocale=nTasksPerLocale);
   assert(counts.size == nBuckets);
 
   const ends = + scan counts;
@@ -130,6 +145,19 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   assert(InputCounts == OutputCounts);
 
   assert(total == n);
+
+
+  // check also that the partitioning is stable
+  Input = 0..<n;
+  Output = -1;
+  var ExpectOutput = Input;
+  const counts2 =
+    partition(Input.domain, Input,
+              Output.domain, Output,
+              sp, replicate(sp, targetLocales),
+              myDefaultComparator,
+              nTasksPerLocale=nTasksPerLocale);
+  assert(Output.equals(ExpectOutput));
 }
 
 proc testPartitionsEven(n: int, nSplit: int) {
@@ -146,7 +174,11 @@ proc testPartitionsEven(n: int, nSplit: int) {
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
-  const counts = partition(Input, Output, sp, myDefaultComparator, 0, n-1, 1);
+  const counts = partition(Input.domain, Input,
+                           Output.domain, Output,
+                           sp, replicate(sp, [here]),
+                           myDefaultComparator,
+                           nTasksPerLocale=1);
   assert(counts.size == nBuckets);
 
   var minSize = max(int);
@@ -186,7 +218,11 @@ proc testPartitionSingleSplitter(n: int) {
   assert(sp.hasEqualityBuckets);
   assert(nBuckets == 3); // < == and > buckets
 
-  const counts = partition(Input, Output, sp, myDefaultComparator, 0, n-1, 1);
+  const counts = partition(Input.domain, Input,
+                           Output.domain, Output,
+                           sp, replicate(sp, [here]),
+                           myDefaultComparator,
+                           nTasksPerLocale=1);
   assert(counts.size == nBuckets);
 
   var total = 0;
@@ -309,6 +345,154 @@ proc testSplitters() {
     checkArrayMatches(s.sortedStorage, expect);
   }
 
+}
+
+/*
+proc testSort(n: int, max: uint, seed: int, sorter:string) {
+
+  writeln("testSort(", n, ", ", max, ", ", seed, ", ", sorter, ")");
+
+  var Elts: [0..<n] uint;
+  var Keys: [0..<n] uint;
+  var EltsSpace: [0..<n] uint;
+  var KeysSpace: [0..<n] uint;
+  const maxCount = (1<<16)*4;
+  var Counts: [0..<maxCount] int = 1;
+  Random.fillRandom(Keys, min=0, max=max, seed=seed);
+  Elts = Keys + 100;
+  var KeysCopy = Keys;
+
+  //writeln("Keys ", Keys);
+  //writeln("Elts ", Elts);
+
+  if sorter == "insertion" {
+    insertionSort(Elts, Keys, 0..<n);
+  } else if sorter == "shell" {
+    shellSort(Elts, Keys, 0..<n);
+  } else if sorter == "lsb2" {
+    lsbRadixSort(Elts, Keys, 0..<n, EltsSpace, KeysSpace, Counts, 2);
+  } else if sorter == "lsb8" {
+    lsbRadixSort(Elts, Keys, 0..<n, EltsSpace, KeysSpace, Counts, 8);
+  } else if sorter == "lsb16" {
+    lsbRadixSort(Elts, Keys, 0..<n, EltsSpace, KeysSpace, Counts, 16);
+  } else {
+    halt("Unknown sorter in testSort");
+  }
+
+  //writeln("after Keys ", Keys);
+  //writeln("after Elts ", Elts);
+
+  for i in 1..<n {
+    assert(Keys[i-1] <= Keys[i]);
+  }
+
+  sort(KeysCopy);
+  assert(Keys.equals(KeysCopy));
+
+  var ExpectElts = Keys + 100;
+  assert(ExpectElts.equals(Elts));
+}
+*/
+
+proc testMarkBoundaries(region: range) {
+  writeln("testMarkBoundaries(", region, ")");
+
+  var Keys: [region] uint;
+  const nWords = Math.divCeil(region.high, numBits(uint));
+  var Boundaries: [0..<nWords] uint;
+  var ExpectBoundaries: [0..<nWords] uint;
+  Random.fillRandom(Keys, min=0, max=1, seed=1);
+  for i in region {
+    if i == region.low || Keys[i-1] != Keys[i] {
+      setBit(ExpectBoundaries, i);
+    }
+  }
+
+  // compute it with the routine and check it matches
+  markBoundaries(Keys, Boundaries, region);
+  assert(Boundaries.equals(ExpectBoundaries));
+}
+
+/*
+proc testSortAndTrackEqual(n: int) {
+  writeln("testSortAndTrackEqual(", n, ")");
+
+  var Elts: [10..#n] uint;
+  var Keys: [10..#n] uint;
+  var EltsSpace: [10..#n] uint;
+  var KeysSpace: [10..#n] uint;
+  const maxCount = (1<<16)*4;
+  var Counts: [0..<maxCount] int = 1;
+  Random.fillRandom(Keys, min=0, max=max(uint), seed=1);
+  Elts = ~Keys;
+  var KeysCopy = Keys;
+
+  var Boundaries: [0..<Math.divCeil(10+n,numBits(uint))] uint;
+
+  //writeln("Keys ", Keys);
+  //writeln("Elts ", Elts);
+
+  sortAndTrackEqual(Elts, Keys, Boundaries, 10..#n,
+                    EltsSpace, KeysSpace, Counts);
+
+  // nothing to compare for n == 0
+  if n == 0 then return;
+
+  /*writeln("after Keys ", Keys);
+  writeln("after Elts ", Elts);
+  writeln("after Boundaries ");
+  for i in 10..#n {
+    write(getBit(Boundaries, i));
+  }
+  writeln();*/
+
+  assert(getBit(Boundaries, 10) == 1);
+  for i in 10..#n {
+    if i == 10 then continue;
+    assert(Keys[i-1] <= Keys[i]);
+    var bit = Keys[i-1] != Keys[i];
+    assert(getBit(Boundaries, i) == bit);
+  }
+
+  sort(KeysCopy);
+  assert(Keys.equals(KeysCopy));
+
+  var ExpectElts = ~Keys;
+  assert(ExpectElts.equals(Elts));
+}*/
+
+proc testSorts() {
+  /*for sorter in ["insertion", "shell", "lsb2", "lsb8", "lsb16"] {
+    if skipslow && sorter == "lsb16" then continue;
+    testSort(10, 0, 0, sorter);
+    testSort(10, 10, 1, sorter);
+    testSort(10, 5, 2, sorter);
+    testSort(10, 100, 3, sorter);
+    testSort(10, 10000, 4, sorter);
+
+    testSort(100, 10, 5, sorter);
+    testSort(100, 5, 6, sorter);
+    testSort(100, 100, 7, sorter);
+    testSort(100, 10000, 8, sorter);
+  }*/
+
+  // test markBoundaries
+  testMarkBoundaries(1..4);
+  testMarkBoundaries(10..60);
+  testMarkBoundaries(100..200);
+  testMarkBoundaries(1000..2000);
+  testMarkBoundaries(10000..20000);
+
+  /*
+  testSortAndTrackEqual(0);
+  testSortAndTrackEqual(1);
+  testSortAndTrackEqual(2);
+  testSortAndTrackEqual(10);
+  testSortAndTrackEqual(100);
+  testSortAndTrackEqual(1000);
+  testSortAndTrackEqual(10000);
+  testSortAndTrackEqual(100000);
+  testSortAndTrackEqual(1000000);*/
 }
 
 proc testMultiWayMerge() {
@@ -455,7 +639,14 @@ proc testMultiWayMerge() {
 }
 
 
-proc testPartitions() {
+proc runTests() {
+  // test sorters
+  testSorts();
+
+  // test multi-way merge
+  testMultiWayMerge();
+
+  // test partition
   testPartition(10, 4, false, 1);
   testPartition(10, 4, true, 1);
   testPartition(100, 20, false, 1);
@@ -487,23 +678,81 @@ proc testPartitions() {
 
   // test creating splitters in other cases
   testSplitters();
-
-  // test multi-way merge
-  testMultiWayMerge();
 }
 
-proc main() {
-  testMultiWayMerge();
+/*proc testTiming() {
 
-  return 0;
+  var maxn = 10**8;
+  var Elts: [0..<maxn] uint;
+  var Keys: [0..<maxn] uint;
+  var EltsSpace: [0..<maxn] uint;
+  var KeysSpace: [0..<maxn] uint;
+  const maxCount = (1<<16)*4;
+  var Counts: [0..<maxCount] int = 1;
+  var Boundaries: [0..<Math.divCeil(maxn,numBits(uint))] uint;
+  var Tups: [0..<maxn] 2*uint;
 
-  serial {
-    writeln("Testing partitioning with one task");
-    testPartitions();
+  var ntrials = 3;
+  var n = 1;
+  while n <= maxn {
+
+    var t: Time.stopwatch;
+    for trial in 0..<ntrials {
+      Boundaries=0;
+      Random.fillRandom(Keys[0..<n], min=0, max=max(uint), seed=1);
+      t.start();
+      sortAndTrackEqual(Elts, Keys, Boundaries, 0..<n,
+                        EltsSpace, KeysSpace, Counts);
+      t.stop();
+    }
+
+    var s: Time.stopwatch;
+    for trial in 0..<ntrials {
+      Boundaries=0;
+      Random.fillRandom(Keys[0..<n], min=0, max=max(uint), seed=1);
+      forall i in 0..<n {
+        Tups[i][0] = Keys[i];
+      }
+      s.start();
+      serial { sort(Tups, myDefaultComparator, 0..<n); }
+      record getter {
+        proc this(i) {
+          return Tups[i][0];
+        }
+      }
+      markBoundaries(new getter(), Boundaries, 0..<n);
+      s.stop();
+    }
+
+    if n == 1 {
+      writef("% <14s % <14s % <14s\n", "n", "mysort MB/s", "std sort MB/s\n");
+    }
+
+    writef("% <14i % <14r % <14r\n",
+           n,
+           n / 1000.0 / 1000.0 / (t.elapsed()/ntrials),
+           n / 1000.0 / 1000.0 / (s.elapsed()/ntrials));
+
+    n *= 10;
   }
+}*/
 
-  writeln("Testing partitioning with many tasks");
-  testPartitions();
+//config const timing = false;
+
+proc main() {
+  /*if timing {
+    testTiming();
+    return;
+  }*/
+
+  /* commented out due to some odd problems once added replicated
+  serial {
+    writeln("Testing within serial block");
+    runTests();
+  }*/
+
+  writeln("Testing with many tasks");
+  runTests();
 
   writeln("TestPartitioning OK");
 }
