@@ -685,6 +685,12 @@ inline proc markOffset(ref elt: offsetAndCached(?)) {
     elt.offset = ~elt.offset;
   }
 }
+inline proc unmarkOffset(ref elt: offsetAndCached(?)) {
+  if elt.offset < 0 {
+    elt.offset = ~elt.offset;
+  }
+}
+
 /* Returns true if the offset is marked */
 inline proc isMarkedOffset(elt: offsetAndCached(?)) {
   return elt.offset < 0;
@@ -740,9 +746,14 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
                          ref readAgg: SrcAggregator(cfg.loadWordType),
                          maxPrefix: cfg.idxType) {
 
+  if region.size == 0 {
+    return;
+  }
+
   type wordType = cfg.loadWordType;
   param wordBits = numBits(wordType);
   param bitsPerChar = cfg.bitsPerChar;
+  const n = cfg.n;
   const nBits = cfg.nBits;
 
   // this code should only be called with A being local (or local enough)
@@ -755,44 +766,75 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
   var sortedByBits = 0;
   const prefixBits = maxPrefix*bitsPerChar;
   while sortedByBits < prefixBits {
+    writeln("in sortByPrefixAndMark sorted by ", sortedByBits, " for ", region);
+    for i in region {
+      writeln("A[", i, "] = ", A[i]);
+    }
+
     // sort by 'cached'
     record byCached : keyComparator {
       proc key(elt) { return elt.cached; }
     }
     const byCachedComparator = new byCached();
     if sortedByBits == 0 {
+      writeln("sorting full region ", region);
       sortRegion(A, byCachedComparator, region);
     } else {
       // sort each subregion starting from each marked offset
       // up to but not including the next marked offset
       for r in unsortedRegionsFromMarks(A, region) {
+        // clear the mark on the 1st element since it might move later
+        unmarkOffset(A[r.low]);
+        writeln("sorting subregion ", r);
         sortRegion(A, byCachedComparator, r);
+        // put the mark back now that a different element might be there
+        markOffset(A[r.low]);
       }
     }
 
-    // mark the first element
-    markOffset(A[region.low]);
-
-    // mark any later elements that differ from the previous
-    var lastCached = A[region.low].cached;
-    for i in region {
-      ref elt = A[i];
-      if elt.cached != lastCached {
-        markOffset(elt);
-        lastCached = elt.cached;
+    // mark any elements that differ from the previous element
+    // (note, the first element is marked later, after it
+    //  must be sorted in to place)
+    var anyUnsortedRegions = false;
+    for r in unsortedRegionsFromMarks(A, region) {
+      anyUnsortedRegions = true;
+      var lastCached = A[r.low].cached;
+      for i in r {
+        ref elt = A[i];
+        if elt.cached != lastCached {
+          markOffset(elt);
+          lastCached = elt.cached;
+          writeln("marked ", elt);
+        }
       }
     }
 
     // now we have sorted by an additional word
     sortedByBits += wordBits;
 
+    // stop if there were no unsorted regions
+    if !anyUnsortedRegions {
+      break;
+    }
+
+    writeln("in sortByPrefixAndMark now sorted by ", sortedByBits);
+    for i in region {
+      writeln("A[", i, "] = ", A[i]);
+    }
+
+
     // get the next word to sort by and store it in 'cached' for each entry
     if sortedByBits < prefixBits {
       if cfg.bitsPerChar == wordBits {
         // load directly into 'cached', no need to shift
         for i in region {
-          const off = unmarkedOffset(A[i]) + sortedByBits/wordBits;
-          readAgg.copy(A[i].cached, PackedText[off]);
+          const bitOffset = unmarkedOffset(A[i])*bitsPerChar + sortedByBits;
+          const wordIdx = bitOffset / wordBits; // divides evenly in this case
+          if bitOffset < nBits {
+            readAgg.copy(A[i].cached, PackedText[wordIdx]);
+          } else {
+            A[i].cached = 0; // word starts after the end of the string
+          }
         }
         readAgg.flush();
       } else {
@@ -802,14 +844,18 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
           const bitOffset = unmarkedOffset(A[i])*bitsPerChar + sortedByBits;
           const wordIdx = bitOffset / wordBits;
           const shift = bitOffset % wordBits;
-          readAgg.copy(A[i].cached, PackedText[wordIdx]);
+          if bitOffset < nBits {
+            readAgg.copy(A[i].cached, PackedText[wordIdx]);
+          } else {
+            A[i].cached = 0; // word starts after the end of the string
+          }
+          // also load the next word if it will be needed
           if shift != 0 {
-            if bitOffset + wordBits <= nBits {
+            if bitOffset + wordBits < nBits {
               // load an additional word to 'loadWords'
               readAgg.copy(loadWords[i], PackedText[wordIdx + 1]);
             } else {
-              // this word starts after the end of the string
-              loadWords[i] = 0;
+              loadWords[i] = 0; // next word starts after the end of the string
             }
           }
         }
@@ -822,6 +868,10 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
       }
     }
   }
+
+  // now that we know which element is the first element
+  // (because it is sorted), mark the first element.
+  markOffset(A[region.low]);
 }
 
 
@@ -1325,6 +1375,12 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   sortByPrefixAndMark(cfg, PackedText, Scratch, region, readAgg,
                       maxPrefix=cover.period);
 
+
+  writeln("after sortByPrefixAndMark Scratch[", region, "]");
+  for i in region {
+    writeln("Scratch[", i, "] = ", Scratch[i]);
+  }
+
   // Compute the number of unsorted elements &
   // Adjust each element's 'cached' value to be an offset into
   // LoadedSampleRanks.
@@ -1357,9 +1413,27 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   // make sure that the aggregator is done
   readAgg.flush();
 
+  writeln("after loading  Scratch[", region, "]");
+  for r in unsortedRegionsFromMarks(Scratch, region) {
+    for i in r {
+      writeln("Scratch[", i, "] = ", Scratch[i], " ",
+              LoadedSampleRanks[Scratch[i].cached:int]);
+    }
+  }
+
   // now use the sample ranks to compute the final sorting
   for r in unsortedRegionsFromMarks(Scratch, region) {
+    writeln("sorting by sample ranks ", r);
     sortOffsetsInRegionBySampleRanks(cfg, LoadedSampleRanks, Scratch, r, cover);
+
+    // the marks are irrelevant (but wrong) at this point
+    // since the first element might have been sorted later.
+
+  }
+
+  writeln("after sorting by sample ranks  Scratch[", region, "]");
+  for i in region {
+    writeln(" Scratch[", i, "] = ", Scratch[i]);
   }
 
   // store the data back into SA
@@ -1499,6 +1573,11 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
           var writeAgg = new DstAggregator(offsetType)) {
       // skip empty buckets
       if bktRegion.size > 0 {
+        writeln("Scratch[", bktRegion, "]");
+        for i in bktRegion {
+          writeln("Scratch[", i, "] = ", Scratch[i]);
+        }
+
         const regionDom: domain(1) = {bktRegion,};
         if Scratch.domain.localSubdomain().contains(regionDom) {
           sortAllOffsetsInRegion(cfg, PackedText, SampleRanks,
@@ -1514,6 +1593,11 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
         }
       }
     }
+  }
+
+  writeln("SA:");
+  for i in SA.domain {
+    writeln("SA[", i, "] = ", SA[i]);
   }
 
   return SA;
@@ -1774,6 +1858,8 @@ proc ssortDcx(const cfg:ssortConfig(?),
   const charsPerMod = 1+myDivCeil(n, cover.period);
   const sampleN = cover.sampleSize * charsPerMod;
 
+  writeln("charsPerMod ", charsPerMod);
+
   if !isDistributedDomain(PackedText.domain) &&
      isDistributedDomain(ResultDom) &&
      ResultDom.targetLocales().size > 1 {
@@ -1893,6 +1979,10 @@ proc ssortDcx(const cfg:ssortConfig(?),
     //writeln("Recursive Input");
     //writeln(SampleText);
 
+    for i in 0..<subCfg.n {
+      writeln("SampleText[", i, "] = ", SampleText[i]);
+    }
+
     const SubSA = ssortDcx(subCfg, SampleText);
 
     //writeln("Recursive Output");
@@ -1922,11 +2012,15 @@ proc ssortDcx(const cfg:ssortConfig(?),
             var agg = new DstAggregator(cfg.unsignedOffsetType)) {
         const offset = subproblemOffsetToOffset(subOffset, cover, charsPerMod);
         const rankOffset = offsetToSampleRanksOffset(offset, cover);
+        writeln("SubSA[", rank, "] subOffset=",
+                subOffset, " offset=", offset,
+                " rankOffset=", rankOffset);
         var useRank = rank+1;
-        if offset >= n {
-          useRank = 0;
-        }
         agg.copy(SampleText[rankOffset], useRank:cfg.unsignedOffsetType);
+      }
+
+      for i in 0..<sampleN {
+        writeln("SampleRanks[", i, "] = ", SampleText[i]);
       }
     }
 

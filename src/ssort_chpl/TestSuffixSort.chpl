@@ -240,7 +240,7 @@ private proc testHelpers() {
   }
 }
 
-private proc testPrefixComparisons(type loadWordType, type cachedDataType) {
+private proc testPrefixComparisons(type loadWordType) {
   param bitsPerChar=8;
   const cover = new differenceCover(3);
   const inputStr = "aabbccaaddffffffffaabbccaaddff";
@@ -620,9 +620,8 @@ proc testRankComparisons21() {
 }
 
 private proc testComparisons() {
-  testPrefixComparisons(uint(8), nothing);
-  testPrefixComparisons(uint, nothing);
-  testPrefixComparisons(uint, uint);
+  testPrefixComparisons(uint(8));
+  testPrefixComparisons(uint);
 
   testRankComparisons3();
   testRankComparisons21();
@@ -902,9 +901,8 @@ proc testLCP(input: string, expectSA: [] int, expectLCP: [] int) {
 }
 
 proc testOtherCase(input: string, expectSA: [] int,
-                   param period, type cachedDataType) {
-  writeln("testOtherCase(input='", input, "', period=", period, ", ",
-                           "cachedDataType=", cachedDataType:string, ")");
+                   param period) {
+  writeln("testOtherCase(input='", input, "', period=", period, ")");
 
   const n = input.size;
   const inputArr = bytesToArray(input);
@@ -932,11 +930,9 @@ proc testOtherCase(input: string, expectSA: [] int,
 }
 
 proc testOther(input: string, expectSA: [] int) {
-  testOtherCase(input, expectSA, period=3, cachedDataType=nothing);
-  testOtherCase(input, expectSA, period=3, cachedDataType=uint);
+  testOtherCase(input, expectSA, period=3);
 
-  testOtherCase(input, expectSA, period=7, cachedDataType=nothing);
-  testOtherCase(input, expectSA, period=7, cachedDataType=uint);
+  testOtherCase(input, expectSA, period=7);
 }
 
 proc testOthers() {
@@ -1120,9 +1116,8 @@ proc testOthers() {
   testLCP("abaababa", [7,2,5,0,3,6,1,4], [0,1,1,3,3,0,2,2]);
 }
 
-proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
-  writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period, ", ",
-                           "cachedDataType=", cachedDataType:string, ")");
+proc testRepeatsCase(c: uint(8), n: int, param period) {
+  writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period, ")");
 
   var inputArr: [0..<n+INPUT_PADDING] uint(8);
   var expectSA: [0..<n] int;
@@ -1135,16 +1130,17 @@ proc testRepeatsCase(c: uint(8), n: int, param period, type cachedDataType) {
   type offsetType = int; // always int for this test
 
   const cfg = new ssortConfig(idxType=inputArr.idxType,
-                              characterType=inputArr.eltType,
                               offsetType=offsetType,
-                              cachedDataType=cachedDataType,
-                              loadWordType=
-                                (if cachedDataType != nothing
-                                 then cachedDataType
-                                 else uint),
+                              bitsPerChar=8,
+                              n=n,
                               cover=new differenceCover(period),
-                              locales=Locales);
-  const SA = ssortDcx(cfg, inputArr, n:offsetType);
+                              locales=Locales,
+                              nTasksPerLocale=computeNumTasks());
+
+  const Packed = packInput(cfg.loadWordType,
+                           inputArr, n, cfg.bitsPerChar);
+
+  const SA = ssortDcx(cfg, Packed);
 
   if TRACE && n <= 50 {
     writeln("Input     ", inputArr[0..<n]);
@@ -1165,30 +1161,20 @@ proc testRepeats() {
 
   for (size,i) in zip(sizes,1..) {
     const chr = i:uint(8);
-    testRepeatsCase(c=chr, size, period=3, cachedDataType=nothing);
-    testRepeatsCase(c=chr, n=size, period=3, cachedDataType=uint);
-    testRepeatsCase(c=0, size, period=3, cachedDataType=nothing);
-    testRepeatsCase(c=0, n=size, period=3, cachedDataType=uint);
+    testRepeatsCase(c=chr, n=size, period=3);
+    testRepeatsCase(c=0, n=size, period=3);
 
-    testRepeatsCase(c=chr, n=size, period=7, cachedDataType=nothing);
-    testRepeatsCase(c=chr, n=size, period=7, cachedDataType=uint);
-    testRepeatsCase(c=0, n=size, period=7, cachedDataType=nothing);
-    testRepeatsCase(c=0, n=size, period=7, cachedDataType=uint);
+    testRepeatsCase(c=chr, n=size, period=7);
+    testRepeatsCase(c=0, n=size, period=7);
 
-    testRepeatsCase(c=chr, n=size, period=13, cachedDataType=nothing);
-    testRepeatsCase(c=chr, n=size, period=13, cachedDataType=uint);
-    testRepeatsCase(c=0, n=size, period=13, cachedDataType=nothing);
-    testRepeatsCase(c=0, n=size, period=13, cachedDataType=uint);
+    testRepeatsCase(c=chr, n=size, period=13);
+    testRepeatsCase(c=0, n=size, period=13);
 
-    testRepeatsCase(c=chr, n=size, period=21, cachedDataType=nothing);
-    testRepeatsCase(c=chr, n=size, period=21, cachedDataType=uint);
-    testRepeatsCase(c=0, n=size, period=21, cachedDataType=nothing);
-    testRepeatsCase(c=0, n=size, period=21, cachedDataType=uint);
+    testRepeatsCase(c=chr, n=size, period=21);
+    testRepeatsCase(c=0, n=size, period=21);
 
-    testRepeatsCase(c=chr, n=size, period=133, cachedDataType=nothing);
-    testRepeatsCase(c=chr, n=size, period=133, cachedDataType=uint);
-    testRepeatsCase(c=0, n=size, period=133, cachedDataType=nothing);
-    testRepeatsCase(c=0, n=size, period=133, cachedDataType=uint);
+    testRepeatsCase(c=chr, n=size, period=133);
+    testRepeatsCase(c=0, n=size, period=133);
   }
 }
 
@@ -1340,8 +1326,8 @@ proc runTests() {
   testSorts();
   testSeeresses();
   testOthers();
-/*  testRepeats();
-  testDescending();*/
+  testRepeats();
+/*  testDescending();*/
 }
 
 proc main() {
