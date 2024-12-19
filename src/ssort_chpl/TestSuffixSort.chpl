@@ -1185,11 +1185,10 @@ proc testRepeats() {
 
    max must be at most 256.
  */
-proc testDescendingCase(max: int, repeats: int, in n: int,
-                        param period, type cachedDataType) {
+proc testDescendingCase(max: int, repeats: int, in n: int, param period) {
   writeln("testDescendingCase(",
           "max=", max, ", repeats=", repeats, ", n=", n, ", ",
-          "period=", period, ", cachedDataType=", cachedDataType:string, ")");
+          "period=", period, ")");
 
   var inputArr: [0..<n+INPUT_PADDING] uint(8);
   var expectSA: [0..<n] int;
@@ -1253,17 +1252,15 @@ proc testDescendingCase(max: int, repeats: int, in n: int,
 
   type offsetType = int; // always int for this test
 
-  const cfg = new ssortConfig(idxType=inputArr.idxType,
-                              characterType=inputArr.eltType,
+  const cfg = new ssortConfig(idxType=int,
                               offsetType=offsetType,
-                              cachedDataType=cachedDataType,
-                              loadWordType=
-                                (if cachedDataType != nothing
-                                 then cachedDataType
-                                 else uint),
+                              bitsPerChar=8,
+                              n=n,
                               cover=new differenceCover(period),
-                              locales=Locales);
-  const SA = ssortDcx(cfg, inputArr, n:offsetType);
+                              locales=Locales,
+                              nTasksPerLocale=computeNumTasks());
+  const Packed = packInput(uint, inputArr, n, cfg.bitsPerChar);
+  const SA = ssortDcx(cfg, Packed);
 
   if TRACE && n <= 50 {
     writeln("Input     ", inputArr[0..<n]);
@@ -1302,20 +1299,15 @@ proc testDescending() {
 
   for tup in configs {
     const (max, repeats, n) = tup;
-    testDescendingCase(max, repeats, n, period=3, cachedDataType=nothing);
-    testDescendingCase(max, repeats, n, period=3, cachedDataType=uint);
+    testDescendingCase(max, repeats, n, period=3);
 
-    testDescendingCase(max, repeats, n, period=7, cachedDataType=nothing);
-    testDescendingCase(max, repeats, n, period=7, cachedDataType=uint);
+    testDescendingCase(max, repeats, n, period=7);
 
-    testDescendingCase(max, repeats, n, period=13, cachedDataType=nothing);
-    testDescendingCase(max, repeats, n, period=13, cachedDataType=uint);
+    testDescendingCase(max, repeats, n, period=13);
 
-    testDescendingCase(max, repeats, n, period=21, cachedDataType=nothing);
-    testDescendingCase(max, repeats, n, period=21, cachedDataType=uint);
+    testDescendingCase(max, repeats, n, period=21);
 
-    testDescendingCase(max, repeats, n, period=133, cachedDataType=nothing);
-    testDescendingCase(max, repeats, n, period=133, cachedDataType=uint);
+    testDescendingCase(max, repeats, n, period=133);
   }
 }
 
@@ -1327,7 +1319,7 @@ proc runTests() {
   testSeeresses();
   testOthers();
   testRepeats();
-/*  testDescending();*/
+  testDescending();
 }
 
 proc main() {

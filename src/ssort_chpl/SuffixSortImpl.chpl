@@ -766,10 +766,10 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
   var sortedByBits = 0;
   const prefixBits = maxPrefix*bitsPerChar;
   while sortedByBits < prefixBits {
-    writeln("in sortByPrefixAndMark sorted by ", sortedByBits, " for ", region);
+    /*writeln("in sortByPrefixAndMark sorted by ", sortedByBits, " for ", region);
     for i in region {
       writeln("A[", i, "] = ", A[i]);
-    }
+    }*/
 
     // sort by 'cached'
     record byCached : keyComparator {
@@ -777,7 +777,7 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
     }
     const byCachedComparator = new byCached();
     if sortedByBits == 0 {
-      writeln("sorting full region ", region);
+      //writeln("sorting full region ", region);
       sortRegion(A, byCachedComparator, region);
     } else {
       // sort each subregion starting from each marked offset
@@ -785,7 +785,7 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
       for r in unsortedRegionsFromMarks(A, region) {
         // clear the mark on the 1st element since it might move later
         unmarkOffset(A[r.low]);
-        writeln("sorting subregion ", r);
+        //writeln("sorting subregion ", r);
         sortRegion(A, byCachedComparator, r);
         // put the mark back now that a different element might be there
         markOffset(A[r.low]);
@@ -804,7 +804,7 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
         if elt.cached != lastCached {
           markOffset(elt);
           lastCached = elt.cached;
-          writeln("marked ", elt);
+          //writeln("marked ", elt);
         }
       }
     }
@@ -817,10 +817,10 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
       break;
     }
 
-    writeln("in sortByPrefixAndMark now sorted by ", sortedByBits);
+    /*writeln("in sortByPrefixAndMark now sorted by ", sortedByBits);
     for i in region {
       writeln("A[", i, "] = ", A[i]);
-    }
+    }*/
 
 
     // get the next word to sort by and store it in 'cached' for each entry
@@ -1233,7 +1233,7 @@ proc sortOffsetsInRegionBySampleRanks(
     return;
   }
 
-  writeln("in sortOffsetsInRegionBySampleRanks running v-way merge", " for size=", region.size);
+  //writeln("in sortOffsetsInRegionBySampleRanks running v-way merge", " for size=", region.size);
 
   var maxDistanceTmp = 0;
   for i in 0..<cover.period {
@@ -1376,10 +1376,10 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                       maxPrefix=cover.period);
 
 
-  writeln("after sortByPrefixAndMark Scratch[", region, "]");
+  /*writeln("after sortByPrefixAndMark Scratch[", region, "]");
   for i in region {
     writeln("Scratch[", i, "] = ", Scratch[i]);
-  }
+  }*/
 
   // Compute the number of unsorted elements &
   // Adjust each element's 'cached' value to be an offset into
@@ -1413,17 +1413,17 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   // make sure that the aggregator is done
   readAgg.flush();
 
-  writeln("after loading  Scratch[", region, "]");
+  /*writeln("after loading  Scratch[", region, "]");
   for r in unsortedRegionsFromMarks(Scratch, region) {
     for i in r {
       writeln("Scratch[", i, "] = ", Scratch[i], " ",
               LoadedSampleRanks[Scratch[i].cached:int]);
     }
-  }
+  }*/
 
   // now use the sample ranks to compute the final sorting
   for r in unsortedRegionsFromMarks(Scratch, region) {
-    writeln("sorting by sample ranks ", r);
+    //writeln("sorting by sample ranks ", r);
     sortOffsetsInRegionBySampleRanks(cfg, LoadedSampleRanks, Scratch, r, cover);
 
     // the marks are irrelevant (but wrong) at this point
@@ -1431,10 +1431,10 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
 
   }
 
-  writeln("after sorting by sample ranks  Scratch[", region, "]");
+  /*writeln("after sorting by sample ranks  Scratch[", region, "]");
   for i in region {
     writeln(" Scratch[", i, "] = ", Scratch[i]);
-  }
+  }*/
 
   // store the data back into SA
   for i in region {
@@ -1503,7 +1503,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
 
   var UnusedOutput = none;
 
-  writeln("outer partition");
+  //writeln("outer partition");
   //writeln("Splitters are");
   //writeln(Splitters);
 
@@ -1514,8 +1514,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
 
   const OuterEnds = + scan OuterCounts;
 
-  writeln("Performing ", nPasses, " passes over input");
-  writeln("TextDom = ", TextDom, " SA.domain = ", SA.domain);
+  //writeln("Performing ", nPasses, " passes over input");
+  //writeln("TextDom = ", TextDom, " SA.domain = ", SA.domain);
 
   var nBucketsPerPass = divCeil(Splitters.numBuckets, nPasses);
 
@@ -1541,8 +1541,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     // compute the number of elements to be processed by this pass
     const groupElts = OuterEnds[endBucket-1] - endPrevBucket;
 
-    writeln("pass ", pass, " processing ", groupElts,
-            " elements starting at ", passEltStart);
+    //writeln("pass ", pass, " processing ", groupElts,
+    //        " elements starting at ", passEltStart);
 
     if groupElts == 0 {
       continue; // nothing to do if there are no elements
@@ -1550,7 +1550,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
 
     const ScratchDom = makeBlockDomain(passEltStart..#groupElts, cfg.locales);
     var Scratch:[ScratchDom] offsetAndCached(offsetType, wordType);
-    writeln("ScratchDom = ", ScratchDom);
+    //writeln("ScratchDom = ", ScratchDom);
 
     record filter1 {
       proc this(bkt) {
@@ -1573,10 +1573,10 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
           var writeAgg = new DstAggregator(offsetType)) {
       // skip empty buckets
       if bktRegion.size > 0 {
-        writeln("Scratch[", bktRegion, "]");
+        /*writeln("Scratch[", bktRegion, "]");
         for i in bktRegion {
           writeln("Scratch[", i, "] = ", Scratch[i]);
-        }
+        }*/
 
         const regionDom: domain(1) = {bktRegion,};
         if Scratch.domain.localSubdomain().contains(regionDom) {
@@ -1595,10 +1595,10 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     }
   }
 
-  writeln("SA:");
+  /*writeln("SA:");
   for i in SA.domain {
     writeln("SA[", i, "] = ", SA[i]);
-  }
+  }*/
 
   return SA;
 }
@@ -1858,7 +1858,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
   const charsPerMod = 1+myDivCeil(n, cover.period);
   const sampleN = cover.sampleSize * charsPerMod;
 
-  writeln("charsPerMod ", charsPerMod);
+  //writeln("charsPerMod ", charsPerMod);
 
   if !isDistributedDomain(PackedText.domain) &&
      isDistributedDomain(ResultDom) &&
@@ -1892,10 +1892,10 @@ proc ssortDcx(const cfg:ssortConfig(?),
     halt("sortDcx expects input array to start at 0");
   }
   const textWords = divCeil(n*cfg.bitsPerChar, numBits(cfg.loadWordType));
-  writeln(cfg);
+  /*writeln(cfg);
   writeln("sampleN = ", sampleN);
   writeln("n = ", n, " textWords = ", textWords,
-          " PackedText.size = ", PackedText.size);
+          " PackedText.size = ", PackedText.size);*/
   if textWords + INPUT_PADDING > PackedText.size {
     // expect it to be zero-padded past n so that
     // getKeyPart / loadWord does not have to check n
@@ -1979,9 +1979,9 @@ proc ssortDcx(const cfg:ssortConfig(?),
     //writeln("Recursive Input");
     //writeln(SampleText);
 
-    for i in 0..<subCfg.n {
+    /*for i in 0..<subCfg.n {
       writeln("SampleText[", i, "] = ", SampleText[i]);
-    }
+    }*/
 
     const SubSA = ssortDcx(subCfg, SampleText);
 
@@ -2012,16 +2012,16 @@ proc ssortDcx(const cfg:ssortConfig(?),
             var agg = new DstAggregator(cfg.unsignedOffsetType)) {
         const offset = subproblemOffsetToOffset(subOffset, cover, charsPerMod);
         const rankOffset = offsetToSampleRanksOffset(offset, cover);
-        writeln("SubSA[", rank, "] subOffset=",
+        /*writeln("SubSA[", rank, "] subOffset=",
                 subOffset, " offset=", offset,
-                " rankOffset=", rankOffset);
+                " rankOffset=", rankOffset);*/
         var useRank = rank+1;
         agg.copy(SampleText[rankOffset], useRank:cfg.unsignedOffsetType);
       }
 
-      for i in 0..<sampleN {
+      /*for i in 0..<sampleN {
         writeln("SampleRanks[", i, "] = ", SampleText[i]);
-      }
+      }*/
     }
 
     // create splitters and store them in saveSplitters
