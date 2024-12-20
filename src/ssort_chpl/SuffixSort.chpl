@@ -99,7 +99,11 @@ proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
 
   // dispatch to the version instantiated for a close bitsPerChar
        if bitsPerChar <=  2 { return helper(2); }
+  else if bitsPerChar <=  3 { return helper(3); }
   else if bitsPerChar <=  4 { return helper(4); }
+  else if bitsPerChar <=  5 { return helper(5); }
+  else if bitsPerChar <=  6 { return helper(6); }
+  else if bitsPerChar <=  7 { return helper(7); }
   else if bitsPerChar <=  8 { return helper(8); }
   else if bitsPerChar <= 12 { return helper(12); }
   else if bitsPerChar <= 16 { return helper(16); }

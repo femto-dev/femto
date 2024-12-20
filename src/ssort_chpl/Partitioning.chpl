@@ -505,6 +505,9 @@ proc partition(const InputDomain: domain(?),
     if locales.type == nothing then 1 else locales.size;
   const outputStart = OutputDomain.first;
 
+  // otherwise there will be assertion errors later
+  assert(rsplit.type != nothing || InputDomain.targetLocales().size == 1);
+
   {
     // access the local replicand to do some checking and get # buckets
     const ref mysplit = getLocalReplicand(split, rsplit);

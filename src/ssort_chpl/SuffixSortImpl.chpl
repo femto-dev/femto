@@ -1378,7 +1378,9 @@ proc sortOffsetsInRegionBySampleRanks(
   var B:[region] A.eltType;
 
   // partition by the distance to a sample suffix
-  const Counts = partition(A.domain[region], A,
+  const ASliceDom = {A.domain.dim(0)[region]}; // intersect A.domain and region
+                                               // as a local, non-dist domain
+  const Counts = partition(ASliceDom, A,
                            B.domain, B,
                            split=new distanceToSampleSplitter(), rsplit=none,
                            comparator=new finalComparator(), /* unused */
@@ -1442,6 +1444,9 @@ proc sortOffsetsInRegionBySampleRanks(
 
 /* Sorts offsets in a region using a difference cover sample.
    Runs on one locale & does not need to be parallel.
+   Scratch might be distributed but if that's the case, this routine
+   only needs to access local portions.
+
    Updates the suffix array SA with the result.
  */
 proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
