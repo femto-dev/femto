@@ -111,46 +111,69 @@ proc replicate(x, targetLocales) {
                                      targetLocales=targetLocales);
     var Result: [D] owned ReplicatedWrapper(x.type)?;
 
-    proc helpReplicate(from, i) {
-
-      // should already be on this locale...
-      assert(here == targetLocales[i]);
-
-      // create a local copy
-      Result[here.id] = new ReplicatedWrapper(from);
-      // get a reference to the copy we just created
-      const ref newFrom = Result[here.id]!.x;
-
-      // if 2*i is in the domain, replicate from Result[targetLocales[i].id]
-      // but skip this case for i == 0 to avoid infinite loop
-      if targetLocales.domain.contains(2*i) && i != 0 {
-        begin {
-          on targetLocales[2*i] {
-            helpReplicate(newFrom, 2*i);
-          }
-        }
-      }
-
-      // ditto for 2*i+1
-      if targetLocales.domain.contains(2*i+1) {
-        begin {
-          on targetLocales[2*i+1] {
-            helpReplicate(newFrom, 2*i+1);
-          }
-        }
-      }
-    }
-
-    sync {
-      if targetLocales.domain.contains(targetLocales.domain.low) {
-        helpReplicate(x, targetLocales.domain.low);
-      }
-    }
+    reReplicate(x, Result);
 
     return Result;
   } else {
     return none;
   }
+}
+
+/* Given a distributed array created by 'replicate',
+   re-assigns the replicated elements in that array to store x.
+ */
+proc reReplicate(x, ref Result: [] owned ReplicatedWrapper(x.type)?) {
+  const targetLocales = Result.targetLocales();
+
+  proc helpReplicate(from, i) {
+    // should already be on this locale...
+    assert(here == targetLocales[i]);
+
+    // create a local copy
+    if Result[here.id] == nil {
+      Result[here.id] = new ReplicatedWrapper(from);
+    } else {
+      Result[here.id]!.x = from;
+    }
+
+    // get a reference to the copy we just created
+    const ref newFrom = Result[here.id]!.x;
+
+    // if 2*i is in the domain, replicate from Result[targetLocales[i].id]
+    // but skip this case for i == 0 to avoid infinite loop
+    if targetLocales.domain.contains(2*i) && i != 0 {
+      begin {
+        on targetLocales[2*i] {
+          helpReplicate(newFrom, 2*i);
+        }
+      }
+    }
+
+    // ditto for 2*i+1
+    if targetLocales.domain.contains(2*i+1) {
+      begin {
+        on targetLocales[2*i+1] {
+          helpReplicate(newFrom, 2*i+1);
+        }
+      }
+    }
+  }
+
+  sync {
+    if targetLocales.domain.contains(targetLocales.domain.low) {
+      helpReplicate(x, targetLocales.domain.low);
+    }
+  }
+
+  if EXTRA_CHECKS {
+    forall (i, elt) in Result {
+      assert(x == elt!.x);
+    }
+  }
+}
+
+proc reReplicate(x, Result:nothing) {
+  // nothing to do in this case
 }
 
 /* Accesses the result of 'replicate()' to get the local copy.
@@ -224,10 +247,12 @@ iter divideIntoTasks(param tag: iterKind,
  BucketCounts should be the size of each bucket
  BucketEnds should be the indices (in Arr) of the end of each bucket
  Arr is a potentially distributed array that drives the parallelism.
+ 'region' is the region within Arr that was counted.
 
  The Arr.targetLocales() must be in an increasing order by locale ID.
  */
 iter divideByBuckets(const Arr: [],
+                     const Dom: domain(?),
                      const BucketCounts: [] int,
                      const BucketEnds: [] int,
                      nTasksPerLocale: int) {
@@ -239,6 +264,7 @@ iter divideByBuckets(const Arr: [],
 }
 iter divideByBuckets(param tag: iterKind,
                      const Arr: [],
+                     const Dom: domain(?),
                      const BucketCounts: [] int,
                      const BucketEnds: [] int,
                      const nTasksPerLocale: int)
@@ -272,8 +298,8 @@ iter divideByBuckets(param tag: iterKind,
     }
   }
 
-  const arrShift = Arr.domain.low;
-  const arrEnd = Arr.domain.high;
+  const arrShift = Dom.dim(0).low;
+  const arrEnd = Dom.dim(0).high;
   const bucketsEnd = BucketCounts.domain.high;
 
   var NBucketsPerLocale: [minIdV..maxIdV] int;
@@ -825,6 +851,8 @@ private proc computeAlphaMap(Input:[],
   // now count the number of unique characters
   const nUniqueChars = + reduce alphaMap;
 
+  writeln("nUniqueChars is ", nUniqueChars);
+
   // now set the value of each character
   {
     const tmp = + scan alphaMap;
@@ -832,6 +860,7 @@ private proc computeAlphaMap(Input:[],
   }
 
   newMaxChar = max(1, nUniqueChars-1);
+  writeln("newMaxChar is ", newMaxChar);
 
   return alphaMap;
 }

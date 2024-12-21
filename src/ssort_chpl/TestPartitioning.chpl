@@ -26,7 +26,7 @@ import SuffixSort.TRACE;
 use Partitioning;
 use Utility;
 
-import Sort.{sort, isSorted, DefaultComparator};
+import Sort.{sort, isSorted, defaultComparator};
 import Random;
 import Math;
 import Map;
@@ -34,7 +34,7 @@ import Time;
 
 config const skipslow = false;
 
-const myDefaultComparator = new DefaultComparator();
+const myDefaultComparator = new integralKeyPartComparator();
 
 // nSplit positive: create that many splitters
 // nSplit negative: create a sample from the Input array
@@ -347,10 +347,74 @@ proc testSplitters() {
 
 }
 
-/*
-proc testSort(n: int, max: uint, seed: int, sorter:string) {
+proc testSort(n: int, max: uint, logBuckets: int, seed: int,
+              noBaseCase:bool, sorter:string) {
 
-  writeln("testSort(", n, ", ", max, ", ", seed, ", ", sorter, ")");
+  writeln("testSort(n=", n, ", max=", max, ", logBuckets=", logBuckets,
+          ", seed=", seed, ", noBaseCase=", noBaseCase,
+          ", sorter=", sorter, ")");
+
+  const Dom = makeBlockDomain(0..<n, Locales);
+  var Elts: [Dom] uint;
+  var Scratch: [Dom] uint;
+  var BucketBoundaries: [Dom] uint(8);
+  Random.fillRandom(Elts, min=0, max=max, seed=seed);
+  const nTasksPerLocale = computeNumTasks();
+  var EltsCopy = Elts;
+
+
+  /*
+  for i in Dom {
+    writeln("input Elts[",i,"] = ", Elts[i]);
+  }*/
+
+  if sorter == "sample" {
+    parallelPartitioningSort(
+         Elts, Scratch, BucketBoundaries,
+         0..<n, radixSort=false,
+         myDefaultComparator,
+         logBuckets,
+         nTasksPerLocale=nTasksPerLocale,
+         startbit=0, endbit=numBits(uint), noBaseCase=noBaseCase);
+  } else if sorter == "radix" {
+    parallelPartitioningSort(
+         Elts, Scratch, BucketBoundaries,
+         0..<n, radixSort=true,
+         myDefaultComparator,
+         logBuckets,
+         nTasksPerLocale=nTasksPerLocale,
+         startbit=0, endbit=numBits(uint), noBaseCase=noBaseCase);
+  } else {
+    halt("Unknown sorter in testSort");
+  }
+
+  assert(BucketBoundaries[0] == boundaryTypeOrdered);
+  for i in 1..<n {
+    if Elts[i-1] > Elts[i] {
+      writeln("unsorted at element ", i);
+      assert(false);
+    }
+    if Elts[i-1] == Elts[i] {
+      if BucketBoundaries[i] != boundaryTypeEqual {
+        writeln("bad bucket boundary ", i);
+        assert(false);
+      }
+    } else {
+      if BucketBoundaries[i] != boundaryTypeOrdered {
+        writeln("bad bucket boundary ", i);
+        assert(false);
+      }
+    }
+  }
+
+  sort(EltsCopy, stable=true);
+  assert(Elts.equals(EltsCopy));
+}
+
+/*
+proc testSortKeys(n: int, max: uint, seed: int, sorter:string) {
+
+  writeln("testSortKeys(", n, ", ", max, ", ", seed, ", ", sorter, ")");
 
   var Elts: [0..<n] uint;
   var Keys: [0..<n] uint;
@@ -419,8 +483,6 @@ proc testSortAndTrackEqual(n: int) {
 
   var Elts: [10..#n] uint;
   var Keys: [10..#n] uint;
-  var EltsSpace: [10..#n] uint;
-  var KeysSpace: [10..#n] uint;
   const maxCount = (1<<16)*4;
   var Counts: [0..<maxCount] int = 1;
   Random.fillRandom(Keys, min=0, max=max(uint), seed=1);
@@ -462,18 +524,47 @@ proc testSortAndTrackEqual(n: int) {
 }*/
 
 proc testSorts() {
+  var seed = 1;
+  for sorter in ["sample", "radix"] {
+    for n in [10, 100, 300, 500, 1_000, 10_000, 100_000] {
+      for max in [0, 10, 100, 100_000, max(uint)] {
+        if n < 10_000 {
+          testSort(n=n,max=max,logBuckets=2,seed=seed,noBaseCase=true,sorter);
+          testSort(n=n,max=max,logBuckets=4,seed=seed,noBaseCase=true,sorter);
+          testSort(n=n,max=max,logBuckets=8,seed=seed,noBaseCase=true,sorter);
+          if sorter != "radix" {
+            // radix sorter assumes radix divides key type
+            testSort(n=n,max=max,logBuckets=10,seed=seed,noBaseCase=true,sorter);
+          }
+          testSort(n=n,max=max,logBuckets=16,seed=seed,noBaseCase=true,sorter);
+        }
+
+        testSort(n=n,max=max,logBuckets=2,seed=seed,noBaseCase=false,sorter);
+        testSort(n=n,max=max,logBuckets=4,seed=seed,noBaseCase=false,sorter);
+        testSort(n=n,max=max,logBuckets=8,seed=seed,noBaseCase=false,sorter);
+        if sorter != "radix" {
+          // radix sorter assumes radix divides key type
+          testSort(n=n,max=max,logBuckets=10,seed=seed,noBaseCase=false,sorter);
+        }
+        testSort(n=n,max=max,logBuckets=16,seed=seed,noBaseCase=false,sorter);
+
+        seed += 1;
+      }
+    }
+  }
+
   /*for sorter in ["insertion", "shell", "lsb2", "lsb8", "lsb16"] {
     if skipslow && sorter == "lsb16" then continue;
-    testSort(10, 0, 0, sorter);
-    testSort(10, 10, 1, sorter);
-    testSort(10, 5, 2, sorter);
-    testSort(10, 100, 3, sorter);
-    testSort(10, 10000, 4, sorter);
+    testSortKeys(10, 0, 0, sorter);
+    testSortKeys(10, 10, 1, sorter);
+    testSortKeys(10, 5, 2, sorter);
+    testSortKeys(10, 100, 3, sorter);
+    testSortKeys(10, 10000, 4, sorter);
 
-    testSort(100, 10, 5, sorter);
-    testSort(100, 5, 6, sorter);
-    testSort(100, 100, 7, sorter);
-    testSort(100, 10000, 8, sorter);
+    testSortKeys(100, 10, 5, sorter);
+    testSortKeys(100, 5, 6, sorter);
+    testSortKeys(100, 100, 7, sorter);
+    testSortKeys(100, 10000, 8, sorter);
   }*/
 
   // test markBoundaries
@@ -680,73 +771,116 @@ proc runTests() {
   testSplitters();
 }
 
-/*proc testTiming() {
+config const sampleLogBuckets = 8;
+config const radixLogBuckets = 8;
+
+proc testTiming() {
 
   var maxn = 10**8;
   var Elts: [0..<maxn] uint;
-  var Keys: [0..<maxn] uint;
   var EltsSpace: [0..<maxn] uint;
-  var KeysSpace: [0..<maxn] uint;
-  const maxCount = (1<<16)*4;
-  var Counts: [0..<maxCount] int = 1;
-  var Boundaries: [0..<Math.divCeil(maxn,numBits(uint))] uint;
-  var Tups: [0..<maxn] 2*uint;
+  var BucketBoundaries: [0..<maxn] uint(8);
+  const nTasksPerLocale = computeNumTasks();
 
-  var ntrials = 3;
   var n = 1;
   while n <= maxn {
 
-    var t: Time.stopwatch;
+    var ntrials = min(max(1, maxn / n), 1000);
+
+    var sample: Time.stopwatch;
     for trial in 0..<ntrials {
-      Boundaries=0;
-      Random.fillRandom(Keys[0..<n], min=0, max=max(uint), seed=1);
-      t.start();
-      sortAndTrackEqual(Elts, Keys, Boundaries, 0..<n,
-                        EltsSpace, KeysSpace, Counts);
-      t.stop();
+      BucketBoundaries = 0;
+      Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+      sample.start();
+      parallelPartitioningSort(Elts, EltsSpace, BucketBoundaries,
+                               0..<n, radixSort=false,
+                               new integralKeyPartComparator(),
+                               logBuckets=sampleLogBuckets,
+                               nTasksPerLocale,
+                               startbit=0,
+                               endbit=numBits(uint));
+
+      sample.stop();
     }
 
-    var s: Time.stopwatch;
+    var radix: Time.stopwatch;
     for trial in 0..<ntrials {
-      Boundaries=0;
-      Random.fillRandom(Keys[0..<n], min=0, max=max(uint), seed=1);
+      BucketBoundaries = 0;
+      Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+      radix.start();
+      parallelPartitioningSort(Elts, EltsSpace, BucketBoundaries,
+                               0..<n, radixSort=true,
+                               new integralKeyPartComparator(),
+                               logBuckets=radixLogBuckets,
+                               nTasksPerLocale,
+                               startbit=0,
+                               endbit=numBits(uint));
+      radix.stop();
+    }
+
+    var stdstable: Time.stopwatch;
+    for trial in 0..<ntrials {
+      BucketBoundaries = boundaryTypeOrdered;
+      Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+      stdstable.start();
+      sort(Elts, new defaultComparator(), region=0..<n, stable=true);
       forall i in 0..<n {
-        Tups[i][0] = Keys[i];
-      }
-      s.start();
-      serial { sort(Tups, myDefaultComparator, 0..<n); }
-      record getter {
-        proc this(i) {
-          return Tups[i][0];
+        if i > 0 {
+          if Elts[i] == Elts[i+1] {
+            BucketBoundaries[i] = boundaryTypeEqual;
+          }
         }
       }
-      markBoundaries(new getter(), Boundaries, 0..<n);
-      s.stop();
+      stdstable.stop();
     }
+
+    var stdunstable: Time.stopwatch;
+    for trial in 0..<ntrials {
+      BucketBoundaries = boundaryTypeOrdered;
+      Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+      stdunstable.start();
+      sort(Elts, new defaultComparator(), region=0..<n, stable=false);
+      forall i in 0..<n {
+        if i > 0 {
+          if Elts[i] == Elts[i+1] {
+            BucketBoundaries[i] = boundaryTypeEqual;
+          }
+        }
+      }
+      stdunstable.stop();
+    }
+
 
     if n == 1 {
-      writef("% <14s % <14s % <14s\n", "n", "mysort MB/s", "std sort MB/s\n");
+      writef("% <14s % <14s % <14s % <14s % <14s\n",
+             "n", "sample MB/s", "radix MB/s",
+             "std stable MB/s", "std unstable MB/s");
     }
 
-    writef("% <14i % <14r % <14r\n",
+    const nb = n*numBytes(Elts.eltType);
+
+    writef("% <14i % <14r % <14r % <14r % <14r\n",
            n,
-           n / 1000.0 / 1000.0 / (t.elapsed()/ntrials),
-           n / 1000.0 / 1000.0 / (s.elapsed()/ntrials));
+           nb / 1000.0 / 1000.0 / (sample.elapsed()/ntrials),
+           nb / 1000.0 / 1000.0 / (radix.elapsed()/ntrials),
+           nb / 1000.0 / 1000.0 / (stdstable.elapsed()/ntrials),
+           nb / 1000.0 / 1000.0 / (stdunstable.elapsed()/ntrials));
 
     n *= 10;
   }
-}*/
+}
 
-//config const timing = false;
+config const timing = false;
 
 proc main() {
-  /*if timing {
+  if timing {
     testTiming();
     return;
-  }*/
+  }
 
-  /* commented out due to some odd problems once added replicated
-  serial {
+  /* commented out due to some odd problems with partition
+     once added replicated */
+  /*serial {
     writeln("Testing within serial block");
     runTests();
   }*/

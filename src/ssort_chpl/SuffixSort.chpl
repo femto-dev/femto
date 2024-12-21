@@ -76,6 +76,8 @@ proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
   const bitsPerChar = computeBitsPerChar(Input, n);
 
 
+  writeln("computed bitsPerChar=", bitsPerChar);
+
   // now proceed with suffix sorting with the packed data
   // and a compile-time known bitsPerChar
 

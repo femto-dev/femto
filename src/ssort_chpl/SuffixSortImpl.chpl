@@ -43,11 +43,6 @@ import SuffixSort.TIMING;
 import SuffixSort.STATS;
 import SuffixSort.INPUT_PADDING;
 
-// how much more should we sample to create splitters?
-// 1.0 would be only to sample enough for the splitters
-config const sampleRatio = 1.5;
-
-config const seed = 1;
 config const minBucketsPerTask = 8;
 config const minBucketsSpace = 2_000_000; // a size in bytes
 config const simpleSortLimit = 1000; // for sizes >= this,
@@ -55,8 +50,6 @@ config const simpleSortLimit = 1000; // for sizes >= this,
 config const finalSortPasses = 8;
 
 // upper-case names for the config constants to better identify them in code
-const SAMPLE_RATIO = min(1.0, sampleRatio);
-const SEED = seed;
 const MIN_BUCKETS_PER_TASK = minBucketsPerTask;
 const MIN_BUCKETS_SPACE = minBucketsSpace;
 const SIMPLE_SORT_LIMIT = simpleSortLimit;
@@ -760,6 +753,8 @@ iter unsortedRegionsFromMarks(A:[] offsetAndCached(?), region: range) {
   var cur = region.low;
   const end = region.high+1;
   while cur < end {
+    // TODO: this code is probably wrong.
+
     // find the next marked offset
     var next = cur + 1;
     while next < end && !isMarkedOffset(A[next]) {
@@ -1329,7 +1324,10 @@ proc sortOffsetsInRegionBySampleRanks(
     return;
   }
 
-  //writeln("in sortOffsetsInRegionBySampleRanks running v-way merge", " for size=", region.size);
+  writeln("in sortOffsetsInRegionBySampleRanks running v-way merge", " for size=", region.size);
+
+  writeln("A.domain is ", A.domain, " region is ", region, " A.locales is ",
+      A.targetLocales());
 
   var maxDistanceTmp = 0;
   for i in 0..<cover.period {
@@ -1712,6 +1710,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       }
     }
 
+    writeln("Forming InnerCounts");
     const InnerCounts = partition(TextDom, InputProducer,
                                   Scratch.domain, Scratch,
                                   Splitters, ReplSplitters, comparator,
@@ -1728,6 +1727,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
           + reduce stats) {
       // skip empty buckets
       if bktRegion.size > 0 {
+        writeln("Sorting all offsets in ", bktRegion, " ", bktIdx, " ", taskId);
         /*writeln("Scratch[", bktRegion, "]");
         for i in bktRegion {
           writeln("Scratch[", i, "] = ", Scratch[i]);

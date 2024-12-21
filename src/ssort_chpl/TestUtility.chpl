@@ -296,7 +296,7 @@ proc testDivideByBucketsCases() {
   var LocaleIds:[Dom] int = -1; // store locale IDs
 
   forall (region, bucketIdx, taskId)
-  in divideByBuckets(Input, Counts, Ends, nTasksPerLocale) {
+  in divideByBuckets(Input, Dom, Counts, Ends, nTasksPerLocale) {
     //writeln("region=", region, " bucketIdx=", bucketIdx,
     //        " taskId=", taskId, " on here.id=", here.id);
     assert(region.size == 10); // all buckets are 10 elements
@@ -345,7 +345,7 @@ proc testDivideByBuckets(n: int, nBuckets: int,
   var LocaleIds:[Dom] int = -1; // store locale IDs
 
   forall (region, bucketIdx, taskId)
-  in divideByBuckets(Input, Counts, Ends, nTasksPerLocale) {
+  in divideByBuckets(Input, Dom, Counts, Ends, nTasksPerLocale) {
     // check that the region's start is either 0 or an entry in Ends
     var foundCount = false;
     for c in Counts {

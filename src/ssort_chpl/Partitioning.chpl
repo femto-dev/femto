@@ -28,14 +28,27 @@ import SuffixSort.EXTRA_CHECKS;
 use Utility;
 
 import Reflection.canResolveMethod;
-import Sort.{sort, DefaultComparator, keyPartStatus};
+import Sort;
+import Sort.{sort, defaultComparator, keyPartStatus, keyPartComparator};
+use Random; // 'use' vs 'import' to workaround an issue
 import Math.{log2, divCeil};
 import CTypes.c_array;
 import BlockDist.blockDist;
 
 // These settings control the sample sort and classification process
-param classifyUnrollFactor = 7;
-const equalBucketThreshold = 5;
+
+// how much more should we sample to create splitters?
+// 1.0 would be only to sample enough for the splitters
+config const sampleRatio = 1.5;
+config const seed = 1;
+
+// switch to base case sort if number of elements is < nBuckets * this
+config const partitionSortBaseCaseMultiplier = 100.0;
+
+param CLASSIFY_UNROLL_FACTOR = 7;
+const SAMPLE_RATIO = min(1.0, sampleRatio);
+const SEED = seed;
+const PARTITION_SORT_BASE_CASE_MULTIPLIER = partitionSortBaseCaseMultiplier;
 
 // compute logarithm base 2 rounded down
 proc log2int(n: int) {
@@ -50,7 +63,7 @@ inline proc mycompare(a, b, comparator) {
   if canResolveMethod(comparator, "key", a) &&
      canResolveMethod(comparator, "key", b) {
     // Use the default comparator to compare the integer keys
-    const d = new DefaultComparator();
+    const d = new defaultComparator();
     return d.compare(comparator.key(a), comparator.key(b));
   // Use comparator.compare(a, b) if is defined by user
   } else if canResolveMethod(comparator, "compare", a, b) {
@@ -84,6 +97,71 @@ private inline proc myCompareByPart(a, b, comparator) {
 
   // This is never reached. The return below is a workaround for issue #10447.
   return 1;
+}
+
+record integralKeyPartComparator : keyPartComparator {
+  inline proc keyPart(elt: integral, i: int): (keyPartStatus, elt.type) {
+    var section = if i > 0 then keyPartStatus.pre else keyPartStatus.returned;
+    return (section, elt);
+  }
+}
+
+inline proc myGetBin(a, comparator, startbit:int, radixBits:int) {
+  if canResolveMethod(comparator, "keyPart", a, 0) {
+    return myGetBinForKeyPart(a, comparator, startbit, radixBits);
+  } else if canResolveMethod(comparator, "key", a) {
+    return myGetBinForKeyPart(comparator.key(a),
+                              new integralKeyPartComparator(),
+                              startbit, radixBits);
+  } else {
+    compilerError("Bad comparator for radix sort ", comparator.type:string,
+                  " with eltType ", a.type:string);
+  }
+}
+
+// Get the bin for a record by calling comparator.keyPart
+//
+// p = 1 << radixBits
+//
+// bin 0 is for the end was reached (sort before)
+// bins 1..p are for data with next part starting with 0..<p
+// bin p+1 is for the end was reached (sort after)
+//
+// returns bin
+inline proc myGetBinForKeyPart(a, comparator, startbit:int, radixBits:int) {
+  // We have keyPart(element, start):(keyPartStatus, part which is integral)
+  const testRet: comparator.keyPart(a, 0).type;
+  const testPart = testRet(1); // get the numeric part
+  param bitsPerPart = numBits(testPart.type);
+  if EXTRA_CHECKS {
+    assert(bitsPerPart >= radixBits);
+    assert(bitsPerPart % radixBits == 0);
+  }
+
+  // startbit must be a multiple of radixBits because the radix
+  // sort operates radixBits at a time.
+
+  // startbit might be partway through a part (e.g. 16 bits into a uint(64))
+  const whichpart = startbit / bitsPerPart;
+  const bitsinpart = startbit % bitsPerPart;
+
+  const (section, part) = comparator.keyPart(a, whichpart);
+  var ubits = part:uint(bitsPerPart);
+  // If the number is signed, invert the top bit, so that
+  // the negative numbers sort below the positive numbers
+  if isInt(part) {
+    const one:ubits.type = 1;
+    ubits = ubits ^ (one << (bitsPerPart - 1));
+  }
+  const mask:uint = (1 << radixBits) - 1;
+  const ubin = (ubits >> (bitsPerPart - bitsinpart - radixBits)) & mask;
+
+  if section:int == 0 then
+    return ubin:int + 1; // a regular bin
+  else if section:int < 0 then
+    return 0; // the sort-before bin
+  else
+    return (1 << radixBits) + 1; // the sort-after bin
 }
 
 /* This enum describes to what extent the sample is already sorted */
@@ -194,6 +272,15 @@ record splitters : writeSerializable {
   proc init(type eltType) {
     // default init, creates invalid splitters, but useful for replicating
     this.eltType = eltType;
+  }
+  // creates space for splitters without creating valid splitters
+  proc init(type eltType, logBuckets: int) {
+    this.eltType = eltType;
+    this.logBuckets = logBuckets;
+    this.myNumBuckets = 1 << logBuckets;
+    init this; // allocate 'storage' and 'sortedStorage'
+    // reset myNumBuckets to indicate it is invalid
+    myNumBuckets = 0;
   }
 
   // Create splitters based on some precomputed, already sorted splitters
@@ -371,34 +458,34 @@ record splitters : writeSerializable {
     const paramEqualBuckets = equalBuckets;
     const paramLogBuckets = logBuckets;
     const paramNumBuckets = 1 << (paramLogBuckets + paramEqualBuckets:int);
-    var b:c_array(int, classifyUnrollFactor);
-    var elts:c_array(Input.eltType, classifyUnrollFactor);
+    var b:c_array(int, CLASSIFY_UNROLL_FACTOR);
+    var elts:c_array(Input.eltType, CLASSIFY_UNROLL_FACTOR);
 
     var cur = start_n;
     // Run the main (unrolled) loop
-    while cur <= end_n-(classifyUnrollFactor-1) {
-      for /*param*/ i in 0..classifyUnrollFactor-1 {
+    while cur <= end_n-(CLASSIFY_UNROLL_FACTOR-1) {
+      for /*param*/ i in 0..CLASSIFY_UNROLL_FACTOR-1 {
         b[i] = 1;
         elts[i] = Input[cur+i];
       }
       for /*param*/ lg in 0..paramLogBuckets-1 {
-        for /*param*/ i in 0..classifyUnrollFactor-1 {
+        for /*param*/ i in 0..CLASSIFY_UNROLL_FACTOR-1 {
           b[i] = 2*b[i] +
                  (mycompare(splitter(b[i]), elts[i],comparator)<0):int;
         }
       }
       if paramEqualBuckets {
-        for /*param*/ i in 0..classifyUnrollFactor-1 {
+        for /*param*/ i in 0..CLASSIFY_UNROLL_FACTOR-1 {
           b[i] = 2*b[i] +
                  (mycompare(sortedSplitter(b[i] - paramNumBuckets/2),
                             elts[i],
                             comparator)==0):int;
         }
       }
-      for /*param*/ i in 0..classifyUnrollFactor-1 {
+      for /*param*/ i in 0..CLASSIFY_UNROLL_FACTOR-1 {
         yield (elts[i], b[i]-paramNumBuckets);
       }
-      cur += classifyUnrollFactor;
+      cur += CLASSIFY_UNROLL_FACTOR;
     }
     // Handle leftover
     while cur <= end_n {
@@ -417,6 +504,61 @@ record splitters : writeSerializable {
     }
   }
 } // end record splitters
+
+record radixSplitters : writeSerializable {
+  var radixBits: int; // how many bits to sort at once
+  var startbit: int;  // start bit position
+  var endbit: int;    // when startbit==endbit, everything compares equal
+
+  proc init() {
+    // default init, creates invalid splitters, but useful for replicating
+  }
+  // creates a valid radixSplitter
+  proc init(radixBits: int, startbit: int, endbit: int) {
+    this.radixBits = radixBits;
+    this.startbit = startbit;
+    this.endbit = endbit;
+  }
+
+  proc serialize(writer, ref serializer) throws {
+    writer.write("radixSplitters(");
+    writer.write("\n radixBits=", radixBits);
+    writer.write("\n startbit=", startbit);
+    writer.write("\n endbit=", endbit);
+    writer.write(")\n");
+  }
+
+  proc numBuckets {
+    return (1 << radixBits) + 2; // +2 for end-before and end-after bins
+  }
+
+  proc bucketHasEqualityBound(bucketIdx: int) {
+    return startbit >= endbit - radixBits;
+  }
+
+  inline proc bucketForRecord(a, comparator) {
+    return myGetBin(a, comparator, startbit, radixBits);
+  }
+
+  // yields (value, bucket index) for start_n..end_n
+  // gets the elements by calling Input[i] to get element i
+  // Input does not have to be an array, but it should have an eltType.
+  iter classify(Input, start_n, end_n, comparator) {
+    var cur = start_n;
+    while cur <= end_n-(CLASSIFY_UNROLL_FACTOR-1) {
+      for /*param*/ j in 0..CLASSIFY_UNROLL_FACTOR-1 {
+        const elt = Input[cur+j];
+        yield (elt, bucketForRecord(elt, comparator));
+      }
+      cur += CLASSIFY_UNROLL_FACTOR;
+    }
+    while cur <= end_n {
+      const elt = Input[cur];
+      yield (elt, bucketForRecord(elt, comparator));
+      cur += 1;
+    }
+  }
+} // end record radixSplitters
 
 class PerTaskState {
   var nBuckets: int;
@@ -625,6 +767,658 @@ proc partition(const InputDomain: domain(?),
   }
 
   return counts;
+}
+
+private proc partitioningSortCreateSampleSplitters(ref A: [],
+                                                   Dom: domain(?),
+                                                   comparator,
+                                                   const logBuckets: int,
+                                                   const nTasksPerLocale: int,
+                                                   const baseCaseLimit: int)
+ : splitters(A.eltType) {
+
+  const requestBuckets = 1 << logBuckets;
+  const nToSample = (SAMPLE_RATIO*requestBuckets):int;
+  var SortSamplesSpace:[0..<nToSample] A.eltType;
+  const nTasks = A.targetLocales().size * nTasksPerLocale;
+  const perTask = divCeil(SortSamplesSpace.size, nTasks);
+  const SortSamplesSpaceDomRange = SortSamplesSpace.domain.dim(0);
+
+  // read some random elements from each locale
+  // each should set SortSampleSpace[perTask*taskId..#perTask]
+  forall (taskId, chk) in divideIntoTasks(Dom, nTasksPerLocale) {
+    const dstFullRange = perTask*taskId..#perTask;
+    const dstRange = SortSamplesSpaceDomRange[dstFullRange];
+    const dstRangeDom = {dstRange};
+
+    // note: it is intentional that this will give different
+    // results with the same seed if the number of tasks
+    // or the number of locales differs
+    var randNums;
+    if SEED == 0 {
+      randNums = new Random.randomStream(int);
+    } else {
+      randNums = new Random.randomStream(int, seed=SEED*taskId);
+    }
+
+    const low = chk.low;
+    const high = chk.high;
+    for (dstIdx, randIdx) in zip(dstRangeDom,
+                                 randNums.next(dstRangeDom, low, high)) {
+      // store the value at randIdx (which should be local) to dstIdx
+      SortSamplesSpace[dstIdx] = A[randIdx];
+    }
+  }
+
+  // sort them using any kind of sort
+  /*writeln("before sorting");
+  for i in SortSamplesSpace.domain {
+    writeln("SortSamplesSpace[", i, "] = ", SortSamplesSpace[i]);
+  }*/
+
+
+  // TODO: this seems to cause it not to compile
+  /*
+  if SortSamplesSpace.size <= baseCaseLimit {
+    sort(SortSamplesSpace, comparator=comparator);
+  } else {
+    var Scratch: [SortSamplesSpace.domain] A.eltType;
+    var BucketBoundaries: [SortSamplesSpace.domain] uint(8);
+    parallelPartitioningSort(SortSamplesSpace, Scratch, BucketBoundaries,
+                             0..<nToSample, radixSort=false,
+                             comparator, logBuckets, nTasksPerLocale,
+                             startbit=0, endbit=max(int));
+  }*/
+  // TODO: using default sort seems to fail due to out of stack space
+  // with all-zeros input.
+  sort(SortSamplesSpace, comparator=comparator, 0..<nToSample, stable=true);
+
+  /*
+  writeln("after sorting");
+  for i in SortSamplesSpace.domain {
+    writeln("SortSamplesSpace[", i, "] = ", SortSamplesSpace[i]);
+  }*/
+
+  if EXTRA_CHECKS {
+    //writeln("sorted samples to ", SortSamplesSpace);
+    assert(isSorted(SortSamplesSpace, comparator));
+  }
+
+  // now form splitters
+  //writeln("forming splitters with requestBuckets ", requestBuckets);
+  const split = new splitters(SortSamplesSpace, requestBuckets, comparator,
+                              howSorted=sortLevel.fully);
+
+  //writeln("splitters are ", split);
+
+  return split;
+}
+
+param boundaryTypeUnsorted:uint(8) = 0;
+param boundaryTypeOrdered:uint(8) = 1;
+param boundaryTypeEqual:uint(8) = 2;
+
+private inline proc cmpToBoundaryType(cmp: int) {
+  var order: uint(8);
+  if cmp == 0 {
+    order = boundaryTypeEqual;
+  } else {
+    order = boundaryTypeOrdered;
+  }
+  return order;
+}
+
+// sets BucketBoundaries[region.low] to ordered
+// and sets the subsequent ones according to comparing
+// useful after doing a base case sort on A[region] to set bucket boundaries
+private proc setBoundariesComparing(const ref A: [], region, comparator,
+                                    ref BucketBoundaries: [] uint(8)) {
+  // compare the elements to set the bucket boundaries
+  const low = region.low;
+  const high = region.high;
+  BucketBoundaries[low] = boundaryTypeOrdered;
+  forall i in low+1..high {
+    var cmp = mycompare(A[i-1], A[i], comparator);
+    BucketBoundaries[i] = cmpToBoundaryType(cmp);
+  }
+}
+
+private proc partitionSortBaseCase(ref A: [], region: range, comparator,
+                                   ref BucketBoundaries: [] uint(8)) {
+  if region.size == 0 {
+    return; // nothing to do
+  }
+
+  if region.size == 1 {
+    // mark the bucket boundary
+    BucketBoundaries[region.low] = boundaryTypeOrdered;
+    return;
+  }
+
+  if region.size == 2 {
+    const i = region.low;
+    const j = region.low + 1;
+    var cmp = mycompare(A[i], A[j], comparator);
+    if cmp > 0 {
+      A[i] <=> A[j];
+    }
+    // if we got here, A[i] must differ from previous
+    BucketBoundaries[i] = boundaryTypeOrdered;
+    BucketBoundaries[j] = cmpToBoundaryType(cmp);
+    return;
+  }
+
+  if A.domain.localSubdomain().dim(0).contains(region) {
+    // sort it with a base case sort
+    // sort them using any kind of sort
+    /*if region.size < 20 {
+      Sort.InsertionSort.insertionSort(A, comparator, region.low, region.high);
+    } else */
+      sort(A, comparator, region, stable=true);
+    // compare the elements again to set the bucket boundaries
+    setBoundariesComparing(A, region, comparator, BucketBoundaries);
+  } else {
+    // copy it locally and sort it with a base case sort
+    var LocA:[region] A.eltType;
+    LocA[region] = A[region];
+    sort(LocA, comparator, region, stable=true);
+    // compare the elements again to set the bucket boundaries
+    setBoundariesComparing(LocA, region, comparator, BucketBoundaries);
+    // copy the sorted data back
+    A[region] = LocA[region];
+  }
+}
+
+// this function partitions from A to Scratch
+// forming the outer buckets. Each outer bucket will be processed
+// with processOuterBucket.
+proc partitionAndProcessOuterBuckets(const Dom: domain(?),
+                                     ref A: [],
+                                     ref Scratch: [] A.eltType,
+                                     ref BucketBoundaries: [] uint(8),
+                                     param radixSort,
+                                     comparator,
+                                     const logBuckets: int,
+                                     const nTasksPerLocale: int,
+                                     in startbit: int,
+                                     const endbit: int,
+                                     const baseCaseLimit: int,
+                                     const OuterSplit,
+                                     const OuterRSplit) {
+  const OuterCounts = partition(Dom, A, Dom, Scratch,
+                                OuterSplit, OuterRSplit, comparator,
+                                nTasksPerLocale);
+
+  /*for i in Dom {
+    writeln("after partition1 Scratch[", i, "] = ", Scratch[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+  }*/
+
+  const OuterEnds = + scan OuterCounts;
+
+  // when radix sorting, the partitioning we just did sorted by
+  // an additional logBuckets bits
+  startbit += logBuckets;
+
+  forall (outerRegion, outerIdx, outerTaskId)
+  in divideByBuckets(Scratch, Dom, OuterCounts, OuterEnds, nTasksPerLocale)
+  with (const ref locOutSp = getLocalReplicand(OuterSplit, OuterRSplit)) {
+    processOuterBucket(A, Scratch, BucketBoundaries, radixSort, comparator,
+                       logBuckets, nTasksPerLocale,
+                       startbit, endbit, baseCaseLimit,
+                       outerRegion, outerIdx, outerTaskId, locOutSp);
+  }
+}
+
+// the partitioning sort will partition from A to Scratch
+// and this forms the outer buckets. This is called to process each
+// outer bucket. Processing each outer bucket will involve
+// bringing the data back from Scratch to A (potentially with
+// another partitioning step).
+proc processOuterBucket(ref A: [],
+                        ref Scratch: [] A.eltType,
+                        ref BucketBoundaries: [] uint(8),
+                        param radixSort,
+                        comparator,
+                        const logBuckets: int,
+                        const nTasksPerLocale: int,
+                        const startbit: int,
+                        const endbit: int,
+                        const baseCaseLimit: int,
+
+                        outerRegion:range,
+                        outerIdx:int,
+                        outerTaskId:int,
+                        const ref outerSplit) {
+  // for each bucket, partition from Scratch back into A
+  // and mark bucket boundaries indicating what is sorted
+  if outerRegion.size == 0 {
+    // nothing to do
+  } else if outerRegion.size == 1 {
+    A[outerRegion.low] = Scratch[outerRegion.low];
+    BucketBoundaries[outerRegion.low] = boundaryTypeOrdered;
+
+  } else if outerSplit.bucketHasEqualityBound(outerIdx) {
+    A[outerRegion] = Scratch[outerRegion];
+    const low = outerRegion.low;
+    const high = outerRegion.high;
+    BucketBoundaries[low] = boundaryTypeOrdered;
+    BucketBoundaries[low+1..high] = boundaryTypeEqual;
+
+  } else if outerRegion.size <= baseCaseLimit {
+    // copy it from Scratch back into A
+    A[outerRegion] = Scratch[outerRegion];
+    // sort it and mark BucketBoundaries
+    partitionSortBaseCase(A, outerRegion, comparator, BucketBoundaries);
+
+  } else {
+    // do a partition step from Scratch back into A
+    // and then process the resulting buckets with processInnerBucket
+    // to mark BucketBoundaries
+    if Scratch.domain.localSubdomain().dim(0).contains(outerRegion) {
+      // do it locally
+      const Dom = {outerRegion};
+      if !radixSort {
+        const InnerSplit =
+          partitioningSortCreateSampleSplitters(A, Dom, comparator,
+                                                logBuckets, nTasksPerLocale,
+                                                baseCaseLimit);
+        partitionAndProcessInnerBuckets(Dom, A, Scratch, BucketBoundaries,
+                                        radixSort, comparator, logBuckets,
+                                        nTasksPerLocale, startbit, endbit,
+                                        baseCaseLimit, InnerSplit, none);
+      } else {
+        const InnerSplit =
+          new radixSplitters(radixBits=logBuckets,
+                             startbit=startbit, endbit=endbit);
+        partitionAndProcessInnerBuckets(Dom, A, Scratch, BucketBoundaries,
+                                        radixSort, comparator, logBuckets,
+                                        nTasksPerLocale, startbit, endbit,
+                                        baseCaseLimit, InnerSplit, none);
+      }
+    } else {
+      // do it distributed
+      const Dom = A.domain[outerRegion];
+      if !radixSort {
+        const InnerSplit =
+          partitioningSortCreateSampleSplitters(A, Dom, comparator,
+                                                logBuckets, nTasksPerLocale,
+                                                baseCaseLimit);
+        const InnerRSplit = replicate(InnerSplit, Dom.targetLocales());
+        partitionAndProcessInnerBuckets(Dom, A, Scratch, BucketBoundaries,
+                                        radixSort, comparator, logBuckets,
+                                        nTasksPerLocale, startbit, endbit,
+                                        baseCaseLimit, InnerSplit, InnerRSplit);
+      } else {
+        const InnerSplit =
+          new radixSplitters(radixBits=logBuckets,
+                             startbit=startbit, endbit=endbit);
+        const InnerRSplit = replicate(InnerSplit, Dom.targetLocales());
+        partitionAndProcessInnerBuckets(Dom, A, Scratch, BucketBoundaries,
+                                        radixSort, comparator, logBuckets,
+                                        nTasksPerLocale, startbit, endbit,
+                                        baseCaseLimit, InnerSplit, InnerRSplit);
+      }
+    }
+  }
+}
+
+// this function partitions from Scratch to A
+// forming the inner buckets. Each inner bucket will be
+// processed with processInnerBucket.
+proc partitionAndProcessInnerBuckets(const Dom: domain(?),
+                                     ref A: [],
+                                     ref Scratch: [] A.eltType,
+                                     ref BucketBoundaries: [] uint(8),
+                                     param radixSort,
+                                     comparator,
+                                     const logBuckets: int,
+                                     const nTasksPerLocale: int,
+                                     const startbit: int,
+                                     const endbit: int,
+                                     const baseCaseLimit: int,
+                                     const InnerSplit,
+                                     const InnerRSplit) {
+  const InnerCounts = partition(Dom, Scratch, Dom, A,
+                                InnerSplit, InnerRSplit, comparator,
+                                nTasksPerLocale);
+
+  /*for i in Dom {
+    writeln("after partition2 A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+  }*/
+
+  const InnerEnds = + scan InnerCounts;
+  forall (innerRegion, innerBktIdx, innerTask)
+  in divideByBuckets(A, Dom, InnerCounts, InnerEnds, nTasksPerLocale)
+  with (const ref locInSplit = getLocalReplicand(InnerSplit, InnerRSplit))
+  {
+    processInnerBucket(A, BucketBoundaries, comparator, baseCaseLimit,
+                       innerRegion, innerBktIdx, innerTask, locInSplit);
+  }
+
+  /* for i in Dom {
+    writeln("after processInnerBuckets A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+  }*/
+}
+
+// this processes an inner bucket
+// it is primarily concerned with setting BucketBoundaries
+proc processInnerBucket(ref A: [],
+                        ref BucketBoundaries: [] uint(8),
+                        comparator,
+                        const baseCaseLimit: int,
+
+                        innerRegion:range,
+                        innerBktIdx:int,
+                        innerTask:int,
+                        const ref innerSplit) {
+  //writeln("processInnerBucket ", innerRegion);
+
+  if innerRegion.size == 0 {
+    // nothing to do
+  } else if innerRegion.size == 1 {
+    BucketBoundaries[innerRegion.low] = boundaryTypeOrdered;
+    //writeln("processInnerBucket 1 set BucketBoundaries[", innerRegion.low, "] = ", BucketBoundaries[innerRegion.low]);
+
+  } else if innerSplit.bucketHasEqualityBound(innerBktIdx) {
+    const low = innerRegion.low;
+    const high = innerRegion.high;
+    BucketBoundaries[low] = boundaryTypeOrdered;
+    BucketBoundaries[low+1..high] = boundaryTypeEqual;
+
+  } else if innerRegion.size <= baseCaseLimit {
+    // sort it and mark BucketBoundaries
+    partitionSortBaseCase(A, innerRegion, comparator, BucketBoundaries);
+
+  } else {
+    // it won't be fully sorted, but we have established (by partitioning)
+    // that the element at innerRegion.low differs from the previous
+    BucketBoundaries[innerRegion.low] = boundaryTypeOrdered;
+  }
+}
+
+/* A parallel partitioning sort step.
+
+   When this returns, A will be more sorted, and BucketBoundaries
+   will be updated to indicate how A is more sorted.
+
+   Each call to partitioningSortStep will write to 'split' and 'rsplit',
+   so make sure each gets its own if running in a parallel context.
+
+   Scratch is temporary space of similar size to the sorted region.
+
+   BucketBoundaries[i] indicates the relationship between A[i] and A[i-1]:
+     * unsorted: ordering of A[i] and A[i-1] is not known
+     * ordered: A[i] > A[i-1] (i.e. they are in sorted order)
+     * equal: A[i] == A[i-1] (i.e. they are in sorted order)
+
+   split is space for some splitters
+   rsplit is space for those splitters replicated
+
+   The output will be stored in A.
+
+   A and Scratch can be distributed.
+   The others should be local.
+ */
+proc partitioningSortStep(ref A: [],
+                          ref Scratch: [] A.eltType,
+                          ref BucketBoundaries: [] uint(8),
+                          region: range,
+                          param radixSort: bool,
+                          comparator,
+                          const logBuckets: int,
+                          const nTasksPerLocale: int,
+                          const startbit: int,
+                          const endbit: int,
+                          // for testing
+                          const noBaseCase: bool) : void {
+  if EXTRA_CHECKS {
+    assert(A.domain.dim(0).contains(region));
+    assert(Scratch.domain.dim(0).contains(region));
+    assert(BucketBoundaries.domain.dim(0).contains(region));
+  }
+
+
+  //writeln("partitioningSortStep ", region);
+
+  /*for i in region {
+    writeln("starting partitioningSortStep A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+  }*/
+
+  const regularBaseCaseLimit =
+    (PARTITION_SORT_BASE_CASE_MULTIPLIER * (1 << logBuckets)):int;
+  const baseCaseLimit = if noBaseCase then 1 else regularBaseCaseLimit;
+
+  if region.size <= baseCaseLimit {
+    // sort it and mark BucketBoundaries
+    partitionSortBaseCase(A, region, comparator, BucketBoundaries);
+    return;
+  }
+
+
+  // Partition from A to Scratch, to form outer buckets.
+  // Process each outer bucket, which will in
+  // turn lead to moving the data back to A
+  // (possibly by partitioning again and forming inner buckets).
+  if A.domain.localSubdomain().dim(0).contains(region) {
+    // process it locally
+    const Dom = {region};
+    if !radixSort {
+      const OuterSplit =
+        partitioningSortCreateSampleSplitters(A, Dom, comparator,
+                                              logBuckets, nTasksPerLocale,
+                                              baseCaseLimit);
+      partitionAndProcessOuterBuckets(Dom, A, Scratch, BucketBoundaries,
+                                      radixSort, comparator, logBuckets,
+                                      nTasksPerLocale, startbit, endbit,
+                                      baseCaseLimit, OuterSplit, none);
+    } else {
+      const OuterSplit = new radixSplitters(radixBits=logBuckets,
+                                            startbit=startbit, endbit=endbit);
+      partitionAndProcessOuterBuckets(Dom, A, Scratch, BucketBoundaries,
+                                      radixSort, comparator, logBuckets,
+                                      nTasksPerLocale, startbit, endbit,
+                                      baseCaseLimit, OuterSplit, none);
+    }
+  } else {
+    // process it distributed
+    const Dom = A.domain[region];
+    if !radixSort {
+      const OuterSplit =
+        partitioningSortCreateSampleSplitters(A, Dom, comparator,
+                                              logBuckets, nTasksPerLocale,
+                                              baseCaseLimit);
+      const OuterRSplit = replicate(OuterSplit, Dom.targetLocales());
+      partitionAndProcessOuterBuckets(Dom, A, Scratch, BucketBoundaries,
+                                      radixSort, comparator, logBuckets,
+                                      nTasksPerLocale, startbit, endbit,
+                                      baseCaseLimit, OuterSplit, OuterRSplit);
+    } else {
+      const OuterSplit = new radixSplitters(radixBits=logBuckets,
+                                            startbit=startbit, endbit=endbit);
+      const OuterRSplit = replicate(OuterSplit, Dom.targetLocales());
+      partitionAndProcessOuterBuckets(Dom, A, Scratch, BucketBoundaries,
+                                      radixSort, comparator, logBuckets,
+                                      nTasksPerLocale, startbit, endbit,
+                                      baseCaseLimit, OuterSplit, OuterRSplit);
+    }
+  }
+
+  /* writeln("after partitioningSortStep ", region, " startbit=", startbit);
+  for i in region {
+    writeln("after partitioningSortStep A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+  }*/
+}
+
+/* A parallel partitioning sort.
+
+   When this returns, A will be sorted, and BucketBoundaries
+   will be updated to indicate how A is more sorted.
+
+   Each call to parallelPartitioningSort will write to 'split' and 'rsplit',
+   so make sure each gets its own if running in a parallel context.
+
+   Uses temporary space of similar size
+   to the sorted region, as well as BucketBoundaries.
+
+   BucketBoundaries[i] indicates the relationship between A[i] and A[i-1]:
+     * unsorted: ordering of A[i] and A[i-1] is not known
+     * ordered: A[i] > A[i-1] (i.e. they are in sorted order)
+     * equal: A[i] == A[i-1] (i.e. they are in sorted order)
+
+   split is space for some splitters
+   rsplit is space for those splitters replicated
+
+   The output will be stored in A.
+
+   A and Scratch can be distributed.
+   The others should be local.
+ */
+proc parallelPartitioningSort(ref A: [],
+                              ref Scratch: [] A.eltType,
+                              ref BucketBoundaries: [] uint(8),
+                              region: range,
+                              param radixSort: bool,
+                              comparator,
+                              const logBuckets: int,
+                              const nTasksPerLocale: int,
+                              const startbit: int,
+                              const endbit: int,
+                              // for testing
+                              const noBaseCase = false) : void {
+  if EXTRA_CHECKS {
+    assert(A.domain.dim(0).contains(region));
+    assert(Scratch.domain.dim(0).contains(region));
+    assert(BucketBoundaries.domain.dim(0).contains(region));
+  }
+
+  const regularBaseCaseLimit =
+    PARTITION_SORT_BASE_CASE_MULTIPLIER * (1 << logBuckets);
+  const baseCaseLimit = if noBaseCase then 1 else regularBaseCaseLimit;
+
+  if region.size <= baseCaseLimit {
+    // sort it and mark BucketBoundaries
+    partitionSortBaseCase(A, region, comparator, BucketBoundaries);
+    return;
+  }
+
+  const Dom = A.domain[region];
+
+  var curbit = startbit;
+
+  /* for i in region {
+    writeln("starting parallelPartitioningSort A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+  }*/
+
+  // do a partitioning sort step
+  partitioningSortStep(A, Scratch, BucketBoundaries, region,
+                       radixSort, comparator, logBuckets,
+                       nTasksPerLocale,
+                       startbit=curbit, endbit=endbit, noBaseCase=noBaseCase);
+  if radixSort {
+    // when radix sorting, each sortStep sorts by the next 2*logBuckets bits.
+    curbit += 2*logBuckets;
+  }
+
+  while true {
+    /*for i in region {
+      writeln("in loop parallelPartitioningSort A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+    }*/
+
+    // scan the BucketBoundaries to determine if A is fully sorted.
+    // if it is not, sort within each region updating BucketBoundaries
+    // Inner sorts and updates to BucketBoundaries do not race because
+    // they update different regions of these arrays.
+    var nNotSorted = 0;
+    forall (taskId, chunk) in divideIntoTasks(Dom, nTasksPerLocale)
+    with (+ reduce nNotSorted) {
+      //writeln("task ", taskId, " working on ", chunk);
+      // consider buckets that start within chunk
+      var cur = chunk.low;
+      const end = chunk.high+1;
+      const endAll = region.high+1;
+      // move 'cur' forward until we find the start of a bucket boundary
+      // (such elements would be handled in a previous chunk)
+      while cur < end && BucketBoundaries[cur] != boundaryTypeOrdered {
+        cur += 1;
+      }
+      while cur < end {
+        if EXTRA_CHECKS {
+          /*if BucketBoundaries[cur] != boundaryTypeOrdered {
+            writeln("task ", taskId, " error with cur ", cur);
+          }*/
+          assert(BucketBoundaries[cur] == boundaryTypeOrdered);
+        }
+        //writeln("task ", taskId, " cur is ", cur);
+        // find the start of an unsorted area
+        // where the initial bucket boundary is in this task's region
+        while cur+1 < endAll && cur < end &&
+              BucketBoundaries[cur+1] != boundaryTypeUnsorted {
+          cur += 1;
+        }
+        if cur >= end {
+          break; // it's in a different task's region
+        }
+        var nextOrdered = cur+2; // cur+1 is unordered, so start at cur+2
+        if nextOrdered > endAll {
+          nextOrdered = endAll;
+        }
+        // find the end of the unsorted area (perhaps in another task's area)
+        while nextOrdered < endAll &&
+              BucketBoundaries[nextOrdered] == boundaryTypeUnsorted {
+          nextOrdered += 1;
+        }
+        // now the region of interest is
+        const r = cur..<nextOrdered;
+        if r.size > 1 {
+          /*writeln("task ", taskId, " sorting ", r);
+          for i in r {
+            writeln("a A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+          }*/
+
+          /*writeln("considering region ", r,
+                  " cur=", cur,
+                  " nextOrdered=", nextOrdered);*/
+          // some elements need to be sorted, so make progress on sorting them
+          partitioningSortStep(A, Scratch, BucketBoundaries, r,
+                               radixSort, comparator, logBuckets,
+                               nTasksPerLocale,
+                               startbit=curbit, endbit=endbit,
+                               noBaseCase=noBaseCase);
+
+          /*for i in r {
+            writeln("b A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+          }*/
+
+          var rIsSorted = true;
+          for i in region {
+            if BucketBoundaries[i] == boundaryTypeUnsorted {
+              rIsSorted = false;
+            }
+          }
+
+          if !rIsSorted {
+            nNotSorted += 1;
+          }
+        }
+        // proceed with searching, starting from 'nextOrdered'
+        cur = nextOrdered;
+      }
+    }
+
+    if radixSort {
+      // when radix sorting, the above sorted by the next 2*logBuckets bits
+      curbit += 2*logBuckets;
+    }
+
+    if nNotSorted == 0 || curbit == endbit {
+      //writeln("exiting nNotSorted=", nNotSorted, " curbit=", curbit);
+      break;
+    }
+  }
+
+  /*for i in region {
+    writeln("done parallelPartitioningSort A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+  }*/
 }
 
 /*

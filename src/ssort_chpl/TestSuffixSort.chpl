@@ -724,7 +724,8 @@ proc testSorts() {
 
   var B = A;
   // sort by 1 word
-  sortByPrefixAndMark(cfg, Packed, B, 0..<n, readAgg, 1);
+  var stats: statistics;
+  sortByPrefixAndMark(cfg, Packed, B, 0..<n, readAgg, 1, stats);
 
   /*writeln("output");
   for i in 0..<n do writeln(i, " ", B[i]);*/
@@ -748,7 +749,7 @@ proc testSorts() {
 
   // sort by 2 words
   B = A;
-  sortByPrefixAndMark(cfg, Packed, B, 0..<n, readAgg, 16);
+  sortByPrefixAndMark(cfg, Packed, B, 0..<n, readAgg, 16, stats);
 
   for i in 0..<n {
     assert(isMarkedOffset(B[i]));
@@ -1116,8 +1117,10 @@ proc testOthers() {
   testLCP("abaababa", [7,2,5,0,3,6,1,4], [0,1,1,3,3,0,2,2]);
 }
 
-proc testRepeatsCase(c: uint(8), n: int, param period) {
-  writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period, ")");
+proc testRepeatsCase(c: uint(8), n: int, param period,
+                     finalSortSimpleSortLimit: int = SIMPLE_SORT_LIMIT) {
+  writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period,
+          " finalSortSimpleSortLimit=", finalSortSimpleSortLimit, ")");
 
   var inputArr: [0..<n+INPUT_PADDING] uint(8);
   var expectSA: [0..<n] int;
@@ -1135,7 +1138,8 @@ proc testRepeatsCase(c: uint(8), n: int, param period) {
                               n=n,
                               cover=new differenceCover(period),
                               locales=Locales,
-                              nTasksPerLocale=computeNumTasks());
+                              nTasksPerLocale=computeNumTasks(),
+                              finalSortSimpleSortLimit=finalSortSimpleSortLimit);
 
   const Packed = packInput(cfg.loadWordType,
                            inputArr, n, cfg.bitsPerChar);
@@ -1163,18 +1167,23 @@ proc testRepeats() {
     const chr = i:uint(8);
     testRepeatsCase(c=chr, n=size, period=3);
     testRepeatsCase(c=0, n=size, period=3);
+    testRepeatsCase(c=chr, n=size, period=3, finalSortSimpleSortLimit=3);
 
     testRepeatsCase(c=chr, n=size, period=7);
     testRepeatsCase(c=0, n=size, period=7);
+    testRepeatsCase(c=chr, n=size, period=7, finalSortSimpleSortLimit=3);
 
     testRepeatsCase(c=chr, n=size, period=13);
     testRepeatsCase(c=0, n=size, period=13);
+    testRepeatsCase(c=chr, n=size, period=13, finalSortSimpleSortLimit=3);
 
     testRepeatsCase(c=chr, n=size, period=21);
     testRepeatsCase(c=0, n=size, period=21);
+    testRepeatsCase(c=chr, n=size, period=21, finalSortSimpleSortLimit=3);
 
     testRepeatsCase(c=chr, n=size, period=133);
     testRepeatsCase(c=0, n=size, period=133);
+    testRepeatsCase(c=chr, n=size, period=133, finalSortSimpleSortLimit=3);
   }
 }
 
@@ -1313,6 +1322,8 @@ proc testDescending() {
 
 
 proc runTests() {
+  testRepeatsCase(c=11, n=10000, period=21, finalSortSimpleSortLimit=1000);
+
   testHelpers();
   testComparisons();
   testSorts();
