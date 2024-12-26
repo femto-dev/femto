@@ -88,11 +88,13 @@ proc makeBlockDomain(rng: range(?), targetLocales) {
 
 /* Helper for replicate() */
 class ReplicatedWrapper {
-  var x;
+  type eltType;
+  var x: eltType;
 }
 
 /* Returns a distributed array containing replicated copies of 'x',
-   or 'none' if replication is not necessary.
+   or 'none' if replication is not necessary. This array can
+   be indexed by 'here.id'.
 
    targetLocales should be an array of Locales or 'none' if
    replication is not necessary.
@@ -121,17 +123,20 @@ proc replicate(x, targetLocales) {
 
 /* Given a distributed array created by 'replicate',
    re-assigns the replicated elements in that array to store x.
- */
-proc reReplicate(x, ref Result: [] owned ReplicatedWrapper(x.type)?) {
-  const targetLocales = Result.targetLocales();
 
-  proc helpReplicate(from, i) {
+   Only replicates to the 'activeLocales'.
+   Does not clear old replicands on other locales.
+   Assumes that each activeLocales[i].id is contained in Result.domain.
+ */
+proc reReplicate(x, ref Result: [] owned ReplicatedWrapper(x.type)?,
+                 const activeLocales = Result.targetLocales()) {
+  proc helpReplicate(from: x.type, i: int, start: int, end: int) {
     // should already be on this locale...
-    assert(here == targetLocales[i]);
+    assert(here == activeLocales[i]);
 
     // create a local copy
     if Result[here.id] == nil {
-      Result[here.id] = new ReplicatedWrapper(from);
+      Result[here.id] = new ReplicatedWrapper(from.type, from);
     } else {
       Result[here.id]!.x = from;
     }
@@ -141,32 +146,37 @@ proc reReplicate(x, ref Result: [] owned ReplicatedWrapper(x.type)?) {
 
     // if 2*i is in the domain, replicate from Result[targetLocales[i].id]
     // but skip this case for i == 0 to avoid infinite loop
-    if targetLocales.domain.contains(2*i) && i != 0 {
+    if start <= 2*i && 2*i <= end && i != 0 {
       begin {
-        on targetLocales[2*i] {
-          helpReplicate(newFrom, 2*i);
+        on activeLocales[2*i] { // note: a GET, generally
+          helpReplicate(newFrom, 2*i, start, end);
         }
       }
     }
 
     // ditto for 2*i+1
-    if targetLocales.domain.contains(2*i+1) {
+    if start <= 2*i+1 && 2*i+1 <= end {
       begin {
-        on targetLocales[2*i+1] {
-          helpReplicate(newFrom, 2*i+1);
+        on activeLocales[2*i+1] { // note: a GET, generally
+          helpReplicate(newFrom, 2*i+1, start, end);
         }
       }
     }
   }
 
   sync {
-    if targetLocales.domain.contains(targetLocales.domain.low) {
-      helpReplicate(x, targetLocales.domain.low);
+    const start = activeLocales.domain.low;
+    const end = activeLocales.domain.high;
+    if start <= end {
+      on activeLocales[start] {
+        helpReplicate(x, start, start, end);
+      }
     }
   }
 
   if EXTRA_CHECKS {
-    forall (i, elt) in Result {
+    for loc in activeLocales { 
+      const ref elt = Result[loc.id];
       assert(x == elt!.x);
     }
   }
@@ -189,30 +199,123 @@ proc getLocalReplicand(const ref x, replicated) const ref {
   }
 }
 
+/* Given a Block distributed domain and a range to slice it with,
+   computes the locales that have a local subdomain that contains
+   region.
+
+   This is done in a communication-free manner.
+ */
+proc computeActiveLocales(const Dom: domain(?), const region: range) {
+  if Dom.rank != 1 then compilerError("activeLocales only supports 1-D");
+
+  //writeln("computeActiveLocales ", Dom, " ", region);
+
+  // if the range is empty, return an empty array
+  if region.size == 0 {
+    const empty: [1..0] locale;
+    //writeln("returning ", empty);
+    return empty;
+  }
+
+  // if it's the full region or there is only one locale,
+  // there isn't much to do here.
+  if Dom.dim(0) == region || Dom.targetLocales().size == 1 {
+    //writeln("returning ", Dom.targetLocales());
+    return Dom.targetLocales();
+  }
+
+  // TODO: this could implemented more simply with an assumption
+  // that Dom is Block distributed.
+
+  var minIdV = max(int);
+  var maxIdV = min(int);
+  forall loc in Dom.targetLocales()
+  with (min reduce minIdV, max reduce maxIdV) {
+    minIdV = min(minIdV, loc.id);
+    maxIdV = max(maxIdV, loc.id);
+  }
+  const minId = minIdV;
+  const maxId = maxIdV;
+
+  // count 1 for each locale that is active
+  var CountPerLocale:[minId..maxId] int;
+  local {
+    forall loc in Dom.targetLocales() {
+      // note: this should *not* move execution with 'on loc'
+      const locRange = Dom.localSubdomain(loc).dim(0);
+      const intersect = locRange[region];
+      if intersect.size > 0 {
+        CountPerLocale[loc.id] = 1;
+      }
+    }
+  }
+  //writeln("CountPerLocale ", CountPerLocale);
+  // scan to compute packed offsets (to leave out zeros)
+  var Ends = + scan CountPerLocale;
+  var n = Ends.last;
+  var ActiveLocales:[0..<n] locale;
+  // store into the packed array
+  local {
+    forall (locId, count, end) in zip(minId..maxId, CountPerLocale, Ends) {
+      if count > 0 {
+        var start = end - count;
+        ActiveLocales[start] = Locales[locId];
+      }
+    }
+  }
+  //writeln("returning ", ActiveLocales);
+  return ActiveLocales;
+}
+
+
 /* Given a Block distributed domain or non-distributed domain,
    this iterator divides it into nLocales*nTasksPerLocale chunks
    (where nLocales=Dom.targetLocales().size) to be processed by a
    different task. Each task will only process local elements.
 
-   A forall loop running this iterator will be distributed
-   (if Dom is distributed) and parallel according to nTasksPerLocale.
+   A forall loop running this iterator will be distributed according to Dom
+   and parallel according to nTasksPerLocale. The iteration will traverse
+   only those elements in the range 'region' and create work only on
+   those locales with elements in 'region'.
 
-   Yields (taskId, chunk) for each chunk.
+   This is different from a regular forall loop because it always divides
+   Dom among tasks in the same way, assuming the same 'Dom', 'region', and
+   'nTasksPerLocale' arguments. It does not make a different number of tasks
+   depending on the number of running tasks.
 
-   chunk is a non-strided range.
+   Yields (activeLocIdx, taskIdInLoc, chunk) for each chunk.
 
-   taskIds start will be in 0..<nLocales*nTasksPerLocale.
+   activeLocIdx is the index among the active locales 0..
+
+   taskIdInLoc is the task index within the locale
+
+   chunk is a non-strided range that the task should handle
+
+   Calling code that needs a unique task identifier can use
+     activeLocIdx*nTasksPerLocale + taskIds 
+     (if the locale indices can be packed)
+   or
+     here.id*nTasksPerLocale + taskIds
+     (if the locale indices need to fit into a global structure)
+
+   to form a global task number in  0..<nLocales*nTasksPerLocale.
  */
-iter divideIntoTasks(const Dom: domain(?), nTasksPerLocale: int) {
+iter divideIntoTasks(const Dom: domain(?),
+                     const region: range,
+                     nTasksPerLocale: int,
+                     const ref activeLocales=computeActiveLocales(Dom, region))
+{
   if Dom.rank != 1 then compilerError("divideIntoTasks only supports 1-D");
   if Dom.dim(0).strides != strideKind.one then
     compilerError("divideIntoTasks only supports non-strided domains");
-  yield (0, Dom.dim(0));
+  yield (0, 0, 0, Dom.dim(0));
   halt("serial divideIntoTasks should not be called");
 }
 iter divideIntoTasks(param tag: iterKind,
                      const Dom: domain(?),
-                     nTasksPerLocale: int)
+                     const region: range,
+                     nTasksPerLocale: int,
+                     const ref activeLocales=computeActiveLocales(Dom, region))
  where tag == iterKind.standalone {
 
   if Dom.rank != 1 then compilerError("divideIntoTasks only supports 1-D");
@@ -226,13 +329,14 @@ iter divideIntoTasks(param tag: iterKind,
     //  # local subdomains < nTasksPerLocale and the inverse.
   }
 
-  const nTargetLocales = Dom.targetLocales().size;
-  coforall (loc, locId) in zip(Dom.targetLocales(), 0..) {
+  coforall (loc, activeLocIdx) in zip(activeLocales, 0..) {
     on loc {
       const ref locDom = Dom.localSubdomain();
-      coforall (chunk,taskId) in
-               zip(RangeChunk.chunks(locDom.dim(0), nTasksPerLocale), 0..) {
-        yield (nTasksPerLocale*locId + taskId, chunk);
+      const locRegion = locDom.dim(0)[region];
+      coforall (chunk, taskIdInLoc) in
+               zip(RangeChunk.chunks(locRegion, nTasksPerLocale), 0..) {
+        //yield (nTasksPerLocale*locId + taskId, chunk);
+        yield (activeLocIdx, taskIdInLoc, chunk);
       }
     }
   }

@@ -753,7 +753,7 @@ iter unsortedRegionsFromMarks(A:[] offsetAndCached(?), region: range) {
   var cur = region.low;
   const end = region.high+1;
   while cur < end {
-    // TODO: this code is probably wrong.
+    // TODO: this code is probably wrong. Add a test!
 
     // find the next marked offset
     var next = cur + 1;

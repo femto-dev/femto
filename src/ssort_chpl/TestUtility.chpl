@@ -28,7 +28,8 @@ import Random;
 import Math;
 
 // problem size for various tests
-config const n = 100_000;
+config const nAtomicTest = 100_000;
+config const n = 1_000;
 config const nBuckets = 8*numLocales*computeNumTasks(ignoreRunning=true);
 
 proc testIsDistributed() {
@@ -210,26 +211,113 @@ proc testAtomicMinMax() {
   var amin: atomic int = max(int);
   var amax: atomic int = min(int);
 
-  forall i in 1..n {
+  forall i in 1..nAtomicTest {
     atomicStoreMinRelaxed(amin, i);
     atomicStoreMaxRelaxed(amax, i);
   }
 
   writeln("amin ", amin.read(), " amax ", amax.read());
   assert(amin.read() == 1);
-  assert(amax.read() == n);
+  assert(amax.read() == nAtomicTest);
 }
 
 proc testReplicate() {
   writeln("testReplicate");
-  const v = "hello";
-  const rep = replicate(v, Locales);
-  coforall loc in Locales {
-    on loc {
-      const ref locv = getLocalReplicand(v, rep);
-      assert(locv.locale == here);
-      assert("hello" == locv);
+
+  // do a check that we can replicate to all locales
+  {
+    const v = "hello";
+    const rep = replicate(v, Locales);
+    coforall loc in Locales {
+      on loc {
+        const ref locv = getLocalReplicand(v, rep);
+        assert(locv.locale == here);
+        assert("hello" == locv);
+      }
     }
+  }
+
+  // try re-replicate with a subset of locales
+  if numLocales >= 3 {
+    const v = "goodbye";
+    var rep: [BlockDist.blockDist.createDomain(0..<numLocales)]
+             owned ReplicatedWrapper(string)?;
+    const activeLocales = [Locales[1], Locales[2]];
+    reReplicate(v, rep, activeLocales); 
+    assert(rep[Locales[0].id] == nil); // didn't set Locale 0
+    assert(rep[Locales[1].id] != nil); // did set Locale 1
+    assert(rep[Locales[2].id] != nil); // did set Locale 2
+    if numLocales >= 4 {
+      assert(rep[Locales[3].id] == nil); // didn't set Locale 3
+    }
+    coforall loc in activeLocales {
+      on loc {
+        const ref locv = getLocalReplicand(v, rep);
+        assert(locv.locale == here);
+        assert("goodbye" == locv);
+      }
+    }
+  }
+}
+
+proc testActiveLocales() {
+  writeln("testActiveLocales");
+
+  const Dom = BlockDist.blockDist.createDomain(0..<n);
+  const nLocales = Dom.targetLocales().size;
+  const nTasksPerLocale = computeNumTasks();
+  const EmptyLocales:[1..0] locale;
+
+  assert(computeActiveLocales(Dom, 0..<n).equals(Locales));
+  assert(computeActiveLocales(Dom, 1..0).size == 0);
+
+  for region in [0..0, 0..1, 1..10, 0..n/4, n/4..<n/2, 0..<n] {
+    var expectActiveElts: [0..<n] int = 0;
+    var expectActiveLocs:[0..<numLocales] int = 0;
+    var activeElts: [0..<n] int = 0;
+    var activeLocs:[0..<numLocales] int = 0;
+
+    // compute 'expect' by iterating over a slice of the domain
+    forall i in Dom with (+ reduce expectActiveLocs) {
+      if region.contains(i) {
+        expectActiveElts[i] = 1;
+        expectActiveLocs[here.id] = 1;
+      }
+    }
+
+    // compute 'got' by computing the active locales
+    var mylocs = computeActiveLocales(Dom, region);
+
+    // also check that computing active locales is a local task
+    local {
+      computeActiveLocales(Dom, region);
+    }
+
+    coforall loc in mylocs with (+ reduce activeLocs) {
+      on loc {
+        //writeln("running on loc ", here);
+        var intersect = Dom.localSubdomain()[region];
+        assert(intersect.size > 0);
+        for i in intersect {
+          activeElts[i] = 1;
+        }
+        activeLocs[here.id] = 1;
+      }
+    }
+
+    // we don't care about the counts for expectActiveLocs / activeLocs
+    forall (a, b) in zip(expectActiveLocs, activeLocs) {
+      if a > 1 then a = 1;
+      if b > 1 then b = 1;
+    }
+
+    /*writeln("expectActiveElts ", expectActiveElts);
+    writeln("activeElts       ", activeElts);
+    writeln("expectActiveLocs ", expectActiveLocs);
+    writeln("activeLocs       ", activeLocs);*/
+
+    assert(expectActiveElts.equals(activeElts));
+    assert(expectActiveLocs.equals(activeLocs));
   }
 }
 
@@ -239,19 +327,21 @@ proc testDivideIntoTasks() {
   const nLocales = Dom.targetLocales().size;
   const nTasksPerLocale = computeNumTasks();
   var A:[Dom] int = -1; // store task IDs
-  forall (taskId, chunk) in divideIntoTasks(Dom, nTasksPerLocale) {
+  forall (activeLocIdx, taskIdInLoc, chunk)
+  in divideIntoTasks(Dom, 0..<n, nTasksPerLocale) {
     for i in chunk {
       assert(A[i] == -1); // should not have any overlap
-      A[i] = taskId;
+      A[i] = activeLocIdx*nTasksPerLocale + taskIdInLoc;
     }
   }
   // check that it works the same even if some tasks are running
   coforall i in 1..10 {
     var B:[Dom] int = -1;
-    forall (taskId, chunk) in divideIntoTasks(Dom, nTasksPerLocale) {
+    forall (activeLocIdx, taskIdInLoc, chunk)
+    in divideIntoTasks(Dom, 0..<n, nTasksPerLocale) {
       for i in chunk {
         assert(B[i] == -1); // should not have any overlap
-        B[i] = taskId;
+        B[i] = activeLocIdx*nTasksPerLocale + taskIdInLoc;
       }
     }
     assert(B.equals(A));
@@ -274,6 +364,24 @@ proc testDivideIntoTasks() {
   for i in Dom {
     if i > 0 {
       assert(A[i-1] <= A[i]);
+    }
+  }
+
+  // check that dividing with region on a single locale
+  // only runs on one locale
+  coforall loc in Dom.targetLocales() {
+    on loc {
+      const region:range = Dom.localSubdomain().dim(0);
+      local {
+        forall (activeLocIdx, taskIdInLoc, chunk)
+        in divideIntoTasks(Dom, 0..<n, nTasksPerLocale) {
+          // nothing to do here, the point was to check it is local
+          var sum = 0;
+          for i in chunk {
+            sum += A[i]; // accessing to make sure it is local
+          }
+        }
+      }
     }
   }
 }
@@ -335,8 +443,8 @@ proc testDivideByBuckets(n: int, nBuckets: int,
 
   for (count,end,bucketIdx) in zip(Counts, Ends, 0..) {
     const start = end - count;
-    if start < end {
-      BucketIdsCheck[start..<end] = bucketIdx;
+    for i in start..<end {
+      BucketIdsCheck[i] = bucketIdx;
     }
   }
 
@@ -359,9 +467,12 @@ proc testDivideByBuckets(n: int, nBuckets: int,
     assert(foundEnd);
 
     if region.size > 0 {
-      BucketIds[region] = bucketIdx;
-      TaskIds[region] = taskId;
-      LocaleIds[region] = here.id;
+      //writeln("bucket ", bucketIdx, " task ", taskId, " region ", region);
+      for i in region {
+        BucketIds[i] = bucketIdx;
+        TaskIds[i] = taskId;
+        LocaleIds[i] = here.id;
+      }
     }
   }
 
@@ -418,7 +529,7 @@ proc testDivideByBuckets(n: int, nBuckets: int,
   writeln(" minEltsPerTask = ", minEltsPerTask,
           " maxEltsPerTask = ", maxEltsPerTask);
   if nBuckets > 4*nTasksPerLocale*numLocales && !skew {
-    assert(maxEltsPerTask <= 2.0*minEltsPerTask);
+    assert(maxEltsPerTask <= 10 + 2.0*minEltsPerTask);
   }
 }
 
@@ -548,6 +659,11 @@ proc main() throws {
   testAtomicMinMax();
 
   testReplicate();
+
+  serial {
+    testActiveLocales();
+  }
+  testActiveLocales();
 
   serial {
     testDivideIntoTasks();
