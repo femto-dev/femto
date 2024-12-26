@@ -266,9 +266,9 @@ record splitters : writeSerializable {
   var equalBuckets: bool;
 
   // filled from 1..<myNumBuckets
-  var storage: [0..<myNumBuckets] eltType;
+  var storage: [0..<(1<<logBuckets)] eltType;
   // filled from 0..myNumBuckets-2; myNumBuckets-1 is a duplicate of previous
-  var sortedStorage: [0..<myNumBuckets] eltType;
+  var sortedStorage: [0..<(1<<logBuckets)] eltType;
 
   proc init(type eltType) {
     // default init, creates invalid splitters, but useful for replicating
@@ -280,7 +280,6 @@ record splitters : writeSerializable {
     this.logBuckets = logBuckets;
     this.myNumBuckets = 1 << logBuckets;
     init this; // allocate 'storage' and 'sortedStorage'
-    // reset myNumBuckets to indicate it is invalid
     myNumBuckets = 0;
   }
 
@@ -334,11 +333,31 @@ record splitters : writeSerializable {
     this.init(Splitters, useEqualBuckets);
   }
 
+  /*
+  proc init=(const ref rhs: splitters) {
+    writeln("in splitters init=");
+    this.eltType = rhs.eltType;
+    this.logBuckets = rhs.logBuckets;
+    this.myNumBuckets = rhs.myNumBuckets;
+    this.equalBuckets = rhs.equalBuckets;
+    this.storage = rhs.storage;
+    this.sortedStorage = rhs.sortedStorage;
+  }
+  operator =(ref lhs: splitters, const ref rhs: splitters) {
+    writeln("in splitters =");
+    lhs.logBuckets = rhs.logBuckets;
+    lhs.myNumBuckets = rhs.myNumBuckets;
+    lhs.equalBuckets = rhs.equalBuckets;
+    lhs.storage = rhs.storage;
+    lhs.sortedStorage = rhs.sortedStorage;
+  }*/
+
   proc serialize(writer, ref serializer) throws {
     writer.write("splitters(");
     writer.write("\n logBuckets=", logBuckets);
     writer.write("\n myNumBuckets=", myNumBuckets);
     writer.write("\n equalBuckets=", equalBuckets);
+    writer.write("\n storage.size=", storage.size);
     writer.write("\n storage=");
     for i in 0..<myNumBuckets {
       writer.writeln(storage[i]);
@@ -506,6 +525,10 @@ record splitters : writeSerializable {
   }
 } // end record splitters
 
+proc isSampleSplitters(type splitType) param {
+  return isSubtype(splitType, splitters);
+}
+
 record radixSplitters : writeSerializable {
   var radixBits: int; // how many bits to sort at once
   var startbit: int;  // start bit position
@@ -570,7 +593,8 @@ class PartitionPerTaskState {
   type eltType;
 
   var logBuckets: int;
-  var localCounts: [0..<(1<<logBuckets)] int;
+  // make sure there is room for equality buckets
+  var localCounts: [0..<(1<<(logBuckets+1))] int;
 
   // for aggregating the count and element writes
   var countAggregator: DstAggregator(int);
@@ -619,7 +643,7 @@ record partitioner {
   // i.e. PerTaskState[here.id*nTasksPerLocale + taskIdInLoc]
   var PerTaskState:
         [blockDist.createDomain(0..<numLocales*nTasksPerLocale)]
-        owned PartitionPerTaskState?;
+        owned PartitionPerTaskState(eltType)?;
 
   // ### counts and ends storage
   // GlobalCounts stores counts like this:
@@ -660,8 +684,9 @@ proc partitioner.init(type eltType, type splitterType,
   this.logBuckets = logBuckets;
   this.nTasksPerLocale = nTasksPerLocale;
   this.globalCountsPerBucket = nTasksPerLocale * numLocales;
-  this.globalCountsSize = (1 << logBuckets) * globalCountsPerBucket;
-  this.splitters = new splitterType(eltType, logBuckets);
+  // leave room for equality buckets
+  this.globalCountsSize = (1 << (logBuckets+1)) * globalCountsPerBucket;
+  this.splitters = new splitterType(logBuckets=logBuckets);
   init this;
 
   // create the PerTaskState for each task, assuming we use all Locales
@@ -669,7 +694,8 @@ proc partitioner.init(type eltType, type splitterType,
   in divideIntoTasks(PerTaskState.domain, PerTaskState.domain.dim(0),
                      nTasksPerLocale, Locales) {
     const stateIdx = here.id*nTasksPerLocale+taskIdInLoc;
-    PerTaskState[stateIdx] = new PerTaskState(logBuckets);
+    PerTaskState[stateIdx] = new PartitionPerTaskState(eltType=eltType,
+                                                       logBuckets=logBuckets);
   }
 
   if EXTRA_CHECKS {
@@ -679,7 +705,7 @@ proc partitioner.init(type eltType, type splitterType,
   }
 }
 
-proc partitioner.reset() {
+proc ref partitioner.reset() {
   const nBuckets = 1 << logBuckets;
   sync {
     for i in 0..<numLocales {
@@ -690,14 +716,14 @@ proc partitioner.reset() {
             ReplicatedSplitters[i] = nil;
             // clear any local counts entries
             coforall taskIdInLoc in 0..<nTasksPerLocale {
-              ref perTask = getPerTaskState(taskIdInLoc);
+              var perTask = getPerTaskState(taskIdInLoc);
               ref counts = perTask.localCounts;
               foreach x in counts do x = 0;
             }
 
             // clear the GlobalCounts entries
             /*coforall taskIdInLoc in 0..<nTasksPerLocale {
-              ref perTask = getPerTaskState(taskIdInLoc);
+              var perTask = getPerTaskState(taskIdInLoc);
               ref countAgg = perTask.countAggregator;
               for bucketIdx in 0..<nBuckets {
                 const countIdx = getGlobalCountIdx(bucketIdx, taskIdInLoc);
@@ -714,12 +740,17 @@ proc partitioner.reset() {
   LocaleIsActive = false;
 }
 
-proc partitioner.reset(split, activeLocales: [] locale) {
+proc ref partitioner.reset(split, activeLocales: [] locale) {
   reset(); // clear any replicated splitters from earlier
 
-  assert(split.numBuckets <= (1 << logBuckets));
+  if isSampleSplitters(split.type) {
+    assert(split.logBuckets == this.splitters.logBuckets); 
+  }
 
-  this.splitters = splitters;
+  this.splitters = split;
+
+  //writeln("partitioner.reset with ", split);
+  //writeln("this.splitters is ", this.splitters);
 
   // replicate the splitters to the active locales
   reReplicate(this.splitters, ReplicatedSplitters,
@@ -733,10 +764,12 @@ proc partitioner.reset(split, activeLocales: [] locale) {
   if EXTRA_CHECKS {
     coforall loc in activeLocales {
       on loc {
-        assert(ReplicatedSplitterExists[here.id]);
+        assert(LocaleIsActive[here.id]);
         assert(ReplicatedSplitters[here.id] != nil);
         assert(ReplicatedSplitters[here.id]!.locale == here);
-        assert(getLocalSplitters() == splitters);
+        assert(getLocalSplitters() == split);
+
+        //writeln("local splitter on ", loc, " is ", getLocalSplitters());
       }
     }
   }
@@ -746,7 +779,7 @@ inline proc partitioner.getLocalSplitters() const ref {
   return ReplicatedSplitters[here.id]!.x;
 }
 
-inline proc partitioner.getPerTaskState(taskIdInLoc: int) ref {
+inline proc partitioner.getPerTaskState(taskIdInLoc: int) : borrowed class {
   const ret = PerTaskState[here.id*nTasksPerLocale + taskIdInLoc]!;
   if EXTRA_CHECKS {
     assert(ret.locale == here);
@@ -756,8 +789,10 @@ inline proc partitioner.getPerTaskState(taskIdInLoc: int) ref {
 
 inline proc partitioner.getGlobalCountIdx(bucketIdx: int,
                                           locIdx: int,
-                                          taskIdInLoc: int) ref {
-  return bucketIdx*numLocales*nTasksPerLocale
+                                          nLocales: int,
+                                          taskIdInLoc: int,
+                                          nTasksPerLocale: int): int {
+  return bucketIdx*nLocales*nTasksPerLocale
          + locIdx*nTasksPerLocale
          + taskIdInLoc;
 }
@@ -887,13 +922,13 @@ proc partitioner.scanToGlobalEnds(const activeLocales:[] locales) {
        split.sortedSplitter((numBuckets-2)/2) < elts
 
  */
-proc partitioner.partition(const InputDomain: domain(?),
-                           const inputRegion: range,
-                           const Input,
-                           const OutputStart,
-                           ref Output,
-                           comparator,
-                           filterBucket: ?t = none) {
+proc ref partitioner.partition(const InputDomain: domain(?),
+                               const inputRegion: range,
+                               const Input,
+                               const OutputStart,
+                               ref Output,
+                               comparator,
+                               filterBucket: ?t = none) {
   const activeLocs = computeActiveLocales(InputDomain, inputRegion);
 
   if EXTRA_CHECKS {
@@ -916,10 +951,14 @@ proc partitioner.partition(const InputDomain: domain(?),
     // when working with 1 or 2 locales and avoid distributed array creation
     // overheads.
     const nBuckets = this.getLocalSplitters().numBuckets;
+    //writeln("nBuckets ", nBuckets);
     const nActiveLocales = activeLocs.size;
+    //writeln("nActiveLocales ", nActiveLocales);
     const countsPerBucket = nActiveLocales*nTasksPerLocale;
+    //writeln("countsPerBucket ", countsPerBucket);
     const countsSize = nBuckets*countsPerBucket;
     const CountsDom = {0..<countsSize};
+    //writeln("allocating counts ", CountsDom);
     var Counts: [CountsDom] int;
     return this.doPartition(InputDomain, inputRegion, Input,
                             OutputStart, Output, comparator, filterBucket,
@@ -943,27 +982,30 @@ proc partitioner.doPartition(const InputDomain: domain(?),
                              comparator,
                              filterBucket,
                              const activeLocs: [] locale,
-                             ref GlobalCounts: [] int,
+                             ref GlobCounts: [] int,
                              param activeLocsOnly: bool) {
   const ref outersplit = this.getLocalSplitters();
   const nBuckets = outersplit.numBuckets;
   const nActiveLocales = activeLocs.size;
   const nTasksPerLocale = this.nTasksPerLocale;
 
+  //writeln("doPartition with splitters ", outersplit, " active locales ",
+  //    activeLocs, " nBuckets ", nBuckets, " nActiveLocales ", nActiveLocales,
+  //    " nTasksPerLocale ", nTasksPerLocale);
+
   {
     // do some checking / input validation
     if EXTRA_CHECKS {
       // check that the splitters are sorted according to comparator
-      if isSubtype(outersplit.type,splitters) {
+      if isSampleSplitters(outersplit.type) {
         assert(isSorted(outersplit.sortedStorage[0..<outersplit.myNumBuckets-1],
                         comparator));
       }
-      assert(nBuckets < (1 << this.logBuckets));
 
       /*for loc in activeLocs {
         for bucketIdx in 0..<nBuckets {
           for taskIdInLoc in 0..<nTasksPerLocale {
-            assert(GlobalCounts[bucketIdx*numLocales*nTasksPerLocale+
+            assert(GlobCounts[bucketIdx*numLocales*nTasksPerLocale+
                                 loc.id*nTasksPerLocale+
                                 taskIdInLoc] == 0);
             assert(PerTaskState[loc.id*nTasksPerLocale+itaskIdInLoc]!=nil);a
@@ -978,7 +1020,7 @@ proc partitioner.doPartition(const InputDomain: domain(?),
   // Step 1: Count
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(InputDomain, inputRegion, nTasksPerLocale, activeLocs) {
-    ref perTask = getPerTaskState(taskIdInLoc);
+    var perTask = getPerTaskState(taskIdInLoc);
     ref counts = perTask.localCounts;
     const ref mysplit = getLocalSplitters();
     const taskStart = chunk.first;
@@ -993,6 +1035,7 @@ proc partitioner.doPartition(const InputDomain: domain(?),
     // within the forall because it's updating state local to each task.
     for (_,bin) in mysplit.classify(Input, taskStart, taskEnd, comparator) {
       if filterBucket.type == nothing || filterBucket(bin) {
+        //writeln("counts[", bin, "] increment");
         counts[bin] += 1;
       }
     }
@@ -1000,25 +1043,37 @@ proc partitioner.doPartition(const InputDomain: domain(?),
     // Now store the counts into the global counts array
     ref countAgg = perTask.countAggregator;
     for bucketIdx in 0..<nBuckets {
-      const locIdx = if activeLocsOnly then activeLocIdx else here.id;
-      const countIdx = getGlobalCountIdx(bucketIdx, locIdx, taskIdInLoc);
-      countAgg.copy(GlobalCounts[countIdx], counts[bucketIdx]);
+      var countIdx: int;
+      if activeLocsOnly {
+        countIdx = getGlobalCountIdx(bucketIdx, activeLocIdx, nActiveLocales,
+                                     taskIdInLoc, nTasksPerLocale);
+      } else {
+        countIdx = getGlobalCountIdx(bucketIdx, here.id, numLocales,
+                                     taskIdInLoc, nTasksPerLocale);
+      }
+      //writeln("countIdx is ", countIdx,
+      //        " from ", bucketIdx, " ", activeLocIdx, " ", taskIdInLoc);
+      countAgg.copy(GlobCounts[countIdx], counts[bucketIdx]);
     }
     countAgg.flush();
   }
+
 
   if Output.type != nothing {
     // Step 2: Scan
 
     // TODO: this could be adjusted to use only activeLocales
     // if performance on more than 2 and < numLocales is important
-    const GlobalEnds = + reduce GlobalCounts;
+    const GlobEnds = + scan GlobCounts;
+
+    //writeln("GlobCounts ", GlobCounts);
+    //writeln("GlobEnds ", GlobEnds);
 
     // Step 3: Distribute
     forall (activeLocIdx, taskIdInLoc, chunk)
     in divideIntoTasks(InputDomain, inputRegion, nTasksPerLocale, activeLocs)
     with (in OutputStart) {
-      ref perTask = getPerTaskState(taskIdInLoc);
+      var perTask = getPerTaskState(taskIdInLoc);
       ref nextOffsets = perTask.localCounts;
       ref eltAgg = perTask.eltAggregator;
       const ref mysplit = getLocalSplitters();
@@ -1034,10 +1089,17 @@ proc partitioner.doPartition(const InputDomain: domain(?),
           startForBucket = OutputStart;
         }
 
-        const countIdx = getGlobalCountIdx(bucketIdx, taskIdInLoc);
+        var countIdx: int;
+        if activeLocsOnly {
+          countIdx = getGlobalCountIdx(bucketIdx, activeLocIdx, nActiveLocales,
+                                       taskIdInLoc, nTasksPerLocale);
+        } else {
+          countIdx = getGlobalCountIdx(bucketIdx, here.id, numLocales,
+                                       taskIdInLoc, nTasksPerLocale);
+        }
         // this is doing GETs, generally speaking
         nextOffsets[bucketIdx] = if countIdx > 0
-                                 then startForBucket + GlobalEnds[countIdx-1]
+                                 then startForBucket + GlobEnds[countIdx-1]
                                  else startForBucket;
       }
 
@@ -1048,6 +1110,7 @@ proc partitioner.doPartition(const InputDomain: domain(?),
         if filterBucket.type == nothing || filterBucket(bin) {
           // Store it in the right bin
           ref next = nextOffsets[bin];
+          //writeln("Output[", next, "] = ", elt, " bin ", bin);
           eltAgg.copy(Output[next], elt);
           next += 1;
         }
@@ -1060,12 +1123,18 @@ proc partitioner.doPartition(const InputDomain: domain(?),
   var counts:[0..<nBuckets] int;
   forall (c, bucketIdx) in zip(counts, counts.domain) {
     var total = 0;
-    for (loc, activeLocIdx) in zip(activeLocs, activeLocs.domain) {
-      const locIdx = if activeLocsOnly then activeLocIdx else loc.id;
+    for (activeLoc, activeLocIdx) in zip(activeLocs, activeLocs.domain) {
       for taskIdInLoc in 0..<nTasksPerLocale {
-        const countIdx = getGlobalCountIdx(bucketIdx, locIdx, taskIdInLoc);
+        var countIdx: int;
+        if activeLocsOnly {
+          countIdx = getGlobalCountIdx(bucketIdx, activeLocIdx, nActiveLocales,
+                                       taskIdInLoc, nTasksPerLocale);
+        } else {
+          countIdx = getGlobalCountIdx(bucketIdx, activeLoc.id, numLocales,
+                                       taskIdInLoc, nTasksPerLocale);
+        }
         // this is doing GETs, generally speaking
-        total += GlobalCounts[countIdx];
+        total += GlobCounts[countIdx];
       }
     }
     c = total;
@@ -1074,6 +1143,7 @@ proc partitioner.doPartition(const InputDomain: domain(?),
   return counts;
 }
 
+/*
 private proc partitioningSortCreateSampleSplitters(ref A: [],
                                                    Dom: domain(?),
                                                    comparator,
@@ -1091,7 +1161,9 @@ private proc partitioningSortCreateSampleSplitters(ref A: [],
 
   // read some random elements from each locale
   // each should set SortSampleSpace[perTask*taskId..#perTask]
-  forall (taskId, chk) in divideIntoTasks(Dom, nTasksPerLocale) {
+  //forall (taskId, chk) in divideIntoTasks(Dom, nTasksPerLocale) {
+  forall (activeLocIdx, taskIdInLoc, chunk)
+  in divideIntoTasks(Dom, Dom.dim(0), nTasksPerLocale, activeLocs) {
     const dstFullRange = perTask*taskId..#perTask;
     const dstRange = SortSamplesSpaceDomRange[dstFullRange];
     const dstRangeDom = {dstRange};
@@ -1157,12 +1229,13 @@ private proc partitioningSortCreateSampleSplitters(ref A: [],
   //writeln("splitters are ", split);
 
   return split;
-}
+}*/
 
 param boundaryTypeUnsorted:uint(8) = 0;
 param boundaryTypeOrdered:uint(8) = 1;
 param boundaryTypeEqual:uint(8) = 2;
 
+/*
 private inline proc cmpToBoundaryType(cmp: int) {
   var order: uint(8);
   if cmp == 0 {
@@ -1724,7 +1797,7 @@ proc parallelPartitioningSort(ref A: [],
   /*for i in region {
     writeln("done parallelPartitioningSort A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
-}
+}*/
 
 /*
   serial insertionSort with a separate array of already-computed keys

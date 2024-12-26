@@ -134,6 +134,8 @@ proc reReplicate(x, ref Result: [] owned ReplicatedWrapper(x.type)?,
     // should already be on this locale...
     assert(here == activeLocales[i]);
 
+    //writeln("helpReplicate lhs is ", Result[here.id], " x is ", x);
+
     // create a local copy
     if Result[here.id] == nil {
       Result[here.id] = new ReplicatedWrapper(from.type, from);

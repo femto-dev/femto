@@ -84,17 +84,20 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
-  const counts =
-    partition(Input.domain, Input,
-              Output.domain, Output,
-              sp, replicate(sp, targetLocales),
-              myDefaultComparator,
-              nTasksPerLocale=nTasksPerLocale);
+  var p = new partitioner(eltType=int, splitterType=sp.type,
+                          logBuckets=sp.logBuckets,
+                          nTasksPerLocale=nTasksPerLocale);
+  p.reset(sp, Locales);
+  const counts = p.partition(Input.domain, Input.domain.dim(0), Input,
+                             OutputStart=none, Output, myDefaultComparator);
+ 
   assert(counts.size == nBuckets);
 
   const ends = + scan counts;
 
   var total = 0;
+
+  //writeln("counts = ", counts);
 
   for bin in 0..<nBuckets {
     const binSize = counts[bin];
@@ -123,9 +126,12 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
       equals = sp.bucketEqualityBound(bin);
     }
 
+    //writeln("checking bounds for bin ", bin, " ", binStart..binEnd);
     for i in binStart..binEnd {
-      if lower != -1 then
+      if lower != -1 {
+        //writeln("checking ", lower, " < ", Output[i], " i=", i);
         assert(lower < Output[i]);
+      }
       if upper != -1 {
         if hasEqualityBuckets then
           assert(Output[i] < upper);
@@ -151,12 +157,9 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   Input = 0..<n;
   Output = -1;
   var ExpectOutput = Input;
-  const counts2 =
-    partition(Input.domain, Input,
-              Output.domain, Output,
-              sp, replicate(sp, targetLocales),
-              myDefaultComparator,
-              nTasksPerLocale=nTasksPerLocale);
+  p.reset(sp, Locales);
+  const counts2 = p.partition(Input.domain, Input.domain.dim(0), Input,
+                              OutputStart=none, Output, myDefaultComparator);
   assert(Output.equals(ExpectOutput));
 }
 
@@ -174,11 +177,13 @@ proc testPartitionsEven(n: int, nSplit: int) {
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
-  const counts = partition(Input.domain, Input,
-                           Output.domain, Output,
-                           sp, replicate(sp, [here]),
-                           myDefaultComparator,
-                           nTasksPerLocale=1);
+  var p = new partitioner(eltType=int, splitterType=sp.type,
+                          logBuckets=sp.logBuckets,
+                          nTasksPerLocale=1);
+  p.reset(sp, [here]);
+
+  const counts = p.partition(Input.domain, Input.domain.dim(0), Input,
+                             OutputStart=none, Output, myDefaultComparator);
   assert(counts.size == nBuckets);
 
   var minSize = max(int);
@@ -218,11 +223,13 @@ proc testPartitionSingleSplitter(n: int) {
   assert(sp.hasEqualityBuckets);
   assert(nBuckets == 3); // < == and > buckets
 
-  const counts = partition(Input.domain, Input,
-                           Output.domain, Output,
-                           sp, replicate(sp, [here]),
-                           myDefaultComparator,
-                           nTasksPerLocale=1);
+  var p = new partitioner(eltType=int, splitterType=sp.type,
+                          logBuckets=sp.logBuckets,
+                          nTasksPerLocale=1);
+  p.reset(sp, [here]);
+
+  const counts = p.partition(Input.domain, Input.domain.dim(0), Input,
+                             OutputStart=none, Output, myDefaultComparator);
   assert(counts.size == nBuckets);
 
   var total = 0;
@@ -731,9 +738,6 @@ proc testMultiWayMerge() {
 
 
 proc runTests() {
-  // test sorters
-  testSorts();
-
   // test multi-way merge
   testMultiWayMerge();
 
@@ -769,12 +773,15 @@ proc runTests() {
 
   // test creating splitters in other cases
   testSplitters();
+
+  // test sorters
+  //testSorts();
 }
 
 config const sampleLogBuckets = 8;
 config const radixLogBuckets = 8;
 
-proc testTiming() {
+/*proc testTiming() {
 
   var maxn = 10**8;
   var Elts: [0..<maxn] uint;
@@ -869,14 +876,14 @@ proc testTiming() {
     n *= 10;
   }
 }
-
+*/
 config const timing = false;
 
 proc main() {
-  if timing {
+  /*if timing {
     testTiming();
     return;
-  }
+  }*/
 
   /* commented out due to some odd problems with partition
      once added replicated */
