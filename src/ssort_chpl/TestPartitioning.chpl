@@ -81,11 +81,13 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
 
   assert(isSorted(sp.sortedStorage));
 
+  //var logBuckets = sp.logBuckets;
+  //if sp.hasEqualityBuckets then logBuckets += 1;
   const nBuckets = sp.numBuckets;
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
   var p = new partitioner(eltType=int, splitterType=sp.type,
-                          logBuckets=sp.logBuckets,
+                          numBuckets=sp.numBuckets,
                           nTasksPerLocale=nTasksPerLocale);
   p.reset(sp, Locales);
   const counts = p.partition(Input.domain, Input.domain.dim(0), Input,
@@ -178,7 +180,7 @@ proc testPartitionsEven(n: int, nSplit: int) {
   const hasEqualityBuckets = sp.hasEqualityBuckets;
 
   var p = new partitioner(eltType=int, splitterType=sp.type,
-                          logBuckets=sp.logBuckets,
+                          numBuckets=sp.numBuckets,
                           nTasksPerLocale=1);
   p.reset(sp, [here]);
 
@@ -224,7 +226,7 @@ proc testPartitionSingleSplitter(n: int) {
   assert(nBuckets == 3); // < == and > buckets
 
   var p = new partitioner(eltType=int, splitterType=sp.type,
-                          logBuckets=sp.logBuckets,
+                          numBuckets=sp.numBuckets,
                           nTasksPerLocale=1);
   p.reset(sp, [here]);
 
@@ -253,14 +255,28 @@ proc checkArrayMatches(got: [], expect: []) {
 
 proc testSplitters() {
   writeln("testSplitters");
+
   {
-    writeln("  sorted");
-    var sample = [1, 1, 1, 5,  7,  9, 11, 32];
-    var expect = [1, 5, 7, 9, 11, 32, 32, 32];
+    writeln("  sorted repeating");
+    var sample = [1, 1, 1, 5,  5,  5, 11, 11];
+    var expect = [1, 5, 11, 11]; // smaller due to equality buckets
     var s = new splitters(sample,
                           requestedNumBuckets=9,
                           myDefaultComparator,
                           sortLevel.fully);
+    assert(s.numBuckets == 7);
+    checkArrayMatches(s.sortedStorage, expect);
+  }
+
+  {
+    writeln("  sorted");
+    var sample = [1, 1, 1, 5,  7,  9, 11, 32];
+    var expect = [1, 5, 9, 9]; // smaller due to equality buckets
+    var s = new splitters(sample,
+                          requestedNumBuckets=9,
+                          myDefaultComparator,
+                          sortLevel.fully);
+    assert(s.numBuckets == 7);
     checkArrayMatches(s.sortedStorage, expect);
   }
 
@@ -268,21 +284,23 @@ proc testSplitters() {
     writeln("  unsorted");
     var sample = [1, 5, 7, 9, 11,  1, 32,  1];
     // sorts to  [1, 1, 1, 5,  7,  9, 11, 32];
-    var expect = [1, 5, 7, 9, 11, 32, 32, 32];
+    var expect = [1, 5, 9, 9]; // smaller due to equality buckets
     var s = new splitters(sample,
                           requestedNumBuckets=9,
                           myDefaultComparator,
                           sortLevel.unsorted);
+    assert(s.numBuckets == 7);
     checkArrayMatches(s.sortedStorage, expect);
   }
   {
     writeln("  approx sorted");
     var sample = [1, 5, 7, 9, 11,  1, 32, 1];
-    var expect = [1, 5, 7, 9, 11, 32, 32, 32];
+    var expect = [1, 5, 9, 9]; // smaller due to equality buckets
     var s = new splitters(sample,
                           requestedNumBuckets=8,
                           myDefaultComparator,
                           sortLevel.approximately);
+    assert(s.numBuckets == 7);
     checkArrayMatches(s.sortedStorage, expect);
   }
 

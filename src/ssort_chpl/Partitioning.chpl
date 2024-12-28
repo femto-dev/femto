@@ -175,6 +175,10 @@ enum sortLevel {
 // Compute splitters from a sorted sample.
 // Returns an array of splitters that is of size 2**n,
 // where only the first 2**n-1 elements are used.
+// If equality buckets are not in use, there will be 2**n buckets.
+// If they are in use, there will be 2**(n+1) buckets.
+// n will be chosen by this function so that the number of buckets
+// is <= max(2,requestedNumBuckets).
 // Assumes that SortedSample is 0-based and non-strided.
 private proc computeSplitters(const SortedSample,
                               in requestedNumBuckets: int,
@@ -185,15 +189,18 @@ private proc computeSplitters(const SortedSample,
     requestedNumBuckets = SortedSample.size;
   var myNumBuckets = max(2, 1 << log2int(requestedNumBuckets));
   var numSplitters = myNumBuckets-1;
-  const perSplitter = SortedSample.size:real / (numSplitters+1):real;
   var SortedSplitters:[0..<myNumBuckets] SortedSample.eltType;
 
-  var start = perSplitter:int;
+  // gather the sample assuming that SortedSample is sorted
+  {
+    const perSplitter = SortedSample.size:real / (numSplitters+1):real;
+    var start = perSplitter:int;
 
-  for i in 0..<numSplitters {
-    var sampleIdx = start + (i*perSplitter):int;
-    sampleIdx = min(max(sampleIdx, 0), SortedSample.size-1);
-    SortedSplitters[i] = SortedSample[sampleIdx];
+    for i in 0..<numSplitters {
+      var sampleIdx = start + (i*perSplitter):int;
+      sampleIdx = min(max(sampleIdx, 0), SortedSample.size-1);
+      SortedSplitters[i] = SortedSample[sampleIdx];
+    }
   }
 
   if reSort {
@@ -223,19 +230,61 @@ private proc computeSplitters(const SortedSample,
 
   // if there were duplicates, reduce the number of splitters accordingly,
   // activate equality buckets, and return a de-duplicated array.
-  const nUnique = numSplitters - nDuplicates;
-  // keep the same number of buckets if there were not too many duplicates
-  const oldNumBuckets = myNumBuckets;
-  myNumBuckets = min(oldNumBuckets, max(2, 1 << (1+log2int(nUnique))));
+  // note, when using equality buckets, the number of buckets
+  // will be 2 * the number of splitters, so here we
+  // are aiming for a smaller number of splitters.
+
+  var oldNumSplitters = numSplitters;
+  const nUnique = oldNumSplitters - nDuplicates;
+  myNumBuckets = 1 << (1+log2int(nUnique));
+  while 2*myNumBuckets > requestedNumBuckets {
+    myNumBuckets /= 2;
+  }
+  myNumBuckets = max(1, myNumBuckets);
   numSplitters = myNumBuckets-1;
+
   var UniqueSplitters:[0..<myNumBuckets] SortedSample.eltType;
-  UniqueSplitters[0] = SortedSplitters[0];
-  var next = 1;
-  for i in 1..<oldNumBuckets {
-    if next >= numSplitters then break;
-    if mycompare(UniqueSplitters[next-1], SortedSplitters[i], comparator) != 0 {
-      UniqueSplitters[next] = SortedSplitters[i];
-      next += 1;
+
+  var next = 0;
+
+  // gather the sample from SortedSplitters
+  {
+    if nUnique <= myNumBuckets {
+      // Gather the unique elements
+      UniqueSplitters[0] = SortedSplitters[0];
+      next = 1;
+      for i in 1..<oldNumSplitters {
+        // keep elements that differ from the last splitter added,
+        // and discard elements that are the same.
+        if mycompare(UniqueSplitters[next-1],
+                     SortedSplitters[i], comparator) != 0 {
+          UniqueSplitters[next] = SortedSplitters[i];
+          next += 1;
+        }
+      }
+    } else {
+      // myNumBuckets < nUnique
+      const perSplitter = nUnique:real / myNumBuckets:real;
+      var start = perSplitter:int;
+
+      next = 0;
+      for i in 0..<oldNumSplitters {
+        if next == numSplitters then break;
+        var sampleIdx = start + (i*perSplitter):int;
+        sampleIdx = min(max(sampleIdx, 0), SortedSplitters.size-1);
+        if next == 0 ||
+           mycompare(UniqueSplitters[next-1],
+                     SortedSplitters[sampleIdx], comparator) != 0 {
+          UniqueSplitters[next] = SortedSplitters[sampleIdx];
+          next += 1;
+        }
+      }
+    }
+  }
+
+  if EXTRA_CHECKS {
+    for i in 1..<next {
+      assert(mycompare(UniqueSplitters[i-1], UniqueSplitters[i], comparator) < 0);
     }
   }
 
@@ -261,37 +310,41 @@ private proc computeSplitters(const SortedSample,
 record splitters : writeSerializable {
   type eltType;
 
-  var logBuckets: int;
-  var myNumBuckets: int;
+  var logSplitters: int;
+  var myNumBuckets: int; // number of buckets if no equality buckets
   var equalBuckets: bool;
 
   // filled from 1..<myNumBuckets
-  var storage: [0..<(1<<logBuckets)] eltType;
+  var storage: [0..<(1<<logSplitters)] eltType;
   // filled from 0..myNumBuckets-2; myNumBuckets-1 is a duplicate of previous
-  var sortedStorage: [0..<(1<<logBuckets)] eltType;
+  var sortedStorage: [0..<(1<<logSplitters)] eltType;
 
   proc init(type eltType) {
     // default init, creates invalid splitters, but useful for replicating
     this.eltType = eltType;
   }
   // creates space for splitters without creating valid splitters
-  proc init(type eltType, logBuckets: int) {
+  // numBuckets should be 2**n for some n
+  // creates space for splitters assuming that equality bucket will not be used
+  // (if they are, a fewer number of splitters will be needed)
+  proc init(type eltType, numBuckets: int) {
     this.eltType = eltType;
-    this.logBuckets = logBuckets;
-    this.myNumBuckets = 1 << logBuckets;
+    this.logSplitters = log2int(numBuckets);
+    this.myNumBuckets = 1 << logSplitters;
     init this; // allocate 'storage' and 'sortedStorage'
     myNumBuckets = 0;
   }
 
   // Create splitters based on some precomputed, already sorted splitters
   // useSplitters needs to be of size 2**n and the last element will
-  // not be used.
+  // not be used. If 'useEqualBuckets=false', there will be 2**n
+  // buckets; otherwise there will be 2**(n+1)-1 buckets.
   // Assumes that UseSplitters starts at 0 and is not strided.
   proc init(in UseSplitters: [], useEqualBuckets: bool) {
     assert(UseSplitters.size >= 2);
     this.eltType = UseSplitters.eltType;
-    this.logBuckets = log2int(UseSplitters.size);
-    this.myNumBuckets = 1 << logBuckets;
+    this.logSplitters = log2int(UseSplitters.size);
+    this.myNumBuckets = 1 << logSplitters;
     assert(this.myNumBuckets == UseSplitters.size);
     assert(this.myNumBuckets >= 2);
     this.equalBuckets = useEqualBuckets;
@@ -315,6 +368,8 @@ record splitters : writeSerializable {
                                        /*out*/ useEqualBuckets);
 
     this.init(Splitters, useEqualBuckets);
+
+    if EXTRA_CHECKS then assert(this.numBuckets <= max(2,requestedNumBuckets));
   }
 
   // create splitters based upon a sample of data by sorting it
@@ -331,13 +386,15 @@ record splitters : writeSerializable {
                                        /*out*/ useEqualBuckets);
 
     this.init(Splitters, useEqualBuckets);
+
+    if EXTRA_CHECKS then assert(this.numBuckets <= max(2,requestedNumBuckets));
   }
 
   /*
   proc init=(const ref rhs: splitters) {
     writeln("in splitters init=");
     this.eltType = rhs.eltType;
-    this.logBuckets = rhs.logBuckets;
+    this.logSplitters = rhs.logSplitters;
     this.myNumBuckets = rhs.myNumBuckets;
     this.equalBuckets = rhs.equalBuckets;
     this.storage = rhs.storage;
@@ -345,7 +402,7 @@ record splitters : writeSerializable {
   }
   operator =(ref lhs: splitters, const ref rhs: splitters) {
     writeln("in splitters =");
-    lhs.logBuckets = rhs.logBuckets;
+    lhs.logSplitters = rhs.logSplitters;
     lhs.myNumBuckets = rhs.myNumBuckets;
     lhs.equalBuckets = rhs.equalBuckets;
     lhs.storage = rhs.storage;
@@ -354,7 +411,7 @@ record splitters : writeSerializable {
 
   proc serialize(writer, ref serializer) throws {
     writer.write("splitters(");
-    writer.write("\n logBuckets=", logBuckets);
+    writer.write("\n logSplitters=", logSplitters);
     writer.write("\n myNumBuckets=", myNumBuckets);
     writer.write("\n equalBuckets=", equalBuckets);
     writer.write("\n storage.size=", storage.size);
@@ -437,7 +494,7 @@ record splitters : writeSerializable {
   }
 
   // Build the tree from the sorted splitters
-  // logBuckets does not account for equalBuckets.
+  // logSplitters does not account for equalBuckets.
   proc ref build() {
     // Copy the last element
     sortedStorage[myNumBuckets-1] = sortedStorage[myNumBuckets-2];
@@ -463,7 +520,7 @@ record splitters : writeSerializable {
 
   proc bucketForRecord(a, comparator) {
     var bk = 1;
-    for lg in 0..<logBuckets {
+    for lg in 0..<logSplitters {
       bk = 2*bk + (mycompare(splitter(bk), a, comparator) < 0):int;
     }
     if equalBuckets {
@@ -476,7 +533,7 @@ record splitters : writeSerializable {
   // Input does not have to be an array, but it should have an eltType.
   iter classify(Input, start_n, end_n, comparator) {
     const paramEqualBuckets = equalBuckets;
-    const paramLogBuckets = logBuckets;
+    const paramLogBuckets = logSplitters;
     const paramNumBuckets = 1 << (paramLogBuckets + paramEqualBuckets:int);
     var b:c_array(int, CLASSIFY_UNROLL_FACTOR);
     var elts:c_array(Input.eltType, CLASSIFY_UNROLL_FACTOR);
@@ -537,8 +594,8 @@ record radixSplitters : writeSerializable {
   proc init() {
     // default init, creates invalid splitters, but useful for replicating
   }
-  proc init(type eltType, logBuckets: int) {
-    radixBits = logBuckets;
+  proc init(type eltType, numBuckets: int) {
+    radixBits = log2int(numBuckets);
     startbit = 0;
     endbit = max(int);
   }
@@ -592,17 +649,17 @@ record radixSplitters : writeSerializable {
 class PartitionPerTaskState {
   type eltType;
 
-  var logBuckets: int;
+  var numBuckets: int;
   // make sure there is room for equality buckets
-  var localCounts: [0..<(1<<(logBuckets+1))] int;
+  var localCounts: [0..<numBuckets] int;
 
   // for aggregating the count and element writes
   var countAggregator: DstAggregator(int);
   var eltAggregator: DstAggregator(eltType);
 
-  proc init(type eltType, logBuckets: int) {
+  proc init(type eltType, numBuckets: int) {
     this.eltType = eltType;
-    this.logBuckets = logBuckets;
+    this.numBuckets = numBuckets;
     init this;
   }
 }
@@ -618,7 +675,7 @@ class PartitionPerTaskState {
 record partitioner {
   type eltType;
   type splitterType;
-  const logBuckets: int;
+  const numBuckets: int;
   const nTasksPerLocale: int;
   const globalCountsPerBucket: int;
   const globalCountsSize: int;
@@ -678,15 +735,14 @@ record partitioner {
 
 
 proc partitioner.init(type eltType, type splitterType,
-                      logBuckets: int, nTasksPerLocale: int) {
+                      numBuckets: int, nTasksPerLocale: int) {
   this.eltType = eltType;
   this.splitterType = splitterType;
-  this.logBuckets = logBuckets;
+  this.numBuckets = numBuckets;
   this.nTasksPerLocale = nTasksPerLocale;
   this.globalCountsPerBucket = nTasksPerLocale * numLocales;
-  // leave room for equality buckets
-  this.globalCountsSize = (1 << (logBuckets+1)) * globalCountsPerBucket;
-  this.splitters = new splitterType(logBuckets=logBuckets);
+  this.globalCountsSize = numBuckets * globalCountsPerBucket;
+  this.splitters = new splitterType(numBuckets=numBuckets);
   init this;
 
   // create the PerTaskState for each task, assuming we use all Locales
@@ -695,7 +751,7 @@ proc partitioner.init(type eltType, type splitterType,
                      nTasksPerLocale, Locales) {
     const stateIdx = here.id*nTasksPerLocale+taskIdInLoc;
     PerTaskState[stateIdx] = new PartitionPerTaskState(eltType=eltType,
-                                                       logBuckets=logBuckets);
+                                                       numBuckets=numBuckets);
   }
 
   if EXTRA_CHECKS {
@@ -706,7 +762,7 @@ proc partitioner.init(type eltType, type splitterType,
 }
 
 proc ref partitioner.reset() {
-  const nBuckets = 1 << logBuckets;
+  const nBuckets = numBuckets;
   sync {
     for i in 0..<numLocales {
       if LocaleIsActive[i] {
@@ -744,7 +800,7 @@ proc ref partitioner.reset(split, activeLocales: [] locale) {
   reset(); // clear any replicated splitters from earlier
 
   if isSampleSplitters(split.type) {
-    assert(split.logBuckets == this.splitters.logBuckets); 
+    assert((1<<split.logSplitters) <= this.splitters.storage.size);
   }
 
   this.splitters = split;
