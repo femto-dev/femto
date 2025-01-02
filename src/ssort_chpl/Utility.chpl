@@ -130,6 +130,8 @@ proc replicate(x, targetLocales) {
  */
 proc reReplicate(x, ref Result: [] owned ReplicatedWrapper(x.type)?,
                  const activeLocales = Result.targetLocales()) {
+  //writeln("in reReplicate");
+
   proc helpReplicate(from: x.type, i: int, start: int, end: int) {
     // should already be on this locale...
     assert(here == activeLocales[i]);
@@ -177,10 +179,14 @@ proc reReplicate(x, ref Result: [] owned ReplicatedWrapper(x.type)?,
   }
 
   if EXTRA_CHECKS {
+    //writeln("HERE activeLocales is ", activeLocales);
     for loc in activeLocales { 
+      //writeln("loc is ", loc, " : ", loc.type:string);
       const ref elt = Result[loc.id];
+      //writeln("elt is ", elt, " : ", elt.type:string);
       assert(x == elt!.x);
     }
+    //writeln("POST-HERE");
   }
 }
 
@@ -294,10 +300,10 @@ proc computeActiveLocales(const Dom: domain(?), const region: range) {
    chunk is a non-strided range that the task should handle
 
    Calling code that needs a unique task identifier can use
-     activeLocIdx*nTasksPerLocale + taskIds 
+     activeLocIdx*nTasksPerLocale + taskIdInLoc
      (if the locale indices can be packed)
    or
-     here.id*nTasksPerLocale + taskIds
+     here.id*nTasksPerLocale + taskIdInLoc
      (if the locale indices need to fit into a global structure)
 
    to form a global task number in  0..<nLocales*nTasksPerLocale.
@@ -348,20 +354,29 @@ iter divideIntoTasks(param tag: iterKind,
  This iterator creates distributed parallelism to yield
  a bucket index for each task to process.
 
- Yields (region of bucket, bucket index, taskId)
+ Yields (region of bucket, bucket index, activeLocIdx, taskIdInLoc)
 
  BucketCounts should be the size of each bucket
- BucketEnds should be the indices (in Arr) of the end of each bucket
+ BucketEnds should be the indices (in Arr) just past the end of each bucket
  Arr is a potentially distributed array that drives the parallelism.
  'region' is the region within Arr that was counted.
 
  The Arr.targetLocales() must be in an increasing order by locale ID.
+
+ Calling code that needs a unique task identifier can use
+   activeLocIdx*nTasksPerLocale + taskIdInLoc
+   (if the locale indices can be packed)
+ or
+   here.id*nTasksPerLocale + taskIdInLoc
+   (if the locale indices need to fit into a global structure)
  */
 iter divideByBuckets(const Arr: [],
-                     const Dom: domain(?),
+                     const region: range,
                      const BucketCounts: [] int,
                      const BucketEnds: [] int,
-                     nTasksPerLocale: int) {
+                     nTasksPerLocale: int,
+                     const ref activeLocales
+                       = computeActiveLocales(Arr.domain, region)) {
   if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
   if Arr.domain.dim(0).strides != strideKind.one then
     compilerError("divideByBuckets only supports non-strided domains");
@@ -370,10 +385,12 @@ iter divideByBuckets(const Arr: [],
 }
 iter divideByBuckets(param tag: iterKind,
                      const Arr: [],
-                     const Dom: domain(?),
+                     const region: range,
                      const BucketCounts: [] int,
                      const BucketEnds: [] int,
-                     const nTasksPerLocale: int)
+                     const nTasksPerLocale: int,
+                     const ref activeLocales
+                       = computeActiveLocales(Arr.domain, region))
  where tag == iterKind.standalone {
 
   if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
@@ -389,7 +406,7 @@ iter divideByBuckets(param tag: iterKind,
 
   var minIdV = max(int);
   var maxIdV = min(int);
-  forall loc in Arr.targetLocales()
+  forall loc in activeLocales
   with (min reduce minIdV, max reduce maxIdV) {
     minIdV = min(minIdV, loc.id);
     maxIdV = max(maxIdV, loc.id);
@@ -397,15 +414,15 @@ iter divideByBuckets(param tag: iterKind,
 
   if EXTRA_CHECKS {
     var lastId = -1;
-    for loc in Arr.targetLocales() {
+    for loc in activeLocales {
       if loc.id == lastId {
         halt("divideByBuckets requires increasing locales assignment");
       }
     }
   }
 
-  const arrShift = Dom.dim(0).low;
-  const arrEnd = Dom.dim(0).high;
+  const arrShift = region.low;
+  const arrEnd = region.high;
   const bucketsEnd = BucketCounts.domain.high;
 
   var NBucketsPerLocale: [minIdV..maxIdV] int;
@@ -422,7 +439,7 @@ iter divideByBuckets(param tag: iterKind,
 
   const EndBucketPerLocale = + scan NBucketsPerLocale;
 
-  coforall (loc, locId) in zip(Arr.targetLocales(), 0..) {
+  coforall (loc, locId) in zip(activeLocales, activeLocales.domain) {
     on loc {
       const countBucketsHere = NBucketsPerLocale[loc.id];
       const endBucketHere = EndBucketPerLocale[loc.id];
@@ -482,8 +499,7 @@ iter divideByBuckets(param tag: iterKind,
           const bucketStart = BucketEnds[bucketIdx] - bucketSize;
           const start = bucketStart + arrShift;
           const end = start + bucketSize;
-          yield (start..<end, bucketIdx,
-                 nTasksPerLocale*locId + taskId);
+          yield (start..<end, bucketIdx, locId, taskId);
         }
       }
     }

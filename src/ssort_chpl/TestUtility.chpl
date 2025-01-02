@@ -398,17 +398,19 @@ proc testDivideByBucketsCases() {
   var Input:[Dom] int;
   var Counts:[0..<nBuckets] int = 10;
   var Ends = + scan Counts;
+  const region = Dom.dim(0);
 
   var BucketIds:[Dom] int = -1; // store bucket IDs
   var TaskIds:[Dom] int = -1; // store task IDs
   var LocaleIds:[Dom] int = -1; // store locale IDs
 
-  forall (region, bucketIdx, taskId)
-  in divideByBuckets(Input, Dom, Counts, Ends, nTasksPerLocale) {
+  forall (region, bucketIdx, activeLocIdx, taskIdInLoc)
+  in divideByBuckets(Input, region, Counts, Ends, nTasksPerLocale) {
     //writeln("region=", region, " bucketIdx=", bucketIdx,
     //        " taskId=", taskId, " on here.id=", here.id);
     assert(region.size == 10); // all buckets are 10 elements
     const start = region.low;
+    const taskId = here.id * nTasksPerLocale + taskIdInLoc;
     assert(start / 20 == taskId);
     assert(start / 100 == here.id);
   }
@@ -422,6 +424,7 @@ proc testDivideByBuckets(n: int, nBuckets: int,
                                ", skew=", skew, ")");
 
   const Dom = BlockDist.blockDist.createDomain(0..<n);
+  const region = Dom.dim(0);
   var Input:[Dom] int;
   if skew == false {
     Random.fillRandom(Input, min=0, max=nBuckets-1, seed=1);
@@ -452,8 +455,8 @@ proc testDivideByBuckets(n: int, nBuckets: int,
   var TaskIds:[Dom] int = -1; // store task IDs
   var LocaleIds:[Dom] int = -1; // store locale IDs
 
-  forall (region, bucketIdx, taskId)
-  in divideByBuckets(Input, Dom, Counts, Ends, nTasksPerLocale) {
+  forall (region, bucketIdx, activeLocIdx, taskIdInLoc)
+  in divideByBuckets(Input, region, Counts, Ends, nTasksPerLocale) {
     // check that the region's start is either 0 or an entry in Ends
     var foundCount = false;
     for c in Counts {
@@ -470,7 +473,7 @@ proc testDivideByBuckets(n: int, nBuckets: int,
       //writeln("bucket ", bucketIdx, " task ", taskId, " region ", region);
       for i in region {
         BucketIds[i] = bucketIdx;
-        TaskIds[i] = taskId;
+        TaskIds[i] = here.id*nTasksPerLocale + taskIdInLoc;
         LocaleIds[i] = here.id;
       }
     }

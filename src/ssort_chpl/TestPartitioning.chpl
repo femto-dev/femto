@@ -372,7 +372,7 @@ proc testSplitters() {
 
 }
 
-proc testSort(n: int, max: uint, logBuckets: int, seed: int,
+proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
               noBaseCase:bool, sorter:string) {
 
   writeln("testSort(n=", n, ", max=", max, ", logBuckets=", logBuckets,
@@ -394,21 +394,23 @@ proc testSort(n: int, max: uint, logBuckets: int, seed: int,
   }*/
 
   if sorter == "sample" {
-    parallelPartitioningSort(
-         Elts, Scratch, BucketBoundaries,
-         0..<n, radixSort=false,
-         myDefaultComparator,
-         logBuckets,
-         nTasksPerLocale=nTasksPerLocale,
-         startbit=0, endbit=numBits(uint), noBaseCase=noBaseCase);
+    psort(Elts, Scratch, BucketBoundaries,
+          0..<n,
+          myDefaultComparator,
+          radixBits=0, // sample sort
+          logBuckets=logBuckets,
+          nTasksPerLocale=nTasksPerLocale,
+          endbit=numBits(uint),
+          noBaseCase=noBaseCase);
   } else if sorter == "radix" {
-    parallelPartitioningSort(
-         Elts, Scratch, BucketBoundaries,
-         0..<n, radixSort=true,
-         myDefaultComparator,
-         logBuckets,
-         nTasksPerLocale=nTasksPerLocale,
-         startbit=0, endbit=numBits(uint), noBaseCase=noBaseCase);
+    psort(Elts, Scratch, BucketBoundaries,
+          0..<n,
+          myDefaultComparator,
+          radixBits=logBuckets,
+          logBuckets=logBuckets,
+          nTasksPerLocale=nTasksPerLocale,
+          endbit=numBits(uint),
+          noBaseCase=noBaseCase);
   } else {
     halt("Unknown sorter in testSort");
   }
@@ -793,17 +795,17 @@ proc runTests() {
   testSplitters();
 
   // test sorters
-  //testSorts();
+  testSorts();
 }
 
 config const sampleLogBuckets = 8;
-config const radixLogBuckets = 8;
+config param radixLogBuckets = 8;
 
-/*proc testTiming() {
+proc testTiming() {
 
   var maxn = 10**8;
   var Elts: [0..<maxn] uint;
-  var EltsSpace: [0..<maxn] uint;
+  var Scratch: [0..<maxn] uint;
   var BucketBoundaries: [0..<maxn] uint(8);
   const nTasksPerLocale = computeNumTasks();
 
@@ -817,13 +819,13 @@ config const radixLogBuckets = 8;
       BucketBoundaries = 0;
       Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
       sample.start();
-      parallelPartitioningSort(Elts, EltsSpace, BucketBoundaries,
-                               0..<n, radixSort=false,
-                               new integralKeyPartComparator(),
-                               logBuckets=sampleLogBuckets,
-                               nTasksPerLocale,
-                               startbit=0,
-                               endbit=numBits(uint));
+      psort(Elts, Scratch, BucketBoundaries,
+            0..<n,
+            new integralKeyPartComparator(),
+            radixBits=0,
+            logBuckets=sampleLogBuckets,
+            nTasksPerLocale,
+            endbit=numBits(uint));
 
       sample.stop();
     }
@@ -833,13 +835,13 @@ config const radixLogBuckets = 8;
       BucketBoundaries = 0;
       Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
       radix.start();
-      parallelPartitioningSort(Elts, EltsSpace, BucketBoundaries,
-                               0..<n, radixSort=true,
-                               new integralKeyPartComparator(),
-                               logBuckets=radixLogBuckets,
-                               nTasksPerLocale,
-                               startbit=0,
-                               endbit=numBits(uint));
+      psort(Elts, Scratch, BucketBoundaries,
+            0..<n,
+            new integralKeyPartComparator(),
+            radixBits=radixLogBuckets,
+            logBuckets=radixLogBuckets,
+            nTasksPerLocale,
+            endbit=numBits(uint));
       radix.stop();
     }
 
@@ -894,14 +896,13 @@ config const radixLogBuckets = 8;
     n *= 10;
   }
 }
-*/
 config const timing = false;
 
 proc main() {
-  /*if timing {
+  if timing {
     testTiming();
     return;
-  }*/
+  }
 
   /* commented out due to some odd problems with partition
      once added replicated */
@@ -911,7 +912,7 @@ proc main() {
   }*/
 
   writeln("Testing with many tasks");
-  runTests();
+  //runTests();
 
   writeln("TestPartitioning OK");
 }
