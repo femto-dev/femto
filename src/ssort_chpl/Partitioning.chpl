@@ -1270,21 +1270,30 @@ record partitioningSorter {
     owned SorterPerTaskState(eltType, splitterType)?;
 }
 
+proc type partitioningSorter.computeBaseCaseLimit(logBuckets: int,
+                                                  noBaseCase: bool) {
+  if noBaseCase {
+    return 1;
+  }
+
+  var limit = (PARTITION_SORT_BASE_CASE_MULTIPLIER * (1 << logBuckets)):int;
+  return max(limit, 2);
+}
+
 proc partitioningSorter.init(type eltType, type splitterType,
                              param radixBits: int,
                              logBuckets: int,
                              nTasksPerLocale: int,
                              endbit: int,
-                             noBaseCase: bool) {
+                             noBaseCase=false) {
   this.eltType = eltType;
   this.splitterType = splitterType;
   this.radixBits = radixBits;
   this.logBuckets = logBuckets;
   this.nTasksPerLocale = nTasksPerLocale;
   this.endbit = endbit;
-  const regularBaseCaseLimit =
-    PARTITION_SORT_BASE_CASE_MULTIPLIER * (1 << logBuckets);
-  this.baseCaseLimit = if noBaseCase then 1 else regularBaseCaseLimit:int;
+  this.baseCaseLimit =
+    partitioningSorter.computeBaseCaseLimit(logBuckets, noBaseCase);
   init this;
 
   if (radixBits == 0) != isSampleSplitters(splitterType) {
@@ -2216,6 +2225,14 @@ proc psort(ref A: [],
   type splitterType = if radixBits != 0
                       then radixSplitters(radixBits)
                       else splitters(A.eltType);
+
+  var baseCaseLimit =
+    partitioningSorter.computeBaseCaseLimit(logBuckets, noBaseCase);
+  if region.size <= baseCaseLimit {
+    // sort it before allocating storage for the sorter state
+    partitionSortBaseCase(A, region, comparator, BucketBoundaries);
+    return;
+  }
 
   var sorter = new partitioningSorter(A.eltType, splitterType,
                                       radixBits=radixBits,
