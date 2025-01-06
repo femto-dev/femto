@@ -373,17 +373,21 @@ proc testSplitters() {
 }
 
 proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
-              noBaseCase:bool, sorter:string) {
+              noBaseCase:bool, random: bool, sorter:string) {
 
   writeln("testSort(n=", n, ", max=", max, ", logBuckets=", logBuckets,
-          ", seed=", seed, ", noBaseCase=", noBaseCase,
+          ", seed=", seed, ", noBaseCase=", noBaseCase, ", random=", random,
           ", sorter=", sorter, ")");
 
   const Dom = makeBlockDomain(0..<n, Locales);
   var Elts: [Dom] uint;
   var Scratch: [Dom] uint;
   var BucketBoundaries: [Dom] uint(8);
-  Random.fillRandom(Elts, min=0, max=max, seed=seed);
+  if random {
+    Random.fillRandom(Elts, min=0, max=max, seed=seed);
+  } else {
+    Elts = 0..<n by -1;
+  }
   const nTasksPerLocale = computeNumTasks();
   var EltsCopy = Elts;
 
@@ -415,26 +419,47 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
     halt("Unknown sorter in testSort");
   }
 
-  assert(BucketBoundaries[0] == boundaryTypeOrdered);
+  assert(BucketBoundaries[0] == boundaryTypeSortedBucket);
   for i in 1..<n {
     if Elts[i-1] > Elts[i] {
       writeln("unsorted at element ", i);
       assert(false);
     }
-    if Elts[i-1] == Elts[i] {
-      if BucketBoundaries[i] != boundaryTypeEqual {
-        writeln("bad bucket boundary ", i);
-        assert(false);
-      }
-    } else {
-      if BucketBoundaries[i] != boundaryTypeOrdered {
-        writeln("bad bucket boundary ", i);
-        assert(false);
-      }
+    assert(BucketBoundaries[i] != boundaryTypeUnsortedBucket);
+    // there might not be a bucket boundary every time the element
+    // differs; but if there is, we can't have the same element in
+    // a previous bucket
+    if BucketBoundaries[i] == boundaryTypeSortedBucket {
+      assert(Elts[i-1] < Elts[i]);
     }
   }
 
+  assert(isSorted(Elts));
+
+  var UnstableSortCopy = EltsCopy;
   sort(EltsCopy, stable=true);
+
+  if max > 10 {
+    sort(UnstableSortCopy);
+    assert(EltsCopy.equals(UnstableSortCopy));
+  }
+
+  for i in Dom {
+    if Elts[i] != EltsCopy[i] {
+      writeln("sort mismatch with element ", i);
+      if i > 0 {
+        writeln("Elts[i-1] = ", Elts[i-1]);
+        writeln("EltsCopy[i-1] = ", EltsCopy[i-1]);
+      }
+      writeln("Elts[i] = ", Elts[i]);
+      writeln("EltsCopy[i] = ", EltsCopy[i]);
+      if i+1 < n {
+        writeln("Elts[i+1] = ", Elts[i+1]);
+        writeln("EltsCopy[i+1] = ", EltsCopy[i+1]);
+      }
+      assert(false);
+    }
+  }
   assert(Elts.equals(EltsCopy));
 }
 
@@ -555,25 +580,23 @@ proc testSorts() {
   for sorter in ["sample", "radix"] {
     for n in [10, 100, 300, 500, 1_000, 10_000, 100_000] {
       for max in [0, 10, 100, 100_000, max(uint)] {
-        if n < 10_000 {
-          testSort(n=n,max=max,logBuckets=2,seed=seed,noBaseCase=true,sorter);
-          testSort(n=n,max=max,logBuckets=4,seed=seed,noBaseCase=true,sorter);
-          testSort(n=n,max=max,logBuckets=8,seed=seed,noBaseCase=true,sorter);
-          if sorter != "radix" {
-            // radix sorter assumes radix divides key type
-            testSort(n=n,max=max,logBuckets=10,seed=seed,noBaseCase=true,sorter);
+        for r in [false, true] {
+          proc help(param logBuckets) {
+            testSort(n=n,max=max,logBuckets=logBuckets,seed=seed,noBaseCase=false,random=r,sorter);
+            testSort(n=n,max=max,logBuckets=logBuckets,seed=seed,noBaseCase=true,random=r,sorter);
           }
-          testSort(n=n,max=max,logBuckets=16,seed=seed,noBaseCase=true,sorter);
-        }
 
-        testSort(n=n,max=max,logBuckets=2,seed=seed,noBaseCase=false,sorter);
-        testSort(n=n,max=max,logBuckets=4,seed=seed,noBaseCase=false,sorter);
-        testSort(n=n,max=max,logBuckets=8,seed=seed,noBaseCase=false,sorter);
-        if sorter != "radix" {
-          // radix sorter assumes radix divides key type
-          testSort(n=n,max=max,logBuckets=10,seed=seed,noBaseCase=false,sorter);
+          if n < 10_000 {
+            help(2);
+            help(4);
+            help(8);
+            if sorter != "radix" {
+              // radix sorter assumes radix divides key type
+              help(10);
+            }
+            help(16);
+          }
         }
-        testSort(n=n,max=max,logBuckets=16,seed=seed,noBaseCase=false,sorter);
 
         seed += 1;
       }
@@ -847,14 +870,15 @@ proc testTiming() {
 
     var stdstable: Time.stopwatch;
     for trial in 0..<ntrials {
-      BucketBoundaries = boundaryTypeOrdered;
+      BucketBoundaries = boundaryTypeNotBoundary;
+      BucketBoundaries[0] = boundaryTypeSortedBucket;
       Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
       stdstable.start();
       sort(Elts, new defaultComparator(), region=0..<n, stable=true);
       forall i in 0..<n {
         if i > 0 {
-          if Elts[i] == Elts[i+1] {
-            BucketBoundaries[i] = boundaryTypeEqual;
+          if Elts[i-1] < Elts[i] {
+            BucketBoundaries[i] = boundaryTypeSortedBucket;
           }
         }
       }
@@ -863,14 +887,15 @@ proc testTiming() {
 
     var stdunstable: Time.stopwatch;
     for trial in 0..<ntrials {
-      BucketBoundaries = boundaryTypeOrdered;
+      BucketBoundaries = boundaryTypeNotBoundary;
+      BucketBoundaries[0] = boundaryTypeSortedBucket;
       Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
       stdunstable.start();
       sort(Elts, new defaultComparator(), region=0..<n, stable=false);
       forall i in 0..<n {
         if i > 0 {
-          if Elts[i] == Elts[i+1] {
-            BucketBoundaries[i] = boundaryTypeEqual;
+          if Elts[i-1] < Elts[i] {
+            BucketBoundaries[i] = boundaryTypeSortedBucket;
           }
         }
       }
@@ -912,7 +937,7 @@ proc main() {
   }*/
 
   writeln("Testing with many tasks");
-  //runTests();
+  runTests();
 
   writeln("TestPartitioning OK");
 }
