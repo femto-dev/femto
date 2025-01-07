@@ -389,7 +389,7 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
     Elts = 0..<n by -1;
   }
   const nTasksPerLocale = computeNumTasks();
-  var EltsCopy = Elts;
+  var EltsCopy: [0..<n] uint = Elts;
 
 
   /*
@@ -436,7 +436,7 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
 
   assert(isSorted(Elts));
 
-  var UnstableSortCopy = EltsCopy;
+  var UnstableSortCopy:[0..<n] uint = EltsCopy;
   sort(EltsCopy, stable=true);
 
   if max > 10 {
@@ -827,9 +827,10 @@ config param radixLogBuckets = 8;
 proc testTiming() {
 
   var maxn = 10**8;
-  var Elts: [0..<maxn] uint;
-  var Scratch: [0..<maxn] uint;
-  var BucketBoundaries: [0..<maxn] uint(8);
+  const Dom = makeBlockDomain(0..<maxn, Locales);
+  var Elts: [Dom] uint;
+  var Scratch: [Dom] uint;
+  var BucketBoundaries: [Dom] uint(8);
   const nTasksPerLocale = computeNumTasks();
 
   var n = 1;
@@ -869,37 +870,39 @@ proc testTiming() {
     }
 
     var stdstable: Time.stopwatch;
-    for trial in 0..<ntrials {
-      BucketBoundaries = boundaryTypeNotBoundary;
-      BucketBoundaries[0] = boundaryTypeSortedBucket;
-      Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
-      stdstable.start();
-      sort(Elts, new defaultComparator(), region=0..<n, stable=true);
-      forall i in 0..<n {
-        if i > 0 {
-          if Elts[i-1] < Elts[i] {
-            BucketBoundaries[i] = boundaryTypeSortedBucket;
-          }
-        }
-      }
-      stdstable.stop();
-    }
-
     var stdunstable: Time.stopwatch;
-    for trial in 0..<ntrials {
-      BucketBoundaries = boundaryTypeNotBoundary;
-      BucketBoundaries[0] = boundaryTypeSortedBucket;
-      Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
-      stdunstable.start();
-      sort(Elts, new defaultComparator(), region=0..<n, stable=false);
-      forall i in 0..<n {
-        if i > 0 {
-          if Elts[i-1] < Elts[i] {
-            BucketBoundaries[i] = boundaryTypeSortedBucket;
+    if !isDistributedDomain(Dom) {
+      for trial in 0..<ntrials {
+        BucketBoundaries = boundaryTypeNotBoundary;
+        BucketBoundaries[0] = boundaryTypeSortedBucket;
+        Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+        stdstable.start();
+        sort(Elts, new defaultComparator(), region=0..<n, stable=true);
+        forall i in 0..<n {
+          if i > 0 {
+            if Elts[i-1] < Elts[i] {
+              BucketBoundaries[i] = boundaryTypeSortedBucket;
+            }
           }
         }
+        stdstable.stop();
       }
-      stdunstable.stop();
+
+      for trial in 0..<ntrials {
+        BucketBoundaries = boundaryTypeNotBoundary;
+        BucketBoundaries[0] = boundaryTypeSortedBucket;
+        Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+        stdunstable.start();
+        sort(Elts, new defaultComparator(), region=0..<n, stable=false);
+        forall i in 0..<n {
+          if i > 0 {
+            if Elts[i-1] < Elts[i] {
+              BucketBoundaries[i] = boundaryTypeSortedBucket;
+            }
+          }
+        }
+        stdunstable.stop();
+      }
     }
 
 
