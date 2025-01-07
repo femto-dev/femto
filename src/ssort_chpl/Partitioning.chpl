@@ -614,6 +614,13 @@ proc isSampleSplitters(type splitType) param {
   return isSubtype(splitType, splitters);
 }
 
+// splits into (1 << radixBits) + 2 bins
+//
+// p = 1 << radixBits
+//
+// bin 0 is for the end was reached (sort before)
+// bins 1..p are for data with next part starting with 0..<p
+// bin p+1 is for the end was reached (sort after)
 record radixSplitters : writeSerializable {
   param radixBits: int; // how many bits to sort at once
   var startbit: int;  // start bit position
@@ -652,7 +659,9 @@ record radixSplitters : writeSerializable {
   }
 
   proc bucketHasEqualityBound(bucketIdx: int) {
-    return startbit >= endbit - radixBits;
+    return bucketIdx == 0 ||
+           bucketIdx == numBuckets - 1 ||
+           startbit >= endbit - radixBits;
   }
 
   inline proc bucketForRecord(a, comparator) {
