@@ -1964,6 +1964,8 @@ proc partitioningSorter.psort(ref A: [],
       //writeln("in sorting within task loop cur=", cur);
       // find the next unsorted bucket, starting at cur
       var bkt = nextBucket(BucketBoundaries, chunk, region, cur);
+      // if the initial position has moved forward, record that in 'cur'
+      cur = bkt.low;
 
       // sort it some
       //writeln("inner sorting ", bkt);
@@ -1972,14 +1974,6 @@ proc partitioningSorter.psort(ref A: [],
       /*for i in bkt {
         writeln("done inner sorting A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
       }*/
-
-      // search again to find the next unsorted bucket
-      // (so that we sort completely before moving on to the next elements;
-      //  the idea is to keep the relevant data in cache if possible)
-      bkt = nextBucket(BucketBoundaries, chunk, region, cur);
-
-      // if the initial position has moved forward, record that in 'cur'
-      cur = bkt.low;
     }
   }
   /*for i in region {
