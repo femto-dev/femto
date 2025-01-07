@@ -26,8 +26,8 @@ import SuffixSort.TRACE;
 use Partitioning;
 use Utility;
 
-import Sort.{sort, isSorted, defaultComparator};
-import Random;
+import Sort.{sort, defaultComparator, isSorted, keyPartStatus, keyPartComparator};
+use Random;
 import Math;
 import Map;
 import Time;
@@ -92,7 +92,7 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   p.reset(sp, Locales);
   const counts = p.partition(Input.domain, Input.domain.dim(0), Input,
                              OutputStart=none, Output, myDefaultComparator);
- 
+
   assert(counts.size == nBuckets);
 
   const ends = + scan counts;
@@ -823,14 +823,55 @@ proc runTests() {
 
 config const sampleLogBuckets = 8;
 config param radixLogBuckets = 8;
-config const maxn = 10**9;
+config const minn = 1;
+config const maxn = 10**8;
+config param wordsper = 1;
+
+record testElt {
+  var elts: wordsper * uint;
+}
+proc min(type t: testElt) {
+  var ret: testElt;
+  for i in 0..<wordsper {
+    ret.elts(i) = min(uint);
+  }
+  return ret;
+}
+proc max(type t: testElt) {
+  var ret: testElt;
+  for i in 0..<wordsper {
+    ret.elts(i) = max(uint);
+  }
+  return ret;
+}
+
+record testEltKeyPartComparator : keyPartComparator {
+  inline proc keyPart(elt: testElt, i: int): (keyPartStatus, uint) {
+    if i > wordsper {
+      return (keyPartStatus.pre, elt.elts(0));
+    } else {
+      return (keyPartStatus.returned, elt.elts(i));
+    }
+  }
+}
+
+
+proc fillRandomTuples(ref Elts) {
+  var rs = new randomStream(uint, seed=1);
+  // set each tuple element in a separate iteration
+  for i in 0..<wordsper {
+    forall (r, a) in zip(rs.next(Elts.domain), Elts) {
+      a.elts(i) = r;
+    }
+  }
+}
 
 proc testTiming() {
-  var n = 1;
+  var n = minn;
   while n <= maxn {
     const Dom = makeBlockDomain(0..<n, Locales);
-    var Elts: [Dom] uint;
-    var Scratch: [Dom] uint;
+    var Elts: [Dom] testElt;
+    var Scratch: [Dom] testElt;
     var BucketBoundaries: [Dom] uint(8);
     const nTasksPerLocale = computeNumTasks();
 
@@ -839,11 +880,11 @@ proc testTiming() {
     var sample: Time.stopwatch;
     for trial in 0..<ntrials {
       BucketBoundaries = 0;
-      Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+      fillRandomTuples(Elts);
       sample.start();
       psort(Elts, Scratch, BucketBoundaries,
             0..<n,
-            new integralKeyPartComparator(),
+            new testEltKeyPartComparator(),
             radixBits=0,
             logBuckets=sampleLogBuckets,
             nTasksPerLocale,
@@ -855,11 +896,11 @@ proc testTiming() {
     var radix: Time.stopwatch;
     for trial in 0..<ntrials {
       BucketBoundaries = 0;
-      Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+      fillRandomTuples(Elts);
       radix.start();
       psort(Elts, Scratch, BucketBoundaries,
             0..<n,
-            new integralKeyPartComparator(),
+            new testEltKeyPartComparator(),
             radixBits=radixLogBuckets,
             logBuckets=radixLogBuckets,
             nTasksPerLocale,
@@ -873,9 +914,9 @@ proc testTiming() {
       for trial in 0..<ntrials {
         BucketBoundaries = boundaryTypeNotBoundary;
         BucketBoundaries[0] = boundaryTypeSortedBucket;
-        Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+        fillRandomTuples(Elts);
         stdstable.start();
-        sort(Elts, new defaultComparator(), region=0..<n, stable=true);
+        sort(Elts, new testEltKeyPartComparator(), region=0..<n, stable=true);
         forall i in 0..<n {
           if i > 0 {
             if Elts[i-1] < Elts[i] {
@@ -889,9 +930,9 @@ proc testTiming() {
       for trial in 0..<ntrials {
         BucketBoundaries = boundaryTypeNotBoundary;
         BucketBoundaries[0] = boundaryTypeSortedBucket;
-        Random.fillRandom(Elts[0..<n], min=0, max=max(uint), seed=1);
+        fillRandomTuples(Elts);
         stdunstable.start();
-        sort(Elts, new defaultComparator(), region=0..<n, stable=false);
+        sort(Elts, new testEltKeyPartComparator(), region=0..<n, stable=false);
         forall i in 0..<n {
           if i > 0 {
             if Elts[i-1] < Elts[i] {
@@ -910,7 +951,7 @@ proc testTiming() {
              "std stable MB/s", "std unstable MB/s");
     }
 
-    const nb = n*numBytes(Elts.eltType);
+    const nb = n*wordsper*numBytes(uint);
 
     writef("% <14i % <14r % <14r % <14r % <14r\n",
            n,
