@@ -823,18 +823,16 @@ proc runTests() {
 
 config const sampleLogBuckets = 8;
 config param radixLogBuckets = 8;
+config const maxn = 10**9;
 
 proc testTiming() {
-
-  var maxn = 10**8;
-  const Dom = makeBlockDomain(0..<maxn, Locales);
-  var Elts: [Dom] uint;
-  var Scratch: [Dom] uint;
-  var BucketBoundaries: [Dom] uint(8);
-  const nTasksPerLocale = computeNumTasks();
-
   var n = 1;
   while n <= maxn {
+    const Dom = makeBlockDomain(0..<n, Locales);
+    var Elts: [Dom] uint;
+    var Scratch: [Dom] uint;
+    var BucketBoundaries: [Dom] uint(8);
+    const nTasksPerLocale = computeNumTasks();
 
     var ntrials = min(max(1, maxn / n), 1000);
 
