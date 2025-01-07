@@ -945,7 +945,8 @@ proc testTiming() {
     }
 
 
-    if n == 1 {
+    if n == minn {
+      writeln("sorting ", wordsper, " words per element");
       writef("% <14s % <14s % <14s % <14s % <14s\n",
              "n", "sample MB/s", "radix MB/s",
              "std stable MB/s", "std unstable MB/s");
