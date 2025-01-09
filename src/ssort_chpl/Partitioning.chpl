@@ -23,7 +23,7 @@ module Partitioning {
 // This code is based upon Chapel's package module Sort SampleSortHelp module
 // which in turn was based on the IPS4 implementation
 
-import SuffixSort.EXTRA_CHECKS;
+import SuffixSort.{EXTRA_CHECKS,TIMING};
 
 use Utility;
 
@@ -36,6 +36,7 @@ import CTypes.c_array;
 import BlockDist.blockDist;
 import CopyAggregation.{SrcAggregator,DstAggregator};
 import BitOps;
+import Time;
 
 // These settings control the sample sort and classification process
 
@@ -1922,14 +1923,28 @@ proc partitioningSorter.psort(ref A: [],
   if EXTRA_CHECKS {
     BucketBoundaries[region.low] = boundaryTypeUnsortedBucket;
   }
+
+  var firstStepTime: Time.stopwatch;
+  if TIMING {
+    firstStepTime.start();
+  }
   sortStep(A, Scratch, BucketBoundaries, region, comparator,
            outerPartitionerOrNone=myNone,
            innerPartitionerOrNone=myNone,
            ifAllLocal=false);
+  if TIMING {
+    firstStepTime.stop();
+    writeln("first step time : ", firstStepTime.elapsed());
+  }
 
   /*for i in region {
     writeln("after step A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
+
+  var spanTime: Time.stopwatch;
+  if TIMING {
+    spanTime.start();
+  }
 
   // sort any bucket that spans a task or locale boundary, but
   // skip internal buckets for now
@@ -1981,9 +1996,20 @@ proc partitioningSorter.psort(ref A: [],
     }
   }
 
+  if TIMING {
+    spanTime.stop();
+    writeln("span time ", spanTime.elapsed());
+  }
+
+
   /*for i in region {
     writeln("after spans A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
+
+  var innerSortTime: Time.stopwatch;
+  if TIMING {
+    innerSortTime.start();
+  }
 
   // sort the internal buckets
   forall (activeLocIdx, taskIdInLoc, chunk)
@@ -2013,6 +2039,13 @@ proc partitioningSorter.psort(ref A: [],
       }*/
     }
   }
+
+  if TIMING {
+    innerSortTime.stop();
+    writeln("inner sort time ", innerSortTime.elapsed());
+  }
+
+
   /*for i in region {
     writeln("done parallelPartitioningSort A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
@@ -2041,12 +2074,33 @@ proc psort(ref A: [],
     return;
   }
 
+  var sorterInitTime: Time.stopwatch;
+  if TIMING {
+    sorterInitTime.start();
+  }
+
   var sorter = new partitioningSorter(A.eltType, splitterType,
                                       radixBits=radixBits,
                                       logBuckets=logBuckets,
                                       nTasksPerLocale=nTasksPerLocale,
                                       endbit=endbit, noBaseCase=noBaseCase);
+
+  if TIMING {
+    sorterInitTime.stop();
+    writeln("sorter init time : ", sorterInitTime.elapsed());
+  }
+
+  var sorterRunTime: Time.stopwatch;
+  if TIMING {
+    sorterRunTime.start();
+  }
+
   sorter.psort(A, Scratch, BucketBoundaries, region, comparator);
+
+  if TIMING {
+    sorterRunTime.stop();
+    writeln("sorter run time : ", sorterRunTime.elapsed());
+  }
 }
 
 /*
