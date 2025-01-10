@@ -372,7 +372,6 @@ proc testSplitters() {
 
 }
 
-/*
 proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
               noBaseCase:bool, random: bool, sorter:string) {
 
@@ -463,7 +462,6 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
   }
   assert(Elts.equals(EltsCopy));
 }
-*/
 
 /*
 proc testSortKeys(n: int, max: uint, seed: int, sorter:string) {
@@ -577,7 +575,7 @@ proc testSortAndTrackEqual(n: int) {
   assert(ExpectElts.equals(Elts));
 }*/
 
-/*proc testSorts() {
+proc testSorts() {
   var seed = 1;
   for sorter in ["sample", "radix"] {
     for n in [10, 100, 300, 500, 1_000, 10_000, 100_000] {
@@ -636,7 +634,7 @@ proc testSortAndTrackEqual(n: int) {
   testSortAndTrackEqual(10000);
   testSortAndTrackEqual(100000);
   testSortAndTrackEqual(1000000);*/
-}*/
+}
 
 proc testMultiWayMerge() {
   {
@@ -828,7 +826,7 @@ proc runTests() {
   testSplitters();
 
   // test sorters
-  //testSorts();
+  testSorts();
 }
 
 config const sampleLogBuckets = 8;
@@ -876,7 +874,7 @@ proc fillRandomTuples(ref Elts) {
   }
 }
 
-/*proc testTiming() {
+proc testTiming() {
   var n = minn;
   while n <= maxn {
     const Dom = makeBlockDomain(0..<n, Locales);
@@ -973,14 +971,15 @@ proc fillRandomTuples(ref Elts) {
 
     n *= 10;
   }
-}*/
+}
+
 config const timing = false;
 
 proc main() {
-  /*if timing {
+  if timing {
     testTiming();
     return;
-  }*/
+  }
 
   /* commented out due to some odd problems with partition
      once added replicated */

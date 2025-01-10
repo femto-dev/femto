@@ -1282,38 +1282,41 @@ proc savePerTaskCountsToGlobal(const ref perTaskCounts,
                                const activeLocIdx: int,
                                const nTasksPerLocale: int) {
   // store the perTaskCounts into the global counts array in parallel
-  coforall tid in 0..<nTasksPerLocale {
-    var agg = new DstAggregator(int);
+  // but do so in a way that somewhat matches the global counts ordering
+  // (tasks within a bucket go together).
+  forall bucketIdx in 0..<nBuckets
+  with (var agg = new DstAggregator(int)) {
     for taskIdInLoc in 0..<nTasksPerLocale {
-      const ref taskCounts = perTaskCounts[taskIdInLoc];
-      for bucketIdx in RangeChunk.chunk(0..<nBuckets, nTasksPerLocale, tid) {
-        var countIdx =
-          getGlobalCountIdx(bucketIdx, activeLocIdx, nActiveLocales,
-                            taskIdInLoc, nTasksPerLocale);
-        agg.copy(GlobCounts[countIdx], taskCounts[bucketIdx]);
-      }
+      var countIdx =
+        getGlobalCountIdx(bucketIdx, activeLocIdx, nActiveLocales,
+                          taskIdInLoc, nTasksPerLocale);
+      agg.copy(GlobCounts[countIdx], perTaskCounts[taskIdInLoc][bucketIdx]);
     }
   }
 }
 
+// perTaskNext is an array-of-arrays containing the counts
+//   perTaskNext[taskIdInLoc][bucketIdx]
+// GlobEnds is the global ends array
 proc getTaskCountsFromGlobal(ref perTaskNext,
                              const ref GlobEnds,
                              const nBuckets: int,
                              const nActiveLocales: int,
                              const activeLocIdx: int,
                              const nTasksPerLocale: int) {
-  // read the start positions to perTaskNext from GlobEnds in parallel
-  coforall tid in 0..<nTasksPerLocale {
-    var agg = new SrcAggregator(int);
+  // read the start positions from GlobEnds into perTaskNext
+  // but do so in a way that somewhat matches the global counts ordering
+  // (tasks within a bucket go together).
+  forall bucketIdx in 0..<nBuckets
+  with (var agg = new SrcAggregator(int)) {
     for taskIdInLoc in 0..<nTasksPerLocale {
-      ref nextOffsets = perTaskNext[taskIdInLoc];
-      for bucketIdx in RangeChunk.chunk(0..<nBuckets, nTasksPerLocale, tid) {
-        var countIdx =
-          getGlobalCountIdx(bucketIdx, activeLocIdx, nActiveLocales,
-                            taskIdInLoc, nTasksPerLocale);
-        if countIdx > 0 {
-          agg.copy(nextOffsets[bucketIdx], GlobEnds[countIdx-1]);
-        }
+      var countIdx =
+        getGlobalCountIdx(bucketIdx, activeLocIdx, nActiveLocales,
+                          taskIdInLoc, nTasksPerLocale);
+      if countIdx > 0 {
+        agg.copy(perTaskNext[taskIdInLoc][bucketIdx], GlobEnds[countIdx-1]);
+      } else {
+        perTaskNext[taskIdInLoc][bucketIdx] = 0;
       }
     }
   }
@@ -1472,25 +1475,7 @@ proc parStablePartition(const InputDomain: domain(?),
 
 ///// partitioning sort
 
-/*
-class SorterPerTaskState {
-  type eltType;
-  type splitterType;
-  var outerP: partitioner(eltType, splitterType);
-  var innerP: partitioner(eltType, splitterType);
 
-  proc init(type eltType, type splitterType,
-            numBuckets: int, nTasksPerLocale: int) {
-    this.eltType = eltType;
-    this.splitterType = splitterType;
-    this.outerP = new partitioner(eltType, splitterType,
-                                  numBuckets=numBuckets,
-                                  nTasksPerLocale=nTasksPerLocale);
-    this.innerP = new partitioner(eltType, splitterType,
-                                  numBuckets=numBuckets,
-                                  nTasksPerLocale=nTasksPerLocale);
-  }
-}
 record partitioningSorter {
   type eltType;
   type splitterType;
@@ -1499,10 +1484,7 @@ record partitioningSorter {
   const nTasksPerLocale: int;
   const endbit: int;
   const baseCaseLimit: int;
-
-  var PerTaskState:
-    [blockDist.createDomain(0..<numLocales*nTasksPerLocale)]
-    owned SorterPerTaskState(eltType, splitterType)?;
+  const noSerialPartition: bool;
 }
 
 proc type partitioningSorter.computeBaseCaseLimit(logBuckets: int,
@@ -1533,66 +1515,13 @@ proc partitioningSorter.init(type eltType, type splitterType,
   this.endbit = endbit;
   this.baseCaseLimit =
     partitioningSorter.computeBaseCaseLimit(logBuckets, noBaseCase);
+  this.noSerialPartition = noBaseCase;
   init this;
 
   if (radixBits == 0) != isSampleSplitters(splitterType) {
     compilerError("bad call to partitioningSorter.init");
   }
-
-  const numBuckets = if radixBits > 0
-                     then (new radixSplitters(radixBits, 0, 1)).numBuckets
-                     else 1 << logBuckets;
-
-  //writeln("using numBuckets = ", numBuckets);
-
-  // create the PerTaskState for each task, assuming we use all Locales
-  forall (activeLocIdx, taskIdInLoc, _)
-  in divideIntoTasks(PerTaskState.domain, PerTaskState.domain.dim(0),
-                     nTasksPerLocale, Locales) {
-    const stateIdx = here.id*nTasksPerLocale+taskIdInLoc;
-    PerTaskState[stateIdx] =
-      new SorterPerTaskState(eltType, splitterType,
-                             numBuckets=numBuckets,
-                             nTasksPerLocale=nTasksPerLocale);
-  }
-
-  if EXTRA_CHECKS {
-    forall state in PerTaskState {
-      assert(state != nil && state!.locale == here);
-    }
-  }
 }
-
-inline proc partitioningSorter.getPerTaskState(taskIdInLoc: int) : borrowed class {
-  const ret = PerTaskState[here.id*nTasksPerLocale + taskIdInLoc]!;
-  if EXTRA_CHECKS {
-    assert(ret.locale == here);
-  }
-  return ret;
-}
-inline proc partitioningSorter.getPerTaskOuterPartitioner(taskIdInLoc: int)
-  /*ref*/ {
-  //return getPerTaskState(taskIdInLoc).outerP;
-    const numBuckets = if radixBits > 0
-                     then (new radixSplitters(radixBits, 0, 1)).numBuckets
-                     else 1 << logBuckets;
-
-
-  return new partitioner(eltType, splitterType, numBuckets, nTasksPerLocale);
-}
-inline proc partitioningSorter.getPerTaskInnerPartitioner(taskIdInLoc: int)
-  /*ref*/ {
-  //return getPerTaskState(taskIdInLoc).innerP;
-      const numBuckets = if radixBits > 0
-                     then (new radixSplitters(radixBits, 0, 1)).numBuckets
-                     else 1 << logBuckets;
-
-
-  //return getPerTaskState(taskIdInLoc).outerP;
-  return new partitioner(eltType, splitterType, numBuckets, nTasksPerLocale);
-
-}
-
 
 proc partitioningSorter.createSampleSplitters(ref A: [],
                                               region: range,
@@ -1757,36 +1686,35 @@ proc partitioningSorter.handleOuterBucket(ref A: [],
                                           ref BucketBoundaries: [] uint(8),
                                           comparator,
                                           startbit: int,
-
-                                          outerRegion: range,
-                                          outerIdx: int,
+                                          obkt: bktCount,
                                           ifAllLocal: bool) {
 
   //writeln("handleOuterBucket ", outerRegion, " baseCaseLimit=", baseCaseLimit);
 
+  const outerRegion = obkt.start..#obkt.count;
   // for each bucket, partition from Scratch back into A
   // and mark bucket boundaries indicating what is sorted
-  if outerRegion.size == 0 {
+  if obkt.count == 0 {
     // nothing to do
     return;
-  } else if outerRegion.size == 1 {
+  } else if obkt.count == 1 {
     local ifAllLocal {
-      A[outerRegion.low] = Scratch[outerRegion.low];
-      BucketBoundaries[outerRegion.low] = boundaryTypeSortedBucket;
+      A[obkt.start] = Scratch[obkt.start];
+      BucketBoundaries[obkt.start] = boundaryTypeSortedBucket;
     }
 
-  } else if outerP.getLocalSplitters().bucketHasEqualityBound(outerIdx) {
+  } else if obkt.isEqual {
     //writeln("outer bucket is equal");
     local ifAllLocal {
       A[outerRegion] = Scratch[outerRegion];
-      BucketBoundaries[outerRegion.low] = boundaryTypeSortedBucket;
+      BucketBoundaries[obkt.start] = boundaryTypeSortedBucket;
     }
 
-  } else if outerRegion.size <= baseCaseLimit {
+  } else if obkt.count <= baseCaseLimit {
     // copy it from Scratch back into A, mark the boundary, and sort
     local ifAllLocal {
       A[outerRegion] = Scratch[outerRegion];
-      BucketBoundaries[outerRegion.low] = boundaryTypeSortedBucket;
+      BucketBoundaries[obkt.start] = boundaryTypeSortedBucket;
       partitionSortBaseCase(A, outerRegion, comparator);
     }
 
@@ -1796,7 +1724,7 @@ proc partitioningSorter.handleOuterBucket(ref A: [],
     // Generally, we will already be running on innerActiveLocs[0],
     // but occasionally that might not be the case (when sorting
     // the parts that span locales).
-    on Scratch[outerRegion.low] {
+    on Scratch[obkt.start] {
       // do a partition step from Scratch back into A
       // and then process the resulting buckets to mark BucketBoundaries
       const innerActiveLocs = computeActiveLocales(Scratch.domain, outerRegion);
@@ -1817,10 +1745,11 @@ proc partitioningSorter.handleOuterBucket(ref A: [],
         // partition by the new splitters
         // after this, the data for outerRegion is in A
         const InnerResult = partition(Scratch.domain, outerRegion, Scratch,
-                                      outerRegion.low, A,
+                                      obkt.start, A,
                                       InnerSplit, comparator,
                                       nTasksPerLocale,
-                                      innerActiveLocs);
+                                      innerActiveLocs,
+                                      noSerialPartition=noSerialPartition);
 
         /*var nNonemptyBuckets = 0;
         forall count in InnerCounts with (+ reduce nNonemptyBuckets) {
@@ -1830,31 +1759,31 @@ proc partitioningSorter.handleOuterBucket(ref A: [],
         //writeln(InnerCounts);
 
         // process the inner buckets to mark bucket boundaries
-        forall (innerRegion, innerBktIdx, activeLocIdx, taskIdInLoc)
-        in divideByBuckets(A, outerRegion, InnerCounts, InnerEnds,
-                           nTasksPerLocale, innerActiveLocs) {
-          if innerRegion.size == 0 {
+        forall bkt in InnerResult {
+        //forall (innerRegion, innerBktIdx, activeLocIdx, taskIdInLoc)
+        //in divideByBuckets(A, outerRegion, InnerCounts, InnerEnds,
+        //                   nTasksPerLocale, innerActiveLocs) {
+          if bkt.count == 0 {
             // nothing to do
-          } else if innerRegion.size == 1 {
+          } else if bkt.count == 1 {
             //writeln("inner size 1");
-            BucketBoundaries[innerRegion.low] = boundaryTypeSortedBucket;
+            BucketBoundaries[bkt.start] = boundaryTypeSortedBucket;
 
-          } else if innerP.getLocalSplitters().bucketHasEqualityBound(innerBktIdx)
-          {
+          } else if bkt.isEqual {
             //writeln("inner equal");
-            BucketBoundaries[innerRegion.low] = boundaryTypeSortedBucket;
+            BucketBoundaries[bkt.start] = boundaryTypeSortedBucket;
 
-          } else if innerRegion.size <= baseCaseLimit {
+          } else if bkt.count <= baseCaseLimit {
             //writeln("inner base case");
             // mark the boundary and sort it
-            BucketBoundaries[innerRegion.low] = boundaryTypeSortedBucket;
-            partitionSortBaseCase(A, innerRegion, comparator);
+            BucketBoundaries[bkt.start] = boundaryTypeSortedBucket;
+            partitionSortBaseCase(A, bkt.start..#bkt.count, comparator);
 
           } else {
             //writeln("inner other");
             // it won't be fully sorted, but we have established (by partitioning)
             // that the element at innerRegion.low differs from the previous
-            BucketBoundaries[innerRegion.low] = boundaryTypeUnsortedBucket;
+            BucketBoundaries[bkt.start] = boundaryTypeUnsortedBucket;
             // note: this might write to the outer bucket start;
             // so outer bucket boundary is reset after inner buckets are handled
           }
@@ -1910,8 +1839,7 @@ proc partitioningSorter.sortStep(ref A: [],
                                  ref BucketBoundaries: [] uint(8),
                                  region: range,
                                  comparator,
-                                 ref outerP,
-                                 ref innerPartitionerOrNone,
+                                 sequential: bool,
                                  ifAllLocal: bool) : void {
 
   if region.size == 0 {
@@ -1965,12 +1893,12 @@ proc partitioningSorter.sortStep(ref A: [],
   // (possibly by partitioning again and forming inner buckets).
 
   // first, set up the splitters
+  const OuterSplit;
   if radixBits == 0 {
-    const OuterSampleSplit =
-      createSampleSplitters(A, region, comparator, outerActiveLocs);
+    OuterSplit = createSampleSplitters(A, region, comparator, outerActiveLocs);
     //writeln("OuterSampleSplit.numBuckets ", OuterSampleSplit.numBuckets);
     //writeln("OuterSampleSplit ", OuterSampleSplit);
-    outerP.reset(OuterSampleSplit, outerActiveLocs);
+    //outerP.reset(OuterSampleSplit, outerActiveLocs);
   } else {
     // If this computation of the minimum element becomes a problem
     // here are some options:
@@ -1992,21 +1920,20 @@ proc partitioningSorter.sortStep(ref A: [],
     var nBitsInCommon = bitsInCommon(minElt, maxElt, comparator);
     var nRadixesInCommon = nBitsInCommon / radixBits;
     startbit = nRadixesInCommon * radixBits;
-    const OuterRadixSplit = new radixSplitters(radixBits=radixBits,
-                                               startbit=startbit,
-                                               endbit=endbit);
-    outerP.reset(OuterRadixSplit, outerActiveLocs);
+    OuterSplit = new radixSplitters(radixBits=radixBits,
+                                    startbit=startbit,
+                                    endbit=endbit);
   }
 
   // then, do a parallel partition according to the outer splitters
   // after this, the data is in Scratch
-  const OuterCounts;
-  const OuterEnds;
+  const OuterBkts;
 
   local ifAllLocal {
-    OuterCounts = outerP.partition(A.domain, region, A, region.low, Scratch,
-                                         comparator, outerActiveLocs);
-    OuterEnds = + scan OuterCounts;
+    OuterBkts = partition(A.domain, region, A, region.low, Scratch,
+                          OuterSplit, comparator, nTasksPerLocale,
+                          outerActiveLocs,
+                          noSerialPartition=noSerialPartition);
   }
 
   // when radix sorting, the partitioning we just did sorted by radixBits bits
@@ -2018,31 +1945,18 @@ proc partitioningSorter.sortStep(ref A: [],
 
   // now process each bucket, moving elts from Scratch back to A in the process
 
-  if innerPartitionerOrNone.type==nothing {
-    // process the inner buckets in parallel & use a per-task partitioner
-    forall (outerRegion, outerIdx, outerActiveLocIdx, outerTaskIdInLoc)
-    in divideByBuckets(Scratch, region, OuterCounts, OuterEnds,
-                       nTasksPerLocale, outerActiveLocs) {
-      var innerP = getPerTaskInnerPartitioner(outerTaskIdInLoc);
-
+  if sequential {
+    for bkt in OuterBkts {
       handleOuterBucket(A, Scratch, BucketBoundaries, comparator,
                         startbit=startbit,
-                        outerRegion, outerIdx,
-                        outerP=outerP,
-                        innerP=innerP,
+                        bkt,
                         ifAllLocal=ifAllLocal);
     }
   } else {
-    // process the inner buckets sequentially & use the provided partitioner
-    for (count, end, outerIdx)
-    in zip (OuterCounts, OuterEnds, OuterCounts.domain) {
-      const start=end - count + region.low;
-      const outerRegion=start..#count;
+    forall bkt in OuterBkts {
       handleOuterBucket(A, Scratch, BucketBoundaries, comparator,
                         startbit=startbit,
-                        outerRegion, outerIdx,
-                        outerP=outerP,
-                        innerP=innerPartitionerOrNone,
+                        bkt,
                         ifAllLocal=ifAllLocal);
     }
   }
@@ -2167,11 +2081,8 @@ proc partitioningSorter.psort(ref A: [],
 
   // TODO: store which array contains the bucket in the BucketBoundaries
   // TODO: make sure that the 1st step sorts into at least numLocales buckets
-  var outerP = getPerTaskOuterPartitioner(0);
   sortStep(A, Scratch, BucketBoundaries, region, comparator,
-           outerP=outerP,
-           innerPartitionerOrNone=myNone,
-           ifAllLocal=false);
+           sequential=false, ifAllLocal=false);
   if TIMING {
     firstStepTime.stop();
     writeln("first step time : ", firstStepTime.elapsed());
@@ -2225,11 +2136,8 @@ proc partitioningSorter.psort(ref A: [],
           const bkt = nextBucket(BucketBoundaries, chunk, region, cur);
           //writeln(taskIdInLoc, " span sorting ", bkt);
 
-          var outerP = getPerTaskOuterPartitioner(taskIdInLoc);
-          var innerP = getPerTaskInnerPartitioner(taskIdInLoc);
-
           sortStep(A, Scratch, BucketBoundaries, bkt, comparator,
-                   outerP, innerP, ifAllLocal=false);
+                   sequential=false, ifAllLocal=false);
           nNotSorted += 1;
         }
       }
@@ -2259,8 +2167,6 @@ proc partitioningSorter.psort(ref A: [],
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(A.domain, region, nTasksPerLocale) {
 
-    var outerP = getPerTaskOuterPartitioner(taskIdInLoc);
-    var innerP = getPerTaskInnerPartitioner(taskIdInLoc);
     ref localA = A.localSlice(chunk);
     ref localScratch = Scratch.localSlice(chunk);
     ref localBuckets = BucketBoundaries.localSlice(chunk);
@@ -2277,7 +2183,7 @@ proc partitioningSorter.psort(ref A: [],
       // sort it some
       //writeln("inner sorting ", bkt);
       sortStep(localA, localScratch, localBuckets,
-               bkt, comparator, outerP, innerP, ifAllLocal=true);
+               bkt, comparator, sequential=true, ifAllLocal=true);
       /*for i in bkt {
         writeln("done inner sorting A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
       }*/
@@ -2346,7 +2252,6 @@ proc psort(ref A: [],
     writeln("sorter run time : ", sorterRunTime.elapsed());
   }
 }
-*/
 
 /*
   serial insertionSort with a separate array of already-computed keys
