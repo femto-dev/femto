@@ -316,7 +316,7 @@ iter divideIntoTasks(const Dom: domain(?),
   if Dom.rank != 1 then compilerError("divideIntoTasks only supports 1-D");
   if Dom.dim(0).strides != strideKind.one then
     compilerError("divideIntoTasks only supports non-strided domains");
-  yield (0, 0, 0, Dom.dim(0));
+  yield (0, 0, Dom.dim(0));
   halt("serial divideIntoTasks should not be called");
 }
 iter divideIntoTasks(param tag: iterKind,
@@ -349,6 +349,49 @@ iter divideIntoTasks(param tag: iterKind,
     }
   }
 }
+
+/* Given a Block distributed domain or non-distributed domain,
+   this iterator divides it into per-locale chunks and processes
+   each on its owning locale.
+
+   yields (activeLocIdx, chunk)
+*/
+iter divideByLocales(const Dom: domain(?),
+                     const region: range,
+                     const ref activeLocales=computeActiveLocales(Dom, region))
+{
+  if Dom.rank != 1 then compilerError("divideByLocales only supports 1-D");
+  if Dom.dim(0).strides != strideKind.one then
+    compilerError("divideByLocales only supports non-strided domains");
+  yield (0, Dom.dim(0));
+  halt("serial divideByLocales should not be called");
+}
+iter divideByLocales(param tag: iterKind,
+                     const Dom: domain(?),
+                     const region: range,
+                     const ref activeLocales=computeActiveLocales(Dom, region))
+ where tag == iterKind.standalone {
+
+  if Dom.rank != 1 then compilerError("divideByLocales only supports 1-D");
+  if Dom.dim(0).strides != strideKind.one then
+    compilerError("divideByLocales only supports non-strided domains");
+  if !Dom.hasSingleLocalSubdomain() {
+    compilerError("divideByLocales only supports dists " +
+                  "with single local subdomain");
+    // note: it'd be possible to support; would just need to be written
+    // differently, and consider both
+    //  # local subdomains < nTasksPerLocale and the inverse.
+  }
+
+  coforall (loc, activeLocIdx) in zip(activeLocales, 0..) {
+    on loc {
+      const ref locDom = Dom.localSubdomain();
+      const locRegion = locDom.dim(0)[region];
+      yield (activeLocIdx, locRegion);
+    }
+  }
+}
+
 
 /**
  This iterator creates distributed parallelism to yield
