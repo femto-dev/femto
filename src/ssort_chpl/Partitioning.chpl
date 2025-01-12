@@ -1087,38 +1087,41 @@ proc partition(const InputDomain: domain(?),
   }
 }
 
-/*
 proc serialUnstablePartition(const region: range,
                              ref A: [],
                              split,
-                             comparator,
-                             filterBucket) {
+                             comparator) {
   const nBuckets = split.numBuckets;
 
-  var Counts:[0..<nBuckets] int;
   var Starts:[0..<nBuckets] int;
+  var Ends:[0..<nBuckets] int;
 
+  writeln("A ", A);
   // Step 1: count
   for (_,bin) in split.classify(A, region.low, region.high, comparator) {
-    if filterBucket.type == nothing || filterBucket(bin) {
-      Counts[bin] += 1;
-    }
+    Starts[bin] += 1;
   }
+  writeln("Counts ", Starts);
 
   // Step 2: scan (this one is an exclusive scan)
   {
     var sum: int = region.low;
-    for (start, count) in zip(Starts, Counts) {
-      start = sum;
-      sum += count;
+    for (start, end) in zip(Starts, Ends) {
+      var bktstart = sum;
+      sum += start; // starts stores counts at first
+      var bktend = sum;
+      start = bktstart;
+      end = bktend;
     }
   }
+  writeln("Starts ", Starts);
+  writeln("Ends ", Ends);
 
   // Step 3: distribute
   var curBucket = 0;
   while true {
     // find the next bin that isn't totally in place
-    while curBucket < nBuckets && Counts[curBucket] == 0 {
+    while curBucket < nBuckets && Starts[curBucket] == Ends[curBucket] {
       curBucket += 1;
     }
     if curBucket >= nBuckets {
@@ -1126,10 +1129,10 @@ proc serialUnstablePartition(const region: range,
     }
 
     param max_buf = CLASSIFY_UNROLL_FACTOR;
-    var buf: c_array(A.eltType, max_buf);
+    var buf: max_buf*A.eltType;
     var used_buf = 0;
     var start = Starts[curBucket];
-    var end = Starts[curBucket] + Counts[curBucket];
+    var end = Ends[curBucket];
     var endfast = max(start, end-2*max_buf);
     var bufstart = max(start, end-max_buf);
     var i = bufstart;
@@ -1148,12 +1151,10 @@ proc serialUnstablePartition(const region: range,
         // TODO: adjust classify() to return the input index
         // and then call it here instead
         var bkt = split.bucketForRecord(buf[j], comparator);
-        if filterBucket.type == nothing || filterBucket(bkt) {
-          // Store it in the right bkt and increment that bucket start
-          ref next = Starts[bkt];
-          A[next] <=> buf[j];
-          next += 1;
-        }
+        // Store it in the right bkt and increment that bucket start
+        ref next = Starts[bkt];
+        A[next] <=> buf[j];
+        next += 1;
       }
     }
 
@@ -1163,37 +1164,41 @@ proc serialUnstablePartition(const region: range,
       var j = 0;
       while used_buf >= 0 && j < used_buf {
         var bkt = split.bucketForRecord(buf[j], comparator);
-        if filterBucket.type == nothing || filterBucket(bkt) {
-          // Swap buf[j] into its appropriate bin.
-          ref next = Starts[bkt];
-          var offset = next;
-          A[offset] <=> buf[j];
-          next += 1;
-          // Leave buf[j] with the next unsorted item.
-          // But offsets[bin] might be in the region we already read.
-          if bkt == curBucket && offset >= bufstart {
-            used_buf -= 1;
-            buf[j] <=> buf[used_buf];
-          }
+        // Swap buf[j] into its appropriate bin.
+        ref next = Starts[bkt];
+        var offset = next;
+        A[offset] <=> buf[j];
+        next += 1;
+        // Leave buf[j] with the next unsorted item.
+        // But offsets[bin] might be in the region we already read.
+        if bkt == curBucket && offset >= bufstart {
+          used_buf -= 1;
+          buf[j] <=> buf[used_buf];
         }
         j += 1;
       }
     }
   }
 
-  // Compute the array to return
+  // Compute the array to return using Ends
   var Ret:[0..<nBuckets] bktCount;
 
-  var sum: int = region.low;
-  for (r, count, bucketIdx) in zip(Ret, Counts, Counts.domain) {
-    r.start = sum;
+  for i in 0..<nBuckets {
+    var end = Ends[i];
+    var prevEnd = 0;
+    if i > 0 {
+      prevEnd = Ends[i-1];
+    }
+    var count = end - prevEnd;
+    var start = end - count;
+    ref r = Ret[i];
+    r.start = start;
     r.count = count;
-    r.isEqual = split.bucketHasEqualityBound(bucketIdx);
-    sum += count;
+    r.isEqual = split.bucketHasEqualityBound(i);
   }
 
   return Ret;
-}*/
+}
 
 proc serialStablePartition(const inputRegion: range,
                            const Input,

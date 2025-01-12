@@ -38,6 +38,8 @@ const myDefaultComparator = new integralKeyPartComparator();
 
 // nSplit positive: create that many splitters
 // nSplit negative: create a sample from the Input array
+// nTasks == 0 means serial partitioner
+// nTasks == -1 means serial in-place partitioner
 proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   writeln("testPartition(n=", n, ", nSplit=", nSplit, ", ",
           "useEqualBuckets=", useEqualBuckets, ", nTasks=", nTasks, ")");
@@ -89,11 +91,19 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   //writeln("partitioning ", Input);
   //writeln("splitters ", sp);
 
-  const Bkts = partition(Input.domain, Input.domain.dim(0), Input,
-                         OutputShift=none, Output,
-                         sp, myDefaultComparator,
-                         nTasksPerLocale=nTasksPerLocale,
-                         noSerialPartition=nTasks>0);
+  var Bkts: [0..<nBuckets] bktCount;
+
+  if nTasks >= 0 {
+    Bkts = partition(Input.domain, Input.domain.dim(0), Input,
+                     OutputShift=none, Output,
+                     sp, myDefaultComparator,
+                     nTasksPerLocale=nTasksPerLocale,
+                     noSerialPartition=nTasks>0);
+  } else {
+    Output = Input;
+    Bkts = serialUnstablePartition(Output.domain.dim(0), Output,
+                                   sp, myDefaultComparator);
+  }
 
   //writeln("output ", Output);
 
@@ -159,16 +169,18 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
   assert(total == n);
 
 
-  // check also that the partitioning is stable
-  Input = 0..<n;
-  Output = -1;
-  var ExpectOutput = Input;
-  partition(Input.domain, Input.domain.dim(0), Input,
-            OutputShift=none, Output,
-            sp, myDefaultComparator,
-            nTasksPerLocale=nTasksPerLocale,
-            noSerialPartition=nTasks>0);
-  assert(Output.equals(ExpectOutput));
+  if nTasks >= 0 {
+    // check also that the partitioning is stable
+    Input = 0..<n;
+    Output = -1;
+    var ExpectOutput = Input;
+    partition(Input.domain, Input.domain.dim(0), Input,
+              OutputShift=none, Output,
+              sp, myDefaultComparator,
+              nTasksPerLocale=nTasksPerLocale,
+              noSerialPartition=nTasks>0);
+    assert(Output.equals(ExpectOutput));
+  }
 }
 
 proc testPartitionsEven(n: int, nSplit: int) {
@@ -786,10 +798,19 @@ proc runTests() {
 
   // test partition
 
+  // test serial partition
   testPartition(10, 4, false, 0);
   testPartition(10, 4, true, 0);
   testPartition(100, 20, false, 0);
   testPartition(100, 20, true, 0);
+
+  // test serial in-place partition
+  testPartition(10, 4, false, -1);
+  testPartition(10, 4, true, -1);
+  testPartition(100, 20, false, -1);
+  testPartition(100, 20, true, -1);
+  testPartition(10000, 100, false, -1);
+  testPartition(10000, 100, true, -1);
 
   testPartition(10, 4, false, 1);
   testPartition(10, 4, true, 1);
@@ -806,6 +827,8 @@ proc runTests() {
   // test with random samples
   testPartition(10, -4, false, 0);
   testPartition(100, -20, false, 0);
+  testPartition(10, -4, false, -1);
+  testPartition(100, -20, false, -1);
   testPartition(10, -4, false, 1);
   testPartition(100, -20, false, 1);
   testPartition(10, -4, false, 2);
