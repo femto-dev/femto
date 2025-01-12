@@ -396,6 +396,28 @@ proc testSplitters() {
 
 }
 
+proc testBucketBoundary() {
+  writeln("testBucketBoundary())");
+
+  for x in [0:uint,
+            1:uint,
+            127:uint,
+            128:uint,
+            1000:uint,
+            10000:uint,
+            10000000:uint,
+            max(uint(16)):uint,
+            max(uint(32)):uint,
+            (max(int)-1):uint,
+            max(int):uint,
+            max(uint)-1,
+            max(uint)] {
+    var tup = encodeToTuple(x);
+    var y = decodeFromTuple(tup);
+    assert(x == y);
+  }
+}
+
 proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
               noBaseCase:bool, random: bool, sorter:string) {
 
@@ -443,18 +465,31 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
     halt("Unknown sorter in testSort");
   }
 
-  assert(BucketBoundaries[0] == boundaryTypeSortedBucket);
+ 
+  /*for i in 0..<n {
+    writeln("Elts[", i, "] = ", Elts[i], " BucketBoundaries[", i, "] = ",
+        BucketBoundaries[i]);
+  }*/
+
+  assert(isInA(BucketBoundaries[0]));
+  assert(isBucketBoundary(BucketBoundaries[0]));
+  assert(!isUnsortedBucketBoundary(BucketBoundaries[0]));
+  var lastBoundary = BucketBoundaries[0];
   for i in 1..<n {
     if Elts[i-1] > Elts[i] {
       writeln("unsorted at element ", i);
       assert(false);
     }
-    assert(BucketBoundaries[i] != boundaryTypeUnsortedBucket);
-    // there might not be a bucket boundary every time the element
-    // differs; but if there is, we can't have the same element in
-    // a previous bucket
-    if BucketBoundaries[i] == boundaryTypeSortedBucket {
+    if isBucketBoundary(BucketBoundaries[i]) {
+      assert(isInA(BucketBoundaries[i]));
+      assert(!isUnsortedBucketBoundary(BucketBoundaries[i]));
+      // there might not be a bucket boundary every time the element
+      // differs; but if there is, we can't have the same element in
+      // a previous bucket
       assert(Elts[i-1] < Elts[i]);
+      lastBoundary = BucketBoundaries[i];
+    } else if (isEqualBucketBoundary(lastBoundary)) {
+      assert(Elts[i-1] == Elts[i]);
     }
   }
 
@@ -602,7 +637,7 @@ proc testSortAndTrackEqual(n: int) {
 proc testSorts() {
   var seed = 1;
   for sorter in ["sample", "radix"] {
-    for n in [10, 100, 300, 500, 1_000, 10_000, 100_000] {
+    for n in [10, 30, 100, 300, 500, 1_000, 10_000, 100_000] {
       for max in [0, 10, 100, 100_000, max(uint)] {
         for r in [false, true] {
           proc help(param logBuckets) {
@@ -860,6 +895,9 @@ proc runTests() {
   // test creating splitters in other cases
   testSplitters();
 
+  // test bucket boundary helpers
+  testBucketBoundary();
+
   // test sorters
   testSorts();
 }
@@ -955,15 +993,15 @@ proc testTiming() {
     var stdunstable: Time.stopwatch;
     if !isDistributedDomain(Dom) {
       for trial in 0..<ntrials {
-        BucketBoundaries = boundaryTypeNotBoundary;
-        BucketBoundaries[0] = boundaryTypeSortedBucket;
+        BucketBoundaries = 0;
+        BucketBoundaries[0] = boundaryTypeBaseCaseSortedBucketInA;
         fillRandomTuples(Elts);
         stdstable.start();
         sort(Elts, new testEltKeyPartComparator(), region=0..<n, stable=true);
         forall i in 0..<n {
           if i > 0 {
             if Elts[i-1] < Elts[i] {
-              BucketBoundaries[i] = boundaryTypeSortedBucket;
+              BucketBoundaries[i] = boundaryTypeBaseCaseSortedBucketInA;
             }
           }
         }
@@ -971,15 +1009,15 @@ proc testTiming() {
       }
 
       for trial in 0..<ntrials {
-        BucketBoundaries = boundaryTypeNotBoundary;
-        BucketBoundaries[0] = boundaryTypeSortedBucket;
+        BucketBoundaries = 0;
+        BucketBoundaries[0] = boundaryTypeBaseCaseSortedBucketInA;
         fillRandomTuples(Elts);
         stdunstable.start();
         sort(Elts, new testEltKeyPartComparator(), region=0..<n, stable=false);
         forall i in 0..<n {
           if i > 0 {
             if Elts[i-1] < Elts[i] {
-              BucketBoundaries[i] = boundaryTypeSortedBucket;
+              BucketBoundaries[i] = boundaryTypeBaseCaseSortedBucketInA;
             }
           }
         }

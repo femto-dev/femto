@@ -1731,9 +1731,33 @@ proc partitioningSorter.createSampleSplitters(ref A: [],
   return split;
 }
 
-param boundaryTypeNotBoundary: uint(8) = 0;
-param boundaryTypeSortedBucket: uint(8) = 1;
-param boundaryTypeUnsortedBucket: uint(8) = 2;
+// "not boundary" is indicated by any number i with 0 <= i < 250
+param boundaryTypeMaxNotBoundary: uint(8) = 249;
+param boundaryTypeUnsortedBucketInScratch: uint(8) = 250;
+param boundaryTypeUnsortedBucketInA: uint(8) = 251;
+param boundaryTypeEqualBucketInScratch: uint(8) = 252;
+param boundaryTypeEqualBucketInA: uint(8) = 253;
+param boundaryTypeBaseCaseSortedBucketInScratch: uint(8) = 254;
+param boundaryTypeBaseCaseSortedBucketInA: uint(8) = 255;
+
+inline proc isBucketBoundary(boundaryType: uint(8)) {
+  return boundaryTypeUnsortedBucketInScratch <= boundaryType;
+}
+inline proc isInA(boundaryType: uint(8)) {
+  return (boundaryType & 1) > 0;
+}
+inline proc isBaseCaseBoundary(boundaryType: uint(8)) {
+  return boundaryTypeBaseCaseSortedBucketInScratch <= boundaryType &&
+         boundaryType <= boundaryTypeBaseCaseSortedBucketInA;
+}
+inline proc isEqualBucketBoundary(boundaryType: uint(8)) {
+  return boundaryTypeEqualBucketInScratch <= boundaryType &&
+         boundaryType <= boundaryTypeEqualBucketInA;
+}
+inline proc isUnsortedBucketBoundary(boundaryType: uint(8)) {
+  return boundaryTypeUnsortedBucketInScratch <= boundaryType &&
+         boundaryType <= boundaryTypeUnsortedBucketInA;
+}
 
 private proc partitionSortBaseCase(ref A: [], region: range, comparator) {
   if region.size == 0 {
@@ -1804,6 +1828,7 @@ proc partitioningSorter.handleOuterBucket(ref A: [],
                                           comparator,
                                           startbit: int,
                                           obkt: bktCount,
+                                          ref boundaryAgg:DstAggregator(uint(8)),
                                           ifAllLocal: bool) {
 
   //writeln("handleOuterBucket ", outerRegion, " baseCaseLimit=", baseCaseLimit);
@@ -1817,21 +1842,27 @@ proc partitioningSorter.handleOuterBucket(ref A: [],
   } else if obkt.count == 1 {
     local ifAllLocal {
       A[obkt.start] = Scratch[obkt.start];
-      BucketBoundaries[obkt.start] = boundaryTypeSortedBucket;
+      setBucketBoundaries(BucketBoundaries, boundaryTypeBaseCaseSortedBucketInA,
+                          obkt.start, obkt.count, startbit,
+                          boundaryAgg);
     }
 
   } else if obkt.isEqual {
     //writeln("outer bucket is equal");
     local ifAllLocal {
       A[outerRegion] = Scratch[outerRegion];
-      BucketBoundaries[obkt.start] = boundaryTypeSortedBucket;
+      setBucketBoundaries(BucketBoundaries, boundaryTypeEqualBucketInA,
+                          obkt.start, obkt.count, startbit,
+                          boundaryAgg);
     }
 
   } else if obkt.count <= baseCaseLimit {
     // copy it from Scratch back into A, mark the boundary, and sort
     local ifAllLocal {
       A[outerRegion] = Scratch[outerRegion];
-      BucketBoundaries[obkt.start] = boundaryTypeSortedBucket;
+      setBucketBoundaries(BucketBoundaries, boundaryTypeBaseCaseSortedBucketInA,
+                          obkt.start, obkt.count, startbit,
+                          boundaryAgg);
       partitionSortBaseCase(A, outerRegion, comparator);
     }
 
@@ -1876,7 +1907,8 @@ proc partitioningSorter.handleOuterBucket(ref A: [],
         //writeln(InnerCounts);
 
         // process the inner buckets to mark bucket boundaries
-        forall bkt in InnerResult {
+        forall bkt in InnerResult
+        with (var iBoundaryAgg = new DstAggregator(uint(8))) {
         //forall (innerRegion, innerBktIdx, activeLocIdx, taskIdInLoc)
         //in divideByBuckets(A, outerRegion, InnerCounts, InnerEnds,
         //                   nTasksPerLocale, innerActiveLocs) {
@@ -1884,23 +1916,32 @@ proc partitioningSorter.handleOuterBucket(ref A: [],
             // nothing to do
           } else if bkt.count == 1 {
             //writeln("inner size 1");
-            BucketBoundaries[bkt.start] = boundaryTypeSortedBucket;
-
+            setBucketBoundaries(BucketBoundaries, boundaryTypeBaseCaseSortedBucketInA,
+                                bkt.start, bkt.count, startbit+radixBits,
+                                iBoundaryAgg);
+       
           } else if bkt.isEqual {
             //writeln("inner equal");
-            BucketBoundaries[bkt.start] = boundaryTypeSortedBucket;
-
+            setBucketBoundaries(BucketBoundaries, boundaryTypeEqualBucketInA,
+                                bkt.start, bkt.count, startbit+radixBits,
+                                iBoundaryAgg);
+ 
           } else if bkt.count <= baseCaseLimit {
             //writeln("inner base case");
             // mark the boundary and sort it
-            BucketBoundaries[bkt.start] = boundaryTypeSortedBucket;
+            setBucketBoundaries(BucketBoundaries, boundaryTypeBaseCaseSortedBucketInA,
+                                bkt.start, bkt.count, startbit+radixBits,
+                                iBoundaryAgg);
             partitionSortBaseCase(A, bkt.start..#bkt.count, comparator);
 
           } else {
             //writeln("inner other");
             // it won't be fully sorted, but we have established (by partitioning)
             // that the element at innerRegion.low differs from the previous
-            BucketBoundaries[bkt.start] = boundaryTypeUnsortedBucket;
+            setBucketBoundaries(BucketBoundaries, boundaryTypeUnsortedBucketInA,
+                                bkt.start, bkt.count, startbit+radixBits,
+                                iBoundaryAgg);
+
             // note: this might write to the outer bucket start;
             // so outer bucket boundary is reset after inner buckets are handled
           }
@@ -1977,10 +2018,10 @@ proc partitioningSorter.sortStep(ref A: [],
 
   if EXTRA_CHECKS {
     // we should only call sortStep on unsorted buckets
-    assert(BucketBoundaries[region.low] == boundaryTypeUnsortedBucket);
+    assert(isUnsortedBucketBoundary(BucketBoundaries[region.low]));
     // we shouldn't call sortStep on something spanning bucket boundaries
     for i in region.low+1..region.high {
-      assert(BucketBoundaries[i] == boundaryTypeNotBoundary);
+      assert(!isBucketBoundary(BucketBoundaries[i]));
     }
   }
 
@@ -1988,7 +2029,7 @@ proc partitioningSorter.sortStep(ref A: [],
     //writeln("base case");
     // mark the boundary and sort it
     local ifAllLocal {
-      BucketBoundaries[region.low] = boundaryTypeSortedBucket;
+      BucketBoundaries[region.low] = boundaryTypeBaseCaseSortedBucketInA;
       partitionSortBaseCase(A, region, comparator);
     }
     return;
@@ -2063,17 +2104,20 @@ proc partitioningSorter.sortStep(ref A: [],
   // now process each bucket, moving elts from Scratch back to A in the process
 
   if sequential {
+    var boundaryAgg = new DstAggregator(uint(8));
     for bkt in OuterBkts {
       handleOuterBucket(A, Scratch, BucketBoundaries, comparator,
                         startbit=startbit,
                         bkt,
+                        boundaryAgg,
                         ifAllLocal=ifAllLocal);
     }
   } else {
-    forall bkt in OuterBkts {
+    forall bkt in OuterBkts with (var boundaryAgg = new DstAggregator(uint(8))){
       handleOuterBucket(A, Scratch, BucketBoundaries, comparator,
                         startbit=startbit,
                         bkt,
+                        boundaryAgg,
                         ifAllLocal=ifAllLocal);
     }
   }
@@ -2084,6 +2128,148 @@ proc partitioningSorter.sortStep(ref A: [],
   }*/
 }
 
+type encodedTupleType = 10*uint(8); // because 64 < 10*7
+param bktHeaderSize = 22; // 1 type + 1 saturated + 10 size + 10 startbit
+
+// encode x to a tuple of uint(8) using only the bottom 7 bits of each
+proc encodeToTuple(x: uint) {
+  var ret:encodedTupleType;
+  for param i in 0..<ret.size {
+    ret[i] = ((x >> (7*i)) & 0x7f):uint(8);
+  }
+  if EXTRA_CHECKS {
+    assert(decodeFromTuple(ret) == x);
+  }
+  return ret;
+}
+proc decodeFromTuple(tup: encodedTupleType) {
+  var ret: uint = 0;
+  for param i in 0..<tup.size {
+    ret |= tup[i]:uint << 7*i;
+  }
+  return ret;
+}
+
+proc partitioningSorter.setBucketBoundaries(ref BucketBoundaries: [] uint(8),
+                                            boundaryType: uint(8),
+                                            bktStart: int,
+                                            bktSize: int,
+                                            bktStartBit: int,
+                                            ref agg: DstAggregator(uint(8)))
+{
+  // set the first byte
+  agg.copy(BucketBoundaries[bktStart], boundaryType);
+  // if the bucket is large enough, set the subsequent bytes
+  if bktSize >= 2 {
+    var i = 1;
+    const saturatedSize = min(bktSize, boundaryTypeMaxNotBoundary): uint(8);
+    agg.copy(BucketBoundaries[bktStart+i], saturatedSize);
+    i += 1;
+
+    if bktSize >= bktHeaderSize {
+      // store the encoded bucket size
+      const sTup = encodeToTuple(bktSize);
+      for j in 0..<sTup.size {
+        agg.copy(BucketBoundaries[bktStart+i], sTup[j]);
+        i += 1;
+      }
+      // store the encoded start bit
+      const bTup = encodeToTuple(bktStartBit);
+      for j in 0..<bTup.size {
+        agg.copy(BucketBoundaries[bktStart+i], bTup[j]);
+        i += 1;
+      }
+      if EXTRA_CHECKS {
+        assert(i <= bktSize);
+      }
+    }
+  }
+
+  if EXTRA_CHECKS {
+    agg.flush();
+    /*writeln("checking setBucketBoundaries bktStart ", bktStart,
+            " bktSize ", bktSize, " bktStartBit ", bktStartBit);
+    for i in bktStart..#bktSize {
+      writeln("BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+    }*/
+    var gotBoundaryType: uint(8);
+    var gotBktSize: int;
+    var gotBktStartBit: int;
+    readBucketBoundary(BucketBoundaries, bktStart..#bktSize,
+                       bktStart, gotBoundaryType, gotBktSize, gotBktStartBit);
+    assert(gotBoundaryType == boundaryType);
+    assert(gotBktSize == bktSize);
+    if bktSize >= bktHeaderSize {
+      assert(gotBktStartBit == bktStartBit);
+    } else {
+      assert(gotBktStartBit == 0);
+    }
+  }
+}
+
+proc partitioningSorter.readBucketBoundary(ref BucketBoundaries: [] uint(8),
+                                           allRegion:range,
+                                           bktStart: int,
+                                           out boundaryType: uint(8),
+                                           out bktSize: int,
+                                           out bktStartBit: int) : void {
+  /*writeln("readBucketBoundary ", allRegion, " bktStart ", bktStart);
+  for i in allRegion {
+    writeln("BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+  }*/
+
+  boundaryType = BucketBoundaries[bktStart];
+  const endAll = allRegion.high+1;
+  var bktSizeRead = false;
+  if bktStart + 1 < endAll {
+    var i = 1;
+    const saturatedSize = BucketBoundaries[bktStart+i];
+    i += 1;
+    if EXTRA_CHECKS && saturatedSize <= boundaryTypeMaxNotBoundary {
+      assert(bktStart + saturatedSize <= endAll);
+    }
+    if bktHeaderSize <= saturatedSize &&
+       saturatedSize <= boundaryTypeMaxNotBoundary {
+      var sTup: encodedTupleType;
+      for j in 0..<sTup.size {
+        sTup[j] = BucketBoundaries[bktStart+i];
+        i += 1;
+      }
+      bktSize = decodeFromTuple(sTup):int;
+      bktSizeRead = true;
+
+      var bTup: encodedTupleType;
+      for j in 0..<bTup.size {
+        bTup[j] = BucketBoundaries[bktStart+i];
+        i += 1;
+      }
+      bktStartBit = decodeFromTuple(bTup):int;
+    } else if saturatedSize <= 127 {
+      bktSize = saturatedSize;
+      bktSizeRead = true;
+    }
+  }
+
+  var computedBucketSize = 0;
+  if !bktSizeRead || EXTRA_CHECKS {
+    // compute the bucket size by scanning forward
+    var next = bktStart + 1;
+    while next < endAll && !isBucketBoundary(BucketBoundaries[next]) {
+      next += 1;
+    }
+    computedBucketSize = next - bktStart;
+  }
+
+  if !bktSizeRead {
+    bktSize = computedBucketSize;
+    bktStartBit = 0;
+  } else if EXTRA_CHECKS {
+    // check that the read bucket size matches the computed bucket size
+    assert(bktSize == computedBucketSize);
+  }
+}
+
+
 // This function computes the start of the next bucket containing
 // unsorted data that a task is responsible for.
 //   * 'taskRegion' is the region a task should handle (from divideIntoTasks)
@@ -2092,14 +2278,14 @@ proc partitioningSorter.sortStep(ref A: [],
 // returns a range indicating the bucket.
 //
 // Each task is responsible for buckets that start in its taskRegion.
-proc partitioningSorter.nextBucket(ref BucketBoundaries: [] uint(8),
-                                   taskRegion: range, allRegion:range,
-                                   in cur: int) {
+proc partitioningSorter.nextUnsortedBucket(ref BucketBoundaries: [] uint(8),
+                                           taskRegion: range, allRegion:range,
+                                           in cur: int,
+                                           out bktStartBit: int) {
   const end = taskRegion.high+1;
-  const endAll = allRegion.high+1;
-  // move 'cur' forward until we find the start of an unsorted bucket
-  // (skipped not-boundary elements would be handled in a previous chunk)
-  while cur < end && BucketBoundaries[cur] != boundaryTypeUnsortedBucket {
+
+  // move 'cur' forward until it finds a bucket boundary
+  while cur < end && !isBucketBoundary(BucketBoundaries[cur]) {
     cur += 1;
   }
   if cur >= end {
@@ -2107,37 +2293,29 @@ proc partitioningSorter.nextBucket(ref BucketBoundaries: [] uint(8),
     return end..end-1;
   }
 
-  //writeln("a. cur is ", cur, " taskRegion=", taskRegion, " allRegion=", allRegion);
-
-  if EXTRA_CHECKS {
-    assert(BucketBoundaries[cur] == boundaryTypeUnsortedBucket);
-  }
-
-  // find the next boundary marker
-  var nextBoundary = cur+1;
-  if nextBoundary > endAll {
-    nextBoundary = endAll;
-  }
-  // find the end of the unsorted area (perhaps in another task's area)
-  while nextBoundary < endAll &&
-        BucketBoundaries[nextBoundary] == boundaryTypeNotBoundary {
-    nextBoundary += 1;
-  }
-
-  //writeln("b. nextBoundary is ", nextBoundary);
-
-  if EXTRA_CHECKS {
-    assert(BucketBoundaries[cur] == boundaryTypeUnsortedBucket);
-    for i in cur+1..<nextBoundary {
-      assert(BucketBoundaries[i] == boundaryTypeNotBoundary);
+  // read forward in buckets until we find an unsorted bucket
+  while cur < end {
+    var foundType: uint(8);
+    var foundSize: int;
+    var foundStartBit: int;
+    readBucketBoundary(BucketBoundaries,
+                       allRegion,
+                       cur,
+                       /*out*/ foundType, foundSize, foundStartBit);
+    if isUnsortedBucketBoundary(foundType) {
+      bktStartBit = foundStartBit;
+      if EXTRA_CHECKS {
+        assert(taskRegion.contains(cur));
+        assert(allRegion.contains(cur));
+        assert(allRegion.contains(cur+foundSize-1));
+      }
+      return cur..#foundSize;
     }
-    if nextBoundary < endAll {
-      assert(BucketBoundaries[nextBoundary] != boundaryTypeNotBoundary);
-    }
+    cur += foundSize;
   }
 
-  // now the region of interest is
-  return cur..<nextBoundary;
+  // return empty since we found no unsorted buckets starting in the task region
+  return end..end-1;
 }
 
 /* A parallel partitioning sort.
@@ -2175,20 +2353,16 @@ proc partitioningSorter.psort(ref A: [],
     assert(BucketBoundaries.domain.dim(0).contains(region));
   }
 
-  if region.size <= baseCaseLimit {
-    // sort it and mark BucketBoundaries
-    partitionSortBaseCase(A, region, comparator);
-    return;
-  }
-
   /* for i in region {
     writeln("starting parallelPartitioningSort A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
 
   // do a partitioning sort step that is fully parallel
   var myNone = none;
-  if EXTRA_CHECKS {
-    BucketBoundaries[region.low] = boundaryTypeUnsortedBucket;
+  {
+    var agg: DstAggregator(uint(8));
+    setBucketBoundaries(BucketBoundaries, boundaryTypeUnsortedBucketInA,
+                        region.low, region.size, 0, agg);
   }
 
   var firstStepTime: Time.stopwatch;
@@ -2205,7 +2379,8 @@ proc partitioningSorter.psort(ref A: [],
     writeln("first step time : ", firstStepTime.elapsed());
   }
 
-  /*for i in region {
+  /*
+  for i in region {
     writeln("after step A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
 
@@ -2230,27 +2405,28 @@ proc partitioningSorter.psort(ref A: [],
     with (+ reduce nNotSorted) {
       if chunk.size > 0 &&
          region.contains(chunk.high+1) &&
-         BucketBoundaries[chunk.high+1] == boundaryTypeNotBoundary {
+         !isBucketBoundary(BucketBoundaries[chunk.high+1]) {
         //writeln(taskIdInLoc, " found a span for ", chunk);
         // there is an unsorted region starting at or before chunk.high
         // & such is the responsibility of this task.
         // where does it start?
         var cur = chunk.high;
-        while chunk.contains(cur) &&
-              BucketBoundaries[cur] == boundaryTypeNotBoundary {
+        while chunk.contains(cur) && !isBucketBoundary(BucketBoundaries[cur]) {
           cur -= 1;
         }
         //writeln("start position is ", cur);
         if chunk.contains(cur) &&
-           BucketBoundaries[cur] == boundaryTypeUnsortedBucket {
+           isUnsortedBucketBoundary(BucketBoundaries[cur]) {
           if EXTRA_CHECKS {
-            assert(BucketBoundaries[cur] == boundaryTypeUnsortedBucket);
-            assert(BucketBoundaries[cur+1] == boundaryTypeNotBoundary);
+            assert(isUnsortedBucketBoundary(BucketBoundaries[cur]));
+            assert(!isBucketBoundary(BucketBoundaries[cur+1]));
           }
 
           // it's this task's responsibility and it was a boundary bucket
           // so do a sort step to sort it
-          const bkt = nextBucket(BucketBoundaries, chunk, region, cur);
+          var bktStartBit = 0;
+          const bkt = nextUnsortedBucket(BucketBoundaries, chunk, region, cur,
+                                         /* out */ bktStartBit);
           //writeln(taskIdInLoc, " span sorting ", bkt);
 
           sortStep(A, Scratch, BucketBoundaries, bkt, comparator,
@@ -2293,7 +2469,9 @@ proc partitioningSorter.psort(ref A: [],
     while cur < end {
       //writeln("in sorting within task loop cur=", cur);
       // find the next unsorted bucket, starting at cur
-      var bkt = nextBucket(BucketBoundaries, chunk, region, cur);
+      var bktStartBit = 0;
+      var bkt = nextUnsortedBucket(BucketBoundaries, chunk, region, cur,
+                                   /*out*/ bktStartBit);
       // if the initial position has moved forward, record that in 'cur'
       cur = bkt.low;
 
@@ -2336,7 +2514,7 @@ proc psort(ref A: [],
     partitioningSorter.computeBaseCaseLimit(logBuckets, noBaseCase);
   if region.size <= baseCaseLimit {
     // sort it before allocating storage for the sorter state
-    BucketBoundaries[region.low] = boundaryTypeSortedBucket;
+    BucketBoundaries[region.low] = boundaryTypeBaseCaseSortedBucketInA;
     partitionSortBaseCase(A, region, comparator);
     return;
   }
