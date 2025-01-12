@@ -93,16 +93,28 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
 
   var Bkts: [0..<nBuckets] bktCount;
 
-  if nTasks >= 0 {
+  if nTasks > 0 {
     Bkts = partition(Input.domain, Input.domain.dim(0), Input,
                      OutputShift=none, Output,
                      sp, myDefaultComparator,
                      nTasksPerLocale=nTasksPerLocale,
                      noSerialPartition=nTasks>0);
-  } else {
+  } else if nTasks == 0 {
+    var Counts:[0..<nBuckets] int;
+    var Starts:[0..<nBuckets] int;
+    serialStablePartition(Input.domain.dim(0), Input,
+                          OutputShift=none, Output,
+                          sp, myDefaultComparator,
+                          filterBucket=none,
+                          Counts, Starts, Bkts);
+
+  } else if nTasks == -1 {
+    var Starts:[0..<nBuckets] int;
+    var Ends:[0..<nBuckets] int;
     Output = Input;
-    Bkts = serialUnstablePartition(Output.domain.dim(0), Output,
-                                   sp, myDefaultComparator);
+    serialUnstablePartition(Output.domain.dim(0), Output,
+                            sp, myDefaultComparator,
+                            Starts, Ends, Bkts);
   }
 
   //writeln("output ", Output);

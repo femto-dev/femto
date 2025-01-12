@@ -456,6 +456,17 @@ record splitters : writeSerializable {
     writer.write(")\n");
   }
 
+  proc summary() {
+    var ret = new splittersSummary(logSplitters, myNumBuckets, equalBuckets);
+    if EXTRA_CHECKS {
+      assert(ret.numBuckets == numBuckets);
+      for i in 0..<numBuckets {
+        assert(ret.bucketHasEqualityBound(i) == bucketHasEqualityBound(i));
+      }
+    }
+    return ret;
+  }
+
   proc numBuckets {
     if equalBuckets {
       return myNumBuckets*2-1;
@@ -518,6 +529,7 @@ record splitters : writeSerializable {
     }
     return false;
   }
+
   // things in the bucket are < the result of this function
   proc bucketEqualityBound(bucketIdx: int) const ref {
     return sortedSplitter((bucketIdx-1)/2);
@@ -612,6 +624,30 @@ record splitters : writeSerializable {
   }
 } // end record splitters
 
+/* helper record for splitters that doesn't actually include the splitters,
+   only the bounds information */
+pragma "always RVF" // bug workaround
+record splittersSummary {
+  var logSplitters: int;
+  var myNumBuckets: int; // number of buckets if no equality buckets
+  var equalBuckets: bool;
+
+  proc numBuckets {
+    if equalBuckets {
+      return myNumBuckets*2-1;
+    } else {
+      return myNumBuckets;
+    }
+  }
+
+  proc bucketHasEqualityBound(bucketIdx: int) {
+    if equalBuckets {
+      return bucketIdx % 2 == 1;
+    }
+    return false;
+  }
+}
+
 proc isSampleSplitters(type splitType) param {
   return isSubtype(splitType, splitters);
 }
@@ -656,7 +692,18 @@ record radixSplitters : writeSerializable {
     writer.write(")\n");
   }
 
-  proc numBuckets {
+  proc summary() {
+    var ret = new radixSplittersSummary(radixBits, startbit, endbit);
+    if EXTRA_CHECKS {
+      assert(ret.numBuckets == numBuckets);
+      for i in 0..<numBuckets {
+        assert(ret.bucketHasEqualityBound(i) == bucketHasEqualityBound(i));
+      }
+    }
+    return ret;
+  }
+
+  proc numBuckets param {
     return (1 << radixBits) + 2; // +2 for end-before and end-after bins
   }
 
@@ -665,6 +712,7 @@ record radixSplitters : writeSerializable {
            bucketIdx == numBuckets - 1 ||
            startbit >= endbit - radixBits;
   }
+
 
   inline proc bucketForRecord(a, comparator) {
     return myGetBin(a, comparator, startbit, radixBits);
@@ -689,6 +737,23 @@ record radixSplitters : writeSerializable {
     }
   }
 } // end record radixSplitters
+
+pragma "always RVF" // bug workaround
+record radixSplittersSummary {
+  var radixBits: int;
+  var startbit: int;
+  var endbit: int;
+
+  proc numBuckets {
+    return (1 << radixBits) + 2; // +2 for end-before and end-after bins
+  }
+
+  proc bucketHasEqualityBound(bucketIdx: int) {
+    return bucketIdx == 0 ||
+           bucketIdx == numBuckets - 1 ||
+           startbit >= endbit - radixBits;
+  }
+}
 
 class PartitionPerTaskState {
   type eltType;
@@ -1057,12 +1122,19 @@ proc partition(const InputDomain: domain(?),
     assert(found);
   }
 
+  const nBuckets = split.numBuckets;
+
   if nTasksPerLocale <= 1 && activeLocs.size <= 1 && !noSerialPartition {
-    return serialStablePartition(inputRegion, Input, OutputShift, Output,
-                                 split, comparator, filterBucket);
+    var Counts:[0..<nBuckets] int;
+    var Starts:[0..<nBuckets] int;
+    var Ret: [0..<nBuckets] bktCount;
+
+    serialStablePartition(inputRegion, Input, OutputShift, Output,
+                          split, comparator, filterBucket,
+                          Counts, Starts, Ret);
+    return Ret;
   }
 
-  const nBuckets = split.numBuckets;
   const nActiveLocales = activeLocs.size;
   const countsPerBucket = nActiveLocales*nTasksPerLocale;
   const countsSize = nBuckets*countsPerBucket;
@@ -1071,42 +1143,64 @@ proc partition(const InputDomain: domain(?),
     // allocate local counts as a local array which should go OK
     // when working with 1 or 2 locales and avoid distributed array creation
     // overheads.
-    var Counts: [0..<countsSize] int;
-    return parStablePartition(InputDomain, inputRegion, Input,
-                              OutputShift, Output,
-                              split, comparator, filterBucket,
-                              nTasksPerLocale, activeLocs, Counts);
+    var GlobCounts: [0..<countsSize] int;
+    var Ends:[0..<nBuckets] int;
+    var Ret: [0..<nBuckets] bktCount;
+
+    parStablePartition(InputDomain, inputRegion, Input,
+                       OutputShift, Output,
+                       split, comparator, filterBucket,
+                       nTasksPerLocale, activeLocs,
+                       GlobCounts, Ends, Ret);
+    return Ret;
+
   } else {
-    // use a distributed counts array
-    const CountsDom = blockDist.createDomain(0..<countsSize);
-    var Counts: [CountsDom] int;
-    return parStablePartition(InputDomain, inputRegion, Input,
-                              OutputShift, Output,
-                              split, comparator, filterBucket,
-                              nTasksPerLocale, activeLocs, Counts);
+    // use a distributed counts arrays
+    const GlobCountsDom = blockDist.createDomain(0..<countsSize);
+    var GlobCounts: [GlobCountsDom] int;
+    const CountsDom = blockDist.createDomain(0..<nBuckets);
+    var Ends:[CountsDom] int;
+    var Ret:[0..<nBuckets] bktCount;
+
+    parStablePartition(InputDomain, inputRegion, Input,
+                       OutputShift, Output,
+                       split, comparator, filterBucket,
+                       nTasksPerLocale, activeLocs,
+                       GlobCounts, Ends, Ret);
+    return Ret;
   }
 }
 
 proc serialUnstablePartition(const region: range,
                              ref A: [],
                              split,
-                             comparator) {
+                             comparator,
+                             ref Starts:[] int,
+                             ref Ends:[] int,
+                             ref Ret:[] bktCount) : void {
   const nBuckets = split.numBuckets;
 
-  var Starts:[0..<nBuckets] int;
-  var Ends:[0..<nBuckets] int;
+  if EXTRA_CHECKS {
+    assert(Starts.domain.dim(0) == 0..<nBuckets);
+    assert(Ends.domain.dim(0) == 0..<nBuckets);
+    assert(Ret.domain.dim(0) == 0..<nBuckets);
+    for i in 0..<nBuckets {
+      assert(Starts[i] == 0);
+      assert(Ends[i] == 0);
+    }
+  }
 
-  writeln("A ", A);
   // Step 1: count
   for (_,bin) in split.classify(A, region.low, region.high, comparator) {
     Starts[bin] += 1;
   }
-  writeln("Counts ", Starts);
 
   // Step 2: scan (this one is an exclusive scan)
   {
     var sum: int = region.low;
-    for (start, end) in zip(Starts, Ends) {
+    for i in 0..<nBuckets {
+      ref start = Starts[i];
+      ref end = Ends[i];
       var bktstart = sum;
       sum += start; // starts stores counts at first
       var bktend = sum;
@@ -1114,8 +1208,6 @@ proc serialUnstablePartition(const region: range,
       end = bktend;
     }
   }
-  writeln("Starts ", Starts);
-  writeln("Ends ", Ends);
 
   // Step 3: distribute
   var curBucket = 0;
@@ -1181,8 +1273,6 @@ proc serialUnstablePartition(const region: range,
   }
 
   // Compute the array to return using Ends
-  var Ret:[0..<nBuckets] bktCount;
-
   for i in 0..<nBuckets {
     var end = Ends[i];
     var prevEnd = 0;
@@ -1196,8 +1286,6 @@ proc serialUnstablePartition(const region: range,
     r.count = count;
     r.isEqual = split.bucketHasEqualityBound(i);
   }
-
-  return Ret;
 }
 
 proc serialStablePartition(const inputRegion: range,
@@ -1206,11 +1294,21 @@ proc serialStablePartition(const inputRegion: range,
                            ref Output,
                            split,
                            comparator,
-                           filterBucket) {
+                           filterBucket,
+                           ref Counts:[] int,
+                           ref Starts:[] int,
+                           ref Ret:[] bktCount) : void {
   const nBuckets = split.numBuckets;
 
-  var Counts:[0..<nBuckets] int;
-  var Starts:[0..<nBuckets] int;
+  if EXTRA_CHECKS {
+    assert(Counts.domain.dim(0) == 0..<nBuckets);
+    assert(Starts.domain.dim(0) == 0..<nBuckets);
+    assert(Ret.domain.dim(0) == 0..<nBuckets);
+    for i in 0..<nBuckets {
+      assert(Counts[i] == 0);
+      assert(Starts[i] == 0);
+    }
+  }
 
   // Step 1: count
   for (_,bkt) in split.classify(Input, inputRegion.low, inputRegion.high,
@@ -1247,7 +1345,6 @@ proc serialStablePartition(const inputRegion: range,
   }
 
   // Compute the array to return
-  var Ret:[0..<nBuckets] bktCount;
   var sum: int = 0;
   for (r, count, bucketIdx) in zip(Ret, Counts, Counts.domain) {
     var shift = 0;
@@ -1264,7 +1361,6 @@ proc serialStablePartition(const inputRegion: range,
   }
 
   //writeln("serialStablePartition returning ", Ret);
-  return Ret;
 }
 
 inline proc getGlobalCountIdx(bucketIdx: int,
@@ -1336,8 +1432,10 @@ proc parStablePartition(const InputDomain: domain(?),
                         split, comparator, filterBucket,
                         const nTasksPerLocale: int,
                         const activeLocs: [] locale,
-                        ref GlobCounts: [] int // may be distributed
-                       ) {
+                        // the following may be distributed
+                        ref GlobCounts: [] int,
+                        ref Ends:[] int,
+                        ref Ret:[] bktCount) : void {
 
   // GlobalCounts stores counts like this:
   //   count for bin 0, locale 0, task 0..<nTasksPerLocale
@@ -1358,6 +1456,19 @@ proc parStablePartition(const InputDomain: domain(?),
 
   const nBuckets = split.numBuckets;
   const nActiveLocales = activeLocs.size;
+
+  if EXTRA_CHECKS {
+    const globSize = nBuckets*nActiveLocales*nTasksPerLocale;
+    assert(GlobCounts.domain.dim(0) == 0..<globSize);
+    assert(Ends.domain.dim(0) == 0..<nBuckets);
+    assert(Ret.domain.dim(0) == 0..<nBuckets);
+    forall elt in GlobCounts {
+      assert(elt == 0);
+    }
+    forall elt in Ends {
+      assert(elt == 0);
+    }
+  }
 
   // Step 1: Count
   forall (activeLocIdx, locRegion)
@@ -1438,7 +1549,6 @@ proc parStablePartition(const InputDomain: domain(?),
   }
 
   // Compute the total counts to return
-  var Ends:[0..<nBuckets] int;
   forall (end, bucketIdx) in zip(Ends, Ends.domain)
   with (var agg = new SrcAggregator(int)) {
     // read the last entry for each bin
@@ -1450,8 +1560,12 @@ proc parStablePartition(const InputDomain: domain(?),
   }
   //writeln("parStablePartition Ends ", Ends);
 
-  var Ret:[0..<nBuckets] bktCount;
-  forall (r, bucketIdx) in zip(Ret, Ret.domain) {
+  const smm = split.summary();
+
+  forall (r, bucketIdx) in zip(Ret, Ret.domain)
+    // TODO: would like to use (with in smm) but that does not compile
+    // with an error about initialization order in conditional for INP_smm
+  {
     var end = Ends[bucketIdx];
     var prevEnd = 0;
     if bucketIdx > 0 {
@@ -1469,12 +1583,10 @@ proc parStablePartition(const InputDomain: domain(?),
 
     r.start = start + shift;
     r.count = count;
-    r.isEqual = split.bucketHasEqualityBound(bucketIdx);
+    r.isEqual = smm.bucketHasEqualityBound(bucketIdx);
   }
 
   //writeln("parStablePartition returning ", Ret);
-
-  return Ret;
 }
 
 
