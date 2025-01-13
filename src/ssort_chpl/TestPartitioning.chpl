@@ -152,8 +152,6 @@ proc testPartition(n: int, nSplit: int, useEqualBuckets: bool, nTasks: int) {
       equals = sp.bucketEqualityBound(bin);
     }
 
-    assert(Bkts[bin].isEqual == (equals != -1));
-
     //writeln("checking bounds for bin ", bin, " ", binStart..binEnd);
     for i in binStart..binEnd {
       if lower != -1 {
@@ -423,7 +421,7 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
 
   writeln("testSort(n=", n, ", max=", max, ", logBuckets=", logBuckets,
           ", seed=", seed, ", noBaseCase=", noBaseCase, ", random=", random,
-          ", sorter=", sorter, ")");
+          ", sorter='", sorter, "')");
 
   const Dom = makeBlockDomain(0..<n, Locales);
   var Elts: [Dom] uint;
@@ -569,6 +567,7 @@ proc testSortKeys(n: int, max: uint, seed: int, sorter:string) {
 }
 */
 
+/*
 proc testMarkBoundaries(region: range) {
   writeln("testMarkBoundaries(", region, ")");
 
@@ -587,6 +586,7 @@ proc testMarkBoundaries(region: range) {
   markBoundaries(Keys, Boundaries, region);
   assert(Boundaries.equals(ExpectBoundaries));
 }
+*/
 
 /*
 proc testSortAndTrackEqual(n: int) {
@@ -677,11 +677,11 @@ proc testSorts() {
   }*/
 
   // test markBoundaries
-  testMarkBoundaries(1..4);
+  /*testMarkBoundaries(1..4);
   testMarkBoundaries(10..60);
   testMarkBoundaries(100..200);
   testMarkBoundaries(1000..2000);
-  testMarkBoundaries(10000..20000);
+  testMarkBoundaries(10000..20000);*/
 
   /*
   testSortAndTrackEqual(0);
