@@ -417,11 +417,12 @@ proc testBucketBoundary() {
 }
 
 proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
-              noBaseCase:bool, random: bool, sorter:string) {
+              noBaseCase:bool, random: bool, fullBoundaries:bool,
+              sorter:string) {
 
   writeln("testSort(n=", n, ", max=", max, ", logBuckets=", logBuckets,
           ", seed=", seed, ", noBaseCase=", noBaseCase, ", random=", random,
-          ", sorter='", sorter, "')");
+          ", fullBoundaries=", fullBoundaries, ", sorter='", sorter, "')");
 
   const Dom = makeBlockDomain(0..<n, Locales);
   var Elts: [Dom] uint;
@@ -449,6 +450,7 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
           logBuckets=logBuckets,
           nTasksPerLocale=nTasksPerLocale,
           endbit=numBits(uint),
+          markAllEquals=fullBoundaries,
           noBaseCase=noBaseCase);
   } else if sorter == "radix" {
     psort(Elts, Scratch, BucketBoundaries,
@@ -458,6 +460,7 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
           logBuckets=logBuckets,
           nTasksPerLocale=nTasksPerLocale,
           endbit=numBits(uint),
+          markAllEquals=fullBoundaries,
           noBaseCase=noBaseCase);
   } else {
     halt("Unknown sorter in testSort");
@@ -488,6 +491,10 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
       lastBoundary = BucketBoundaries[i];
     } else if (isEqualBucketBoundary(lastBoundary)) {
       assert(Elts[i-1] == Elts[i]);
+    }
+    if fullBoundaries {
+      assert(isBucketBoundary(BucketBoundaries[i]) ||
+             isEqualBucketBoundary(lastBoundary));
     }
   }
 
@@ -639,25 +646,32 @@ proc testSorts() {
   for sorter in ["sample", "radix"] {
     for n in [10, 30, 100, 300, 500, 1_000, 10_000, 100_000] {
       for max in [0, 10, 100, 100_000, max(uint)] {
-        for r in [false, true] {
-          proc help(param logBuckets) {
-            testSort(n=n,max=max,logBuckets=logBuckets,seed=seed,noBaseCase=false,random=r,sorter);
-            testSort(n=n,max=max,logBuckets=logBuckets,seed=seed,noBaseCase=true,random=r,sorter);
-          }
+        for rnd in [false, true] {
+          for noBaseCase in [false, true] {
+            for fullBoundaries in [false, true] {
+              proc help(param logBuckets) {
+                testSort(n=n,max=max,logBuckets=logBuckets,seed=seed,
+                         noBaseCase=noBaseCase,random=rnd,fullBoundaries=fullBoundaries,sorter);
+              }
 
-          if n < 10_000 {
-            help(2);
-            help(4);
-            help(8);
-            if sorter != "radix" {
-              // radix sorter assumes radix divides key type
-              help(10);
+              // skip these as they are slow
+              if n >= 10_000 && noBaseCase {
+                continue;
+              }
+
+              help(2);
+              help(4);
+              help(8);
+              if sorter != "radix" {
+                // radix sorter assumes radix divides key type
+                help(10);
+              }
+              help(16);
+
+              seed += 1;
             }
-            help(16);
           }
         }
-
-        seed += 1;
       }
     }
   }
