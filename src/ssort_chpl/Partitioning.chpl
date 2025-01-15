@@ -1573,6 +1573,166 @@ proc parStablePartition(const InputDomain: domain(?),
 }
 
 
+/**
+ This iterator creates distributed parallelism to yield
+ a bucket index for each task to process.
+
+ Yields (region of bucket, bucket index, activeLocIdx, taskIdInLoc)
+
+ BucketCounts should be the size of each bucket
+ BucketEnds should be the indices (in Arr) just past the end of each bucket
+ Arr is a potentially distributed array that drives the parallelism.
+ 'region' is the region within Arr that was counted.
+
+ The Arr.targetLocales() must be in an increasing order by locale ID.
+
+ Calling code that needs a unique task identifier can use
+   activeLocIdx*nTasksPerLocale + taskIdInLoc
+   (if the locale indices can be packed)
+ or
+   here.id*nTasksPerLocale + taskIdInLoc
+   (if the locale indices need to fit into a global structure)
+
+ TODO: this has fairly high overhead in distributed settings;
+       it does a lot of GETs
+ */
+iter divideByBuckets(const Arr: [],
+                     const region: range,
+                     const Bkts: [] bktCount,
+                     nTasksPerLocale: int,
+                     const ref activeLocales
+                       = computeActiveLocales(Arr.domain, region)) {
+  if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
+  if Arr.domain.dim(0).strides != strideKind.one then
+    compilerError("divideByBuckets only supports non-strided domains");
+  yield (0);
+  halt("serial divideByBuckets should not be called");
+}
+iter divideByBuckets(param tag: iterKind,
+                     const Arr: [],
+                     const region: range,
+                     const Bkts: [] bktCount,
+                     const nTasksPerLocale: int,
+                     const ref activeLocales
+                       = computeActiveLocales(Arr.domain, region))
+ where tag == iterKind.standalone {
+
+  if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
+  if Arr.domain.dim(0).strides != strideKind.one then
+    compilerError("divideByBuckets only supports non-strided domains");
+  if !Arr.domain.hasSingleLocalSubdomain() {
+    compilerError("divideByBuckets only supports dists " +
+                  "with single local subdomain");
+    // note: it'd be possible to support; would just need to be written
+    // differently, and consider both
+    //  # local subdomains < nTasksPerLocale and the inverse.
+  }
+
+  var minIdV = max(int);
+  var maxIdV = min(int);
+  forall loc in activeLocales
+  with (min reduce minIdV, max reduce maxIdV) {
+    minIdV = min(minIdV, loc.id);
+    maxIdV = max(maxIdV, loc.id);
+  }
+
+  if EXTRA_CHECKS {
+    var lastId = -1;
+    for loc in activeLocales {
+      if loc.id == lastId {
+        halt("divideByBuckets requires increasing locales assignment");
+      }
+    }
+  }
+
+  const arrShift = region.low;
+  const arrEnd = region.high;
+  const bucketsEnd = Bkts.domain.high;
+
+  var NBucketsPerLocale: [minIdV..maxIdV] int;
+  forall bkt in Bkts
+  with (+ reduce NBucketsPerLocale) {
+    const bucketStart = bkt.start;
+    const bucketSize = bkt.count;
+    // count it towards the locale owning the middle of the bucket
+    var checkIdx = bucketStart + bucketSize/2 + arrShift;
+    // any 0-size buckets at the end of buckets to the last locale
+    if checkIdx > arrEnd then checkIdx = arrEnd;
+    const localeId = Arr[checkIdx].locale.id;
+    NBucketsPerLocale[localeId] += 1;
+  }
+
+  const EndBucketPerLocale = + scan NBucketsPerLocale;
+
+  coforall (loc, locId) in zip(activeLocales, activeLocales.domain) {
+    on loc {
+      const countBucketsHere = NBucketsPerLocale[loc.id];
+      const endBucketHere = EndBucketPerLocale[loc.id];
+      const startBucketHere = endBucketHere - countBucketsHere;
+
+      // compute the array offset where work on this locale begins
+      const startHere = if startBucketHere <= bucketsEnd
+                        then Bkts[startBucketHere].start
+                        else Bkts[bucketsEnd-1].start;
+
+      // compute the total number of elements to be processed on this locale
+      var eltsHere = 0;
+      forall bucketIdx in startBucketHere..<endBucketHere
+      with (+ reduce eltsHere) {
+        eltsHere += Bkts[bucketIdx].count;
+      }
+
+      const perTask = divCeil(eltsHere, nTasksPerLocale);
+
+      //writeln("locale bucket region ", startBucketHere..<endBucketHere,
+      //        " elts ", eltsHere, " perTask ", perTask);
+
+      // compute the number of buckets for each task
+      // assuming that we just divide start..end into nTasksPerLocale equally
+      var useNTasksPerLocale = nTasksPerLocale;
+      if eltsHere == 0 {
+        // set it to 0 to create an empty array to do no work on this locale
+        useNTasksPerLocale = 0;
+      }
+      var NBucketsPerTask: [0..<useNTasksPerLocale] int;
+
+      if eltsHere > 0 {
+        forall bucketIdx in startBucketHere..<endBucketHere
+        with (+ reduce NBucketsPerTask) {
+          const bkt = Bkts[bucketIdx];
+          const bucketStart = bkt.start;
+          const bucketSize = bkt.count;
+          var checkIdx = bucketStart + bucketSize/2 - startHere;
+          // any 0-size buckets at the end of buckets to the last task
+          if checkIdx >= eltsHere then checkIdx = eltsHere-1;
+          const taskId = checkIdx / perTask;
+          NBucketsPerTask[taskId] += 1;
+        }
+      }
+
+      const EndBucketPerTask = + scan NBucketsPerTask;
+
+      coforall (nBucketsThisTask, endBucketThisTask, taskId)
+      in zip(NBucketsPerTask, EndBucketPerTask, 0..)
+      {
+        const startBucketThisTask = endBucketThisTask - nBucketsThisTask;
+        const startBucket = startBucketHere + startBucketThisTask;
+        const endBucket = startBucket + nBucketsThisTask;
+        for bucketIdx in startBucket..<endBucket {
+          const bkt = Bkts[bucketIdx];
+          const bucketStart = bkt.start;
+          const bucketSize = bkt.count;
+          const start = bucketStart + arrShift;
+          const end = start + bucketSize;
+          yield (start..<end, bucketIdx, locId, taskId);
+        }
+      }
+    }
+  }
+}
+
+
+
 ///// partitioning sort
 
 
@@ -1631,10 +1791,13 @@ proc partitioningSorter.init(type eltType, type splitterType,
   }
 }
 
-proc partitioningSorter.createSampleSplitters(const ref A: [],
-                                              region: range,
-                                              comparator,
-                                              activeLocs: [] locale)
+proc createSampleSplitters(const ref ADom,
+                           const ref A, /* array or array-like */
+                           region: range,
+                           comparator,
+                           activeLocs: [] locale,
+                           nTasksPerLocale: int,
+                           logBuckets: int)
  : splitters(A.eltType) {
 
   //writeln("creating splitters for ", region);
@@ -1651,7 +1814,7 @@ proc partitioningSorter.createSampleSplitters(const ref A: [],
   // each should set SortSampleSpace[perTask*taskId..#perTask]
   //forall (taskId, chk) in divideIntoTasks(Dom, nTasksPerLocale)
   forall (activeLocIdx, taskIdInLoc, chunk)
-  in divideIntoTasks(A.domain, region, nTasksPerLocale, activeLocs)
+  in divideIntoTasks(ADom, region, nTasksPerLocale, activeLocs)
   with (var agg = new DstAggregator(A.eltType)) {
     const taskId = activeLocIdx*nTasksPerLocale + taskIdInLoc;
     const dstFullRange = perTask*taskId..#perTask;
@@ -1722,12 +1885,14 @@ proc partitioningSorter.createSampleSplitters(const ref A: [],
   return split;
 }
 
-proc partitioningSorter.createRadixSplitters(/*const*/ ref A: [],
-                                             region: range,
-                                             comparator,
-                                             activeLocs: [] locale,
-                                             param radixBits: int,
-                                             in startbit: int)
+proc createRadixSplitters(/*const*/ ref A: [],
+                          region: range,
+                          comparator,
+                          activeLocs: [] locale,
+                          param radixBits: int,
+                          in startbit: int,
+                          in endbit: int,
+                          nTasksPerLocale: int)
  : radixSplitters(radixBits) {
 
   if startbit != 0 {
@@ -1979,11 +2144,16 @@ proc partitioningSorter.sortStep(ref A: [],
     const Split;
     const nextbit;
     if radixBits == 0 {
-      Split = createSampleSplitters(Input, region, comparator, activeLocs);
+      Split = createSampleSplitters(Input.domain, Input, region,
+                                    comparator, activeLocs,
+                                    nTasksPerLocale, logBuckets);
       nextbit = 0;
     } else {
       Split = createRadixSplitters(Input, region, comparator, activeLocs,
-                                   radixBits=radixBits, startbit=startbit);
+                                   radixBits=radixBits,
+                                   startbit=startbit,
+                                   endbit=endbit,
+                                   nTasksPerLocale=nTasksPerLocale);
       nextbit = startbit + radixBits;
     }
 
@@ -2183,6 +2353,30 @@ record spanHelper {
   var startbit: int;
 }
 
+proc partitioningSorter.nextBucket(ref BucketBoundaries: [] uint(8),
+                                   taskRegion: range,
+                                   allRegion:range,
+                                   in cur: int,
+                                   out bktType: uint(8)) {
+  const end = taskRegion.high+1;
+
+  // move 'cur' forward until it finds a bucket boundary
+  while cur < end && !isBucketBoundary(BucketBoundaries[cur]) {
+    cur += 1;
+  }
+  if cur >= end {
+    // return since it's in a different task's region
+    return end..end-1;
+  }
+
+  var bktSize: int;
+  var bktStartBit: int;
+  readBucketBoundary(BucketBoundaries, allRegion, cur,
+                     /* out */ bktType, bktSize, bktStartBit);
+
+  return cur..#bktSize;
+}
+
 // This function computes the start of the next bucket containing
 // unsorted data that a task is responsible for.
 //   * 'taskRegion' is the region a task should handle (from divideIntoTasks)
@@ -2302,11 +2496,14 @@ proc partitioningSortInitialPartition(ref A: [],
   const Split;
   const nextbit;
   if radixBits == 0 {
-    Split = s.createSampleSplitters(A, region, comparator, activeLocs);
+    Split = createSampleSplitters(A.domain, A, region, comparator, activeLocs,
+                                  s.nTasksPerLocale, s.logBuckets);
     nextbit = 0;
   } else {
-    Split = s.createRadixSplitters(A, region, comparator, activeLocs,
-                                   radixBits=s.radixBits, startbit=0);
+    Split = createRadixSplitters(A, region, comparator, activeLocs,
+                                 radixBits=s.radixBits,
+                                 startbit=0, endbit=s.endbit,
+                                 nTasksPerLocale=nTasksPerLocale);
     nextbit = s.radixBits;
   }
 
@@ -2340,7 +2537,7 @@ proc partitioningSortInitialPartition(ref A: [],
    Each call to parallelPartitioningSort will write to 'split' and 'rsplit',
    so make sure each gets its own if running in a parallel context.
 
-   Uses temporary space of similar size
+   Uses temporary space 'Scratch' of similar size
    to the sorted region, as well as BucketBoundaries.
 
    BucketBoundaries[i] indicates the relationship between A[i] and A[i-1]:
@@ -2353,8 +2550,8 @@ proc partitioningSortInitialPartition(ref A: [],
 
    Then input is in A and the output will be stored in A.
 
-   A and Scratch can be distributed.
-   The others should be local.
+   A, Scratch, and BucketBoundaries can be distributed
+   (and should be distributed the same).
  */
 proc partitioningSorter.psort(ref A: [],
                               ref Scratch: [] A.eltType,

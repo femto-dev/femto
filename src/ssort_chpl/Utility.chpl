@@ -393,162 +393,6 @@ iter divideByLocales(param tag: iterKind,
 }
 
 
-/**
- This iterator creates distributed parallelism to yield
- a bucket index for each task to process.
-
- Yields (region of bucket, bucket index, activeLocIdx, taskIdInLoc)
-
- BucketCounts should be the size of each bucket
- BucketEnds should be the indices (in Arr) just past the end of each bucket
- Arr is a potentially distributed array that drives the parallelism.
- 'region' is the region within Arr that was counted.
-
- The Arr.targetLocales() must be in an increasing order by locale ID.
-
- Calling code that needs a unique task identifier can use
-   activeLocIdx*nTasksPerLocale + taskIdInLoc
-   (if the locale indices can be packed)
- or
-   here.id*nTasksPerLocale + taskIdInLoc
-   (if the locale indices need to fit into a global structure)
- */
-iter divideByBuckets(const Arr: [],
-                     const region: range,
-                     const BucketCounts: [] int,
-                     const BucketEnds: [] int,
-                     nTasksPerLocale: int,
-                     const ref activeLocales
-                       = computeActiveLocales(Arr.domain, region)) {
-  if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
-  if Arr.domain.dim(0).strides != strideKind.one then
-    compilerError("divideByBuckets only supports non-strided domains");
-  yield (0);
-  halt("serial divideByBuckets should not be called");
-}
-iter divideByBuckets(param tag: iterKind,
-                     const Arr: [],
-                     const region: range,
-                     const BucketCounts: [] int,
-                     const BucketEnds: [] int,
-                     const nTasksPerLocale: int,
-                     const ref activeLocales
-                       = computeActiveLocales(Arr.domain, region))
- where tag == iterKind.standalone {
-
-  if Arr.domain.rank != 1 then compilerError("divideByBuckets only supports 1-D");
-  if Arr.domain.dim(0).strides != strideKind.one then
-    compilerError("divideByBuckets only supports non-strided domains");
-  if !Arr.domain.hasSingleLocalSubdomain() {
-    compilerError("divideByBuckets only supports dists " +
-                  "with single local subdomain");
-    // note: it'd be possible to support; would just need to be written
-    // differently, and consider both
-    //  # local subdomains < nTasksPerLocale and the inverse.
-  }
-
-  var minIdV = max(int);
-  var maxIdV = min(int);
-  forall loc in activeLocales
-  with (min reduce minIdV, max reduce maxIdV) {
-    minIdV = min(minIdV, loc.id);
-    maxIdV = max(maxIdV, loc.id);
-  }
-
-  if EXTRA_CHECKS {
-    var lastId = -1;
-    for loc in activeLocales {
-      if loc.id == lastId {
-        halt("divideByBuckets requires increasing locales assignment");
-      }
-    }
-  }
-
-  const arrShift = region.low;
-  const arrEnd = region.high;
-  const bucketsEnd = BucketCounts.domain.high;
-
-  var NBucketsPerLocale: [minIdV..maxIdV] int;
-  forall (bucketSize,bucketEnd) in zip(BucketCounts, BucketEnds)
-  with (+ reduce NBucketsPerLocale) {
-    const bucketStart = bucketEnd - bucketSize;
-    // count it towards the locale owning the middle of the bucket
-    var checkIdx = bucketStart + bucketSize/2 + arrShift;
-    // any 0-size buckets at the end of buckets to the last locale
-    if checkIdx > arrEnd then checkIdx = arrEnd;
-    const localeId = Arr[checkIdx].locale.id;
-    NBucketsPerLocale[localeId] += 1;
-  }
-
-  const EndBucketPerLocale = + scan NBucketsPerLocale;
-
-  coforall (loc, locId) in zip(activeLocales, activeLocales.domain) {
-    on loc {
-      const countBucketsHere = NBucketsPerLocale[loc.id];
-      const endBucketHere = EndBucketPerLocale[loc.id];
-      const startBucketHere = endBucketHere - countBucketsHere;
-
-      // compute the array offset where work on this locale begins
-      const startHere =
-        if startBucketHere <= bucketsEnd
-        then BucketEnds[startBucketHere] - BucketCounts[startBucketHere]
-        else BucketEnds[bucketsEnd-1] - BucketCounts[bucketsEnd-1];
-
-      // compute the total number of elements to be processed on this locale
-      var eltsHere = 0;
-      forall bucketIdx in startBucketHere..<endBucketHere
-      with (+ reduce eltsHere) {
-        eltsHere += BucketCounts[bucketIdx];
-      }
-
-      const perTask = divCeil(eltsHere, nTasksPerLocale);
-
-      //writeln("locale bucket region ", startBucketHere..<endBucketHere,
-      //        " elts ", eltsHere, " perTask ", perTask);
-
-      // compute the number of buckets for each task
-      // assuming that we just divide start..end into nTasksPerLocale equally
-      var useNTasksPerLocale = nTasksPerLocale;
-      if eltsHere == 0 {
-        // set it to 0 to create an empty array to do no work on this locale
-        useNTasksPerLocale = 0;
-      }
-      var NBucketsPerTask: [0..<useNTasksPerLocale] int;
-
-      if eltsHere > 0 {
-        forall bucketIdx in startBucketHere..<endBucketHere
-        with (+ reduce NBucketsPerTask) {
-          const bucketEnd = BucketEnds[bucketIdx];
-          const bucketSize = BucketCounts[bucketIdx];
-          const bucketStart = bucketEnd - bucketSize;
-          var checkIdx = bucketStart + bucketSize/2 - startHere;
-          // any 0-size buckets at the end of buckets to the last task
-          if checkIdx >= eltsHere then checkIdx = eltsHere-1;
-          const taskId = checkIdx / perTask;
-          NBucketsPerTask[taskId] += 1;
-        }
-      }
-
-      const EndBucketPerTask = + scan NBucketsPerTask;
-
-      coforall (nBucketsThisTask, endBucketThisTask, taskId)
-      in zip(NBucketsPerTask, EndBucketPerTask, 0..)
-      {
-        const startBucketThisTask = endBucketThisTask - nBucketsThisTask;
-        const startBucket = startBucketHere + startBucketThisTask;
-        const endBucket = startBucket + nBucketsThisTask;
-        for bucketIdx in startBucket..<endBucket {
-          const bucketSize = BucketCounts[bucketIdx];
-          const bucketStart = BucketEnds[bucketIdx] - bucketSize;
-          const start = bucketStart + arrShift;
-          const end = start + bucketSize;
-          yield (start..<end, bucketIdx, locId, taskId);
-        }
-      }
-    }
-  }
-}
-
 
 /* This function gives the size of an array of triangular indices
    for use with flattenTriangular.
@@ -1016,8 +860,6 @@ private proc computeAlphaMap(Input:[],
   // now count the number of unique characters
   const nUniqueChars = + reduce alphaMap;
 
-  writeln("nUniqueChars is ", nUniqueChars);
-
   // now set the value of each character
   {
     const tmp = + scan alphaMap;
@@ -1025,7 +867,6 @@ private proc computeAlphaMap(Input:[],
   }
 
   newMaxChar = max(1, nUniqueChars-1);
-  writeln("newMaxChar is ", newMaxChar);
 
   return alphaMap;
 }

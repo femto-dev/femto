@@ -31,6 +31,7 @@ use Random;
 import Math;
 import Map;
 import Time;
+import BlockDist;
 
 config const skipslow = false;
 
@@ -852,6 +853,185 @@ proc testMultiWayMerge() {
   }
 }
 
+proc testDivideByBucketsCases() {
+  writeln("testDivideByBucketsCases");
+
+  // test a case where the buckets are all a consistent size
+  // and everything divides evenly.
+  const n = numLocales*100;
+  const nBuckets = numLocales*10; // -> each bucket is 10 elements
+  const nTasksPerLocale = 5;
+  const Dom = BlockDist.blockDist.createDomain(0..<n);
+  var Input:[Dom] int;
+  var Counts:[0..<nBuckets] int = 10;
+  var Ends = + scan Counts;
+  var Bkts:[0..<nBuckets] bktCount;
+  for i in 0..<nBuckets {
+    Bkts[i].start = Ends[i] - Counts[i];
+    Bkts[i].count = Counts[i];
+  }
+  const region = Dom.dim(0);
+
+  var BucketIds:[Dom] int = -1; // store bucket IDs
+  var TaskIds:[Dom] int = -1; // store task IDs
+  var LocaleIds:[Dom] int = -1; // store locale IDs
+
+  forall (region, bucketIdx, activeLocIdx, taskIdInLoc)
+  in divideByBuckets(Input, region, Bkts, nTasksPerLocale) {
+    //writeln("region=", region, " bucketIdx=", bucketIdx,
+    //        " taskId=", taskId, " on here.id=", here.id);
+    assert(region.size == 10); // all buckets are 10 elements
+    const start = region.low;
+    const taskId = here.id * nTasksPerLocale + taskIdInLoc;
+    assert(start / 20 == taskId);
+    assert(start / 100 == here.id);
+  }
+}
+
+proc testDivideByBuckets(n: int, nBuckets: int,
+                         nTasksPerLocale: int,
+                         skew: bool) {
+  writeln("testDivideByBuckets(n=", n, ", nBuckets=", nBuckets,
+                               ", nTasksPerLocale=", nTasksPerLocale,
+                               ", skew=", skew, ")");
+
+  const Dom = BlockDist.blockDist.createDomain(0..<n);
+  const region = Dom.dim(0);
+  var Input:[Dom] int;
+  if skew == false {
+    Random.fillRandom(Input, min=0, max=nBuckets-1, seed=1);
+  } else {
+    Random.fillRandom(Input, min=0, max=(nBuckets-1)/2, seed=1);
+    forall x in Input {
+      if x < 2 && nBuckets > 2 {
+        x = nBuckets-2;
+      }
+    }
+  }
+  var Counts:[0..<nBuckets] int;
+  for x in Input {
+    Counts[x] += 1;
+  }
+  var Ends = + scan Counts;
+  var Bkts:[0..<nBuckets] bktCount;
+  for i in 0..<nBuckets {
+    Bkts[i].start = Ends[i] - Counts[i];
+    Bkts[i].count = Counts[i];
+  }
+
+  var BucketIdsCheck:[Dom] int = -1; // store bucket IDs
+
+  for (count,end,bucketIdx) in zip(Counts, Ends, 0..) {
+    const start = end - count;
+    for i in start..<end {
+      BucketIdsCheck[i] = bucketIdx;
+    }
+  }
+
+  var BucketIds:[Dom] int = -1; // store bucket IDs
+  var TaskIds:[Dom] int = -1; // store task IDs
+  var LocaleIds:[Dom] int = -1; // store locale IDs
+
+  forall (region, bucketIdx, activeLocIdx, taskIdInLoc)
+  in divideByBuckets(Input, region, Bkts, nTasksPerLocale) {
+    // check that the region's start is either 0 or an entry in Ends
+    var foundCount = false;
+    for c in Counts {
+      if region.size == c then foundCount = true;
+    }
+    assert(foundCount);
+    var foundEnd = false;
+    for e in Ends {
+      if region.low + region.size == e then foundEnd = true;
+    }
+    assert(foundEnd);
+
+    if region.size > 0 {
+      //writeln("bucket ", bucketIdx, " task ", taskId, " region ", region);
+      for i in region {
+        BucketIds[i] = bucketIdx;
+        TaskIds[i] = here.id*nTasksPerLocale + taskIdInLoc;
+        LocaleIds[i] = here.id;
+      }
+    }
+  }
+
+  assert(BucketIds.equals(BucketIdsCheck));
+
+  // check that the task assignment divides work in an increasing order
+  for i in Dom {
+    if i > 0 {
+      assert(TaskIds[i-1] <= TaskIds[i]);
+    }
+  }
+
+  // check that each bucket is on the same task
+  for bkt in 0..<nBuckets {
+    const end = Ends[bkt];
+    const count = Counts[bkt];
+    const start = end - count;
+    for i in start+1..<end {
+      assert(TaskIds[i-1] == TaskIds[i]);
+    }
+  }
+
+  // count the number of buckets containing items on the wrong locale
+  // it should be <= number of locales
+  var bktsWithWrongLocale = 0;
+  var eltsWithWrongLocale = 0;
+  for bkt in 0..<nBuckets {
+    const end = Ends[bkt];
+    const count = Counts[bkt];
+    const start = end - count;
+    var nWrongLocaleThisBkt = 0;
+    for i in start..<end {
+      if LocaleIds[i] != Input[i].locale.id {
+        nWrongLocaleThisBkt += 1;
+      }
+    }
+    eltsWithWrongLocale += nWrongLocaleThisBkt;
+    if nWrongLocaleThisBkt > 0 {
+      bktsWithWrongLocale += 1;
+    }
+  }
+
+  assert(bktsWithWrongLocale <= numLocales);
+  writeln(" % elements on wrong locale = ", 100.0*eltsWithWrongLocale/n);
+
+  // check that the tasks are dividing relatively evenly
+  var maxTask = max reduce TaskIds;
+  var CountByTask:[0..maxTask] int;
+  for elt in TaskIds {
+    CountByTask[elt] += 1;
+  }
+  var minEltsPerTask = min reduce CountByTask;
+  var maxEltsPerTask = max reduce CountByTask;
+  writeln(" minEltsPerTask = ", minEltsPerTask,
+          " maxEltsPerTask = ", maxEltsPerTask);
+  if nBuckets > 4*nTasksPerLocale*numLocales && !skew {
+    assert(maxEltsPerTask <= 10 + 2.0*minEltsPerTask);
+  }
+}
+
+proc testDivideByBuckets() {
+  testDivideByBucketsCases();
+
+  testDivideByBuckets(10, 3, 1, false);
+  testDivideByBuckets(10, 3, 2, false);
+  testDivideByBuckets(10, 3, 2, true);
+  testDivideByBuckets(100, 10, 5, false);
+  testDivideByBuckets(100, 7, 3, false);
+  testDivideByBuckets(100, 7, 3, true);
+
+  const n = 1_000;
+  const nBuckets = 8*numLocales*computeNumTasks(ignoreRunning=true);
+
+  var nTasksPerLocale = computeNumTasks(ignoreRunning=true);
+  testDivideByBuckets(n, nBuckets, nTasksPerLocale, false);
+  testDivideByBuckets(n, nBuckets, nTasksPerLocale, true);
+}
+
+
 
 proc runTests() {
   // test multi-way merge
@@ -911,6 +1091,9 @@ proc runTests() {
 
   // test bucket boundary helpers
   testBucketBoundary();
+
+  // test divideByBuckets
+  testDivideByBuckets();
 
   // test sorters
   testSorts();
