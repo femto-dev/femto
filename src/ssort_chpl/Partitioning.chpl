@@ -2357,6 +2357,10 @@ proc readBucketBoundary(ref BucketBoundaries: [] uint(8),
     bktStartBit = 0;
   } else if EXTRA_CHECKS {
     // check that the read bucket size matches the computed bucket size
+    if bktSize != computedBucketSize {
+      writeln("bucket boundary does not match at ", bktStart,
+              " read ", bktSize, " but computed ", computedBucketSize);
+    }
     assert(bktSize == computedBucketSize);
   }
 }
@@ -2625,11 +2629,11 @@ proc partitioningSorter.psort(ref A: [],
     }
   }
 
-  /* for i in region {
-    writeln("starting parallelPartitioningSort A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
+  /*for i in region {
+    writeln("starting psort A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
 
-  if region.size <= baseCaseLimit {
+  if region.size <= baseCaseLimit && !useExistingBuckets {
     var agg = new DstAggregator(uint(8));
     baseCase(A, BucketBoundaries, region, comparator, agg);
     return;
@@ -2795,8 +2799,7 @@ proc partitioningSorter.psort(ref A: [],
     writeln("span time ", spanTime.elapsed());
   }
 
-  /*
-  for i in region {
+  /*for i in region {
     writeln("after spans A[", i, "] = ", A[i], " Scratch[", i, "] = ", Scratch[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
 

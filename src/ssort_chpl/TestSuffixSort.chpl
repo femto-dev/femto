@@ -23,6 +23,7 @@ module TestSuffixSort {
 use SuffixSortImpl;
 use DifferenceCovers;
 use Utility;
+use Partitioning;
 
 use Math;
 use IO;
@@ -120,8 +121,10 @@ private proc checkSeeressesCase(inputArr, n:int,
                                 param bitsPerChar=4,
                                 simulateBig=false) {
   if TRACE {
-    writeln("  ", period,
-            " ", wordType:string, " ", bitsPerChar, " ", simulateBig);
+    writeln("checkSeeressesCase period=", period,
+            " wordType=", wordType:string,
+            " bitsPerChar=", bitsPerChar,
+            " simulateBig=", simulateBig);
   }
 
   const nTasksPerLocale = computeNumTasks(ignoreRunning=true);
@@ -129,12 +132,14 @@ private proc checkSeeressesCase(inputArr, n:int,
   var finalSortSimpleSortLimit: int = SIMPLE_SORT_LIMIT;
   var minBucketsPerTask: int = MIN_BUCKETS_PER_TASK;
   var minBucketsSpace: int = MIN_BUCKETS_SPACE;
+  var assumeNonLocal: bool = false;
 
   if simulateBig {
     finalSortNumPasses = 2;
     finalSortSimpleSortLimit = 2;
     minBucketsPerTask = 8;
     minBucketsSpace = 1000;
+    assumeNonLocal = true;
   } else {
     finalSortNumPasses = 1;
     finalSortSimpleSortLimit = 10000;
@@ -157,7 +162,8 @@ private proc checkSeeressesCase(inputArr, n:int,
                               finalSortNumPasses=finalSortNumPasses,
                               finalSortSimpleSortLimit=finalSortSimpleSortLimit,
                               minBucketsPerTask=minBucketsPerTask,
-                              minBucketsSpace=minBucketsSpace);
+                              minBucketsSpace=minBucketsSpace,
+                              assumeNonLocal=assumeNonLocal);
 
   const packed = packInput(cfg.loadWordType,
                            inputArr, n:cfg.offsetType, cfg.bitsPerChar);
@@ -589,18 +595,15 @@ proc testRankComparisons21() {
   assert(compareSampleRanks(o23, o22, n, Ranks, cover) < 0);
 
   // 21 vs 23 k=6  27 has rank 7 ; 29 has rank 8
-  // BUT n=24, so both of these are beyond the string, so 27 > 29
-  assert(compareSampleRanks(o21, o23, n, Ranks, cover) > 0);
-  assert(compareSampleRanks(p21, o23, n, Ranks, cover) > 0);
-  assert(compareSampleRanks(o23, o21, n, Ranks, cover) < 0);
+  assert(compareSampleRanks(o21, o23, n, Ranks, cover) < 0);
+  assert(compareSampleRanks(p21, o23, n, Ranks, cover) < 0);
+  assert(compareSampleRanks(o23, o21, n, Ranks, cover) > 0);
 
   // 4 vs 21 k=18  22 has rank 10 ; 39 has rank 6
-  // BUT n=24, so 39 is beyond the end of the string, so 22 > 39
   assert(compareSampleRanks(o4, o21, n, Ranks, cover) > 0);
   assert(compareSampleRanks(o21, o4, n, Ranks, cover) < 0);
 
   // 4 vs 22 k=17  21 has rank 9 ; 39 has rank 6
-  // BUT n=24, so 39 is beyond the end of the string, so 21 > 39
   assert(compareSampleRanks(o4, o22, n, Ranks, cover) > 0);
   assert(compareSampleRanks(o22, o4, n, Ranks, cover) < 0);
 
@@ -634,61 +637,61 @@ proc testSorts() {
 
   /* suffixes
 
-   aaaaaaaaaaaabbbbbbbbbbaa  0
-   aaaaaaaaaaabbbbbbbbbbaa   1
-   aaaaaaaaaabbbbbbbbbbaa    2
-   aaaaaaaaabbbbbbbbbbaa     3
-   aaaaaaaabbbbbbbbbbaa      4
-   aaaaaaabbbbbbbbbbaa       5
-   aaaaaabbbbbbbbbbaa        6
-   aaaaabbbbbbbbbbaa         7
-   aaaabbbbbbbbbbaa          8
-   aaabbbbbbbbbbaa           9
-   aabbbbbbbbbbaa           10
-   abbbbbbbbbbaa            11
-   bbbbbbbbbbaa             12
-   bbbbbbbbbaa              13
-   bbbbbbbbaa               14
-   bbbbbbbaa                15
-   bbbbbbaa                 16
-   bbbbbaa                  17
-   bbbbaa                   18
-   bbbaa                    19
-   bbaa                     20
-   baa                      21
-   aa                       22
-   A                        23
+   aaaaaaaa aaaabbbb bbbbbbaA  0
+   aaaaaaaa aaabbbbb bbbbbaA   1
+   aaaaaaaa aabbbbbb bbbbaA    2
+   aaaaaaaa abbbbbbb bbbaA     3
+   aaaaaaaa bbbbbbbb bbaA      4
+   aaaaaaab bbbbbbbb baA       5
+   aaaaaabb bbbbbbbb aA        6
+   aaaaabbb bbbbbbba A         7
+   aaaabbbb bbbbbbaA           8
+   aaabbbbb bbbbbaA            9
+   aabbbbbb bbbbaA            10
+   abbbbbbb bbbaA             11
+   bbbbbbbb bbaA              12
+   bbbbbbbb baA               13
+   bbbbbbbb aA                14
+   bbbbbbba A                 15
+   bbbbbbaA                   16
+   bbbbbaA                    17
+   bbbbaA                     18
+   bbbaA                      19
+   bbaA                       20
+   baA                        21
+   aA                         22
+   A                          23
 
    sorted suffixes
 
-   0 A                        23
-   1 aa                       22
+   0 A                          23
+   1 aA                         22
 
-   2 aaaaaaaaaaaabbbbbbbbbbaa  0 this group needs > 1 word
-   3 aaaaaaaaaaabbbbbbbbbbaa   1
-   4 aaaaaaaaaabbbbbbbbbbaa    2
-   5 aaaaaaaaabbbbbbbbbbaa     3
-   6 aaaaaaaabbbbbbbbbbaa      4
+   2 aaaaaaaa aaaabbbb bbbbbbaA  0 this group needs > 1 word
+   3 aaaaaaaa aaabbbbb bbbbbaA   1
+   4 aaaaaaaa aabbbbbb bbbbaA    2
+   5 aaaaaaaa abbbbbbb bbbaA     3
+   6 aaaaaaaa bbbbbbbb bbaA      4
 
-   7 aaaaaaabbbbbbbbbbaa       5
-   8 aaaaaabbbbbbbbbbaa        6
-   9 aaaaabbbbbbbbbbaa         7
-  10 aaaabbbbbbbbbbaa          8
-  11 aaabbbbbbbbbbaa           9
-  12 aabbbbbbbbbbaa           10
-  13 abbbbbbbbbbaa            11
+   7 aaaaaaab bbbbbbbb baA       5
+   8 aaaaaabb bbbbbbbb aA        6
+   9 aaaaabbb bbbbbbba A         7
+  10 aaaabbbb bbbbbbaA           8
+  11 aaabbbbb bbbbbaA            9
+  12 aabbbbbb bbbbaA            10
+  13 abbbbbbb bbbaA             11
 
-  14 baa                      21
-  15 bbaa                     20
-  16 bbbaa                    19
-  17 bbbbaa                   18
-  18 bbbbbaa                  17
-  19 bbbbbbaa                 16
-  20 bbbbbbbaa                15
+  14 baA                        21
+  15 bbaA                       20
+  16 bbbaA                      19
+  17 bbbbaA                     18
+  18 bbbbbaA                    17
+  19 bbbbbbaA                   16
+  20 bbbbbbba A                 15
 
-  21 bbbbbbbbaa               14 this group needs > 1 word
-  22 bbbbbbbbbaa              13
-  23 bbbbbbbbbbaa             12
+  21 bbbbbbbb aA                14 this group needs > 1 word
+  22 bbbbbbbb baA               13
+  23 bbbbbbbb bbaA              12
   */
 
   var Expect = [23, 22, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
@@ -713,6 +716,8 @@ proc testSorts() {
   const Packed = packInput(cfg.loadWordType, text, n, cfg.bitsPerChar);
 
   var A: [0..<n] offsetAndCached(cfg.offsetType, cfg.loadWordType);
+  var Empty: [A.domain] A.eltType;
+  var EmptyBoundaries: [A.domain] uint(8);
   for i in 0..<n {
     A[i] = makeOffsetAndCached(cfg, i, Packed, n, nBits);
   }
@@ -723,38 +728,81 @@ proc testSorts() {
   for i in 0..<n do writeln(i, " ", A[i]);*/
 
   var B = A;
+  var Scratch = Empty;
+  var Boundaries = EmptyBoundaries;
+
   // sort by 1 word
-  var stats: statistics;
-  sortByPrefixAndMark(cfg, Packed, B, 0..<n, readAgg, 1, stats);
+  //var stats: statistics;
+  writeln("Sorting by first word");
 
-  /*writeln("output");
-  for i in 0..<n do writeln(i, " ", B[i]);*/
+  sortByPrefixAndMark(cfg, Packed, none, none,
+                      B, Scratch, Boundaries, 0..<n, 1);
 
-  assert(isMarkedOffset(B[2]));
-  assert(isMarkedOffset(B[21]));
+  /*for i in 0..<n {
+    writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
+  }*/
+
+  assert(isBucketBoundary(Boundaries[2]));
+  assert(isEqualBucketBoundary(Boundaries[2]));
+  assert(isBucketBoundary(Boundaries[21]));
+  assert(isEqualBucketBoundary(Boundaries[21]));
 
   for i in 0..<n {
     if 2 <= i && i <= 6 {
-      var offset = unmarkedOffset(B[i]);
-      assert(0 <= offset && offset <= 4);
+      var off = offset(B[i]);
+      assert(0 <= off && off <= 4);
+      if i > 2 {
+        assert(!isBucketBoundary(Boundaries[i]));
+      }
     } else if 21 <= i && i <= 23 {
-      var offset = unmarkedOffset(B[i]);
-      assert(12 <= offset && offset <= 14);
+      var off = offset(B[i]);
+      assert(12 <= off && off <= 14);
+      if i > 21 {
+        assert(!isBucketBoundary(Boundaries[i]));
+      }
     } else {
-      assert(isMarkedOffset(B[i]));
-      var offset = unmarkedOffset(B[i]);
-      assert(offset == Expect[i]);
+      assert(isBucketBoundary(Boundaries[i]));
+      var off = offset(B[i]);
+      assert(off == Expect[i]);
     }
   }
 
   // sort by 2 words
+  writeln("Sorting by two words");
   B = A;
-  sortByPrefixAndMark(cfg, Packed, B, 0..<n, readAgg, 16, stats);
+  Scratch = Empty;
+  Boundaries = EmptyBoundaries;
+
+  sortByPrefixAndMark(cfg, Packed, none, none,
+                      B, Scratch, Boundaries, 0..<n, 16);
+
+  /*for i in 0..<n {
+    writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
+  }*/
 
   for i in 0..<n {
-    assert(isMarkedOffset(B[i]));
-    var offset = unmarkedOffset(B[i]);
-    assert(offset == Expect[i]);
+    assert(isBucketBoundary(Boundaries[i]));
+    var off = offset(B[i]);
+    assert(off == Expect[i]);
+  }
+
+  // sort by 3 words
+  writeln("Sorting by three words");
+  B = A;
+  Scratch = Empty;
+  Boundaries = EmptyBoundaries;
+
+  sortByPrefixAndMark(cfg, Packed, none, none,
+                      B, Scratch, Boundaries, 0..<n, 24);
+
+  /*for i in 0..<n {
+    writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
+  }*/
+
+  for i in 0..<n {
+    assert(isBucketBoundary(Boundaries[i]));
+    var off = offset(B[i]);
+    assert(off == Expect[i]);
   }
 }
 
@@ -806,14 +854,14 @@ private proc testSeeresses() {
                                                 (recursive input this column)
               (initial offset)  (sample offset) (rank, 1-based)
     see resses 0                 0               5
-    res ses    3                 2               4
-    ses        6                 4               6
-    <padding>                                    0
+    res ses    3                 1               4
+    ses        6                 2               6
+    <padding>                    -               0
 
-    eer esses  1                 1               1
-    ess es     4                 3               3
-    es         7                 5               2
-    <padding>                                    0
+    eer esses  1                 4               1
+    ess es     4                 5               3
+    es         7                 6               2
+    <padding>                    -               0
 
     in summary, the recursive subroblem input is:
 
@@ -833,17 +881,25 @@ private proc testSeeresses() {
 
     recursive subproblem output suffix array
     73465102
+    01234567
 
-    ranks from recursive subproblem
-    76823541
+    ranks from recursive subproblem in original offset order
+
+    (initial offset)  (recursive problem idx) (rank from recursion, 1-based)
+    see resses 0                 0               7
+    eer esses  1                 4               3
+    res ses    3                 1               6
+    ess es     4                 5               5
+    ses        6                 2               8
+    es         7                 6               4
+    <padding>                                    2
+    <padding>                                    1
   */
 
   const expectOffsets = [1,2,7,4,3,8,0,6,5];
 
   // check different cached data types
   checkSeeressesCase(inputArr, n, expectOffsets, period=3);
-  checkSeeressesCase(inputArr, n, expectOffsets, period=7);
-  checkSeeressesCase(inputArr, n, expectOffsets, period=13);
   checkSeeressesCase(inputArr, n, expectOffsets, period=3, wordType=uint(8));
   checkSeeressesCase(inputArr, n, expectOffsets, period=3, bitsPerChar=8);
   checkSeeressesCase(inputArr, n, expectOffsets, period=3, simulateBig=true);
@@ -902,16 +958,20 @@ proc testLCP(input: string, expectSA: [] int, expectLCP: [] int) {
 }
 
 proc testOtherCase(input: string, expectSA: [] int,
-                   param period) {
-  writeln("testOtherCase(input='", input, "', period=", period, ")");
+                   param period, type wordType) {
+  writeln("testOtherCase(input='", input, "', period=", period,
+          ", wordType=", wordType:string, ")");
 
   const n = input.size;
   const inputArr = bytesToArray(input);
 
-  type offsetType = int; // always int for this test
-
+  type offsetType = int(numBits(wordType));
+  type unsignedOffsetType = uint(numBits(wordType));
+ 
   const cfg = new ssortConfig(idxType=int,
                               offsetType=offsetType,
+                              unsignedOffsetType=unsignedOffsetType,
+                              loadWordType=unsignedOffsetType,
                               bitsPerChar=8,
                               n=n,
                               cover=new differenceCover(period),
@@ -931,9 +991,10 @@ proc testOtherCase(input: string, expectSA: [] int,
 }
 
 proc testOther(input: string, expectSA: [] int) {
-  testOtherCase(input, expectSA, period=3);
-
-  testOtherCase(input, expectSA, period=7);
+  testOtherCase(input, expectSA, period=3, wordType=uint(8));
+  testOtherCase(input, expectSA, period=3, wordType=uint(64));
+  testOtherCase(input, expectSA, period=7, wordType=uint(8));
+  testOtherCase(input, expectSA, period=7, wordType=uint(64));
 }
 
 proc testOthers() {
@@ -1015,6 +1076,22 @@ proc testOthers() {
    sissippi    3      2
    ssippi      5      1
    ssissippi   2      3
+
+   forming subproblem names
+                     offset  subproblem name=bkt start offset + 3
+   0 i               10      3
+   1 ipp i           7       4
+   2 iss ippi        4       5
+   3 iss issippi     1       5
+   4 mis sissippi    0       7
+   5 pi              9       8
+   6 sip pi          6       9
+   7 sis sippi       3      10
+
+   subproblem input
+   n0 n3 n6 n9 1 n1 n4 n7 n10 0
+    7 10  9  8 1  5  5  4   3 0
+
    */
   testOther("mississippi", [10,7,4,1,0,9,8,6,3,5,2]);
   testLCP("mississippi", [10,7,4,1,0,9,8,6,3,5,2], [0,1,1,4,0,0,1,0,2,1,3]);
@@ -1029,22 +1106,28 @@ proc testOthers() {
 
    sort sample by first 3 characters
 
-   suffix           offset  rank
-   aaa ab           10      1   | could be in any order
-   aaa acaaaacaaaab 0       1   |
-   aaa caaaab       6       1   |
-   aaa caaaacaaaab  1       1   |
-   aab              12      2
-   aac aaaab        7       3
-   ab               13      4
-   aca aaacaaaab    3       5
-   caa aab          9       7   | any order
-   caa aacaaaab     4       7   |
+   suffix           offset  name
+   aaa ab           10      3   | could be in any order
+   aaa acaaaacaaaab 0       3   |
+   aaa caaaab       6       3   |
+   aaa caaaacaaaab  1       3   |
+   aab              12      4
+   aac aaaab        7       5
+   ab               13      6
+   aca aaacaaaab    3       7
+   caa aab          9       8   | any order
+   caa aacaaaab     4       8   |
 
 
+   subproblem input
+       0  1  2  3   4 5  6  7  8   9  10 11
+      n0 n3 n6 n9 n12 1 n1 n4 n7 n10 n13 0
+       3  7  3  1                  3
+      
    charsPerMod 6
                                11
-   subproblem offset 012345678901
+   subproblem input  012345678901
+                     4a5b702c8390
 
                          11   111
       regular offset 036925147036
@@ -1120,7 +1203,7 @@ proc testOthers() {
 proc testRepeatsCase(c: uint(8), n: int, param period,
                      finalSortSimpleSortLimit: int = SIMPLE_SORT_LIMIT) {
   writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period,
-          " finalSortSimpleSortLimit=", finalSortSimpleSortLimit, ")");
+          ", finalSortSimpleSortLimit=", finalSortSimpleSortLimit, ")");
 
   var inputArr: [0..<n+INPUT_PADDING] uint(8);
   var expectSA: [0..<n] int;
@@ -1139,7 +1222,8 @@ proc testRepeatsCase(c: uint(8), n: int, param period,
                               cover=new differenceCover(period),
                               locales=Locales,
                               nTasksPerLocale=computeNumTasks(),
-                              finalSortSimpleSortLimit=finalSortSimpleSortLimit);
+                              finalSortSimpleSortLimit=finalSortSimpleSortLimit,
+                              assumeNonLocal=finalSortSimpleSortLimit<SIMPLE_SORT_LIMIT);
 
   const Packed = packInput(cfg.loadWordType,
                            inputArr, n, cfg.bitsPerChar);
@@ -1259,6 +1343,11 @@ proc testDescendingCase(max: int, repeats: int, in n: int, param period) {
     }
   }
 
+  writeln("descending INPUT ");
+  for i in 0..<n {
+    writeln("T[", i, "] = ", inputArr[i]);
+  }
+ 
   type offsetType = int; // always int for this test
 
   const cfg = new ssortConfig(idxType=int,
@@ -1271,6 +1360,7 @@ proc testDescendingCase(max: int, repeats: int, in n: int, param period) {
   const Packed = packInput(uint, inputArr, n, cfg.bitsPerChar);
   const SA = ssortDcx(cfg, Packed);
 
+ 
   if TRACE && n <= 50 {
     writeln("Input     ", inputArr[0..<n]);
     writeln("Expect SA ", expectSA);
@@ -1283,6 +1373,8 @@ proc testDescending() {
   const configs = [
                    // small
                    (2, 5, 2*5*4),
+                   (2, 8, 2*8*2),
+                   (2, 8, 2*8*4),
                    (3, 3, 3*3*2),
                    (4, 1, 4*1*2),
                    (4, 2, 4*2*2),
@@ -1294,6 +1386,8 @@ proc testDescending() {
 
                    // medium
                    (2, 32, 2*32*4),
+                   (4, 8, 4*8*10),
+                   (4, 8, 4*8*100),
                    (4, 8, 4*8*1024),
                    (20, 2, 20*2*4),
                    (50, 5, 50*5*10),
@@ -1322,7 +1416,18 @@ proc testDescending() {
 
 
 proc runTests() {
-  testRepeatsCase(c=11, n=10000, period=21, finalSortSimpleSortLimit=1000);
+  //testDescendingCase(max=2, repeats=8, n=32, period=21);
+  //testDescendingCase(max=2, repeats=4, n=56, period=13)
+
+  /*
+  for i in 1..1000 {
+    for max in 2..16 {
+      for repeats in 1..16 {
+        testDescendingCase(max, repeats, max*repeats*i, period=21);
+        testDescendingCase(max, repeats, max*repeats*i, period=13);
+      }
+    }
+  }*/
 
   testHelpers();
   testComparisons();
