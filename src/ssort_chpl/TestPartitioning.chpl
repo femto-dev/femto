@@ -26,7 +26,8 @@ import SuffixSort.TRACE;
 use Partitioning;
 use Utility;
 
-import Sort.{sort, defaultComparator, isSorted, keyPartStatus, keyPartComparator};
+import Sort.{sort, defaultComparator, isSorted,
+             keyPartStatus, keyComparator, keyPartComparator};
 use Random;
 import Math;
 import Map;
@@ -1031,6 +1032,68 @@ proc testDivideByBuckets() {
   testDivideByBuckets(n, nBuckets, nTasksPerLocale, true);
 }
 
+proc testBitsInCommon() {
+  writeln("testBitsInCommon()");
+
+  record myTupleComparator : keyPartComparator {
+    inline proc keyPart(tup, i: int): (keyPartStatus, tup(0).type) {
+      if i >= tup.size {
+        return (keyPartStatus.pre, tup(0));
+      } else {
+        return (keyPartStatus.returned, tup(i));
+      }
+    }
+  }
+
+  record myIntKeyComparator : keyComparator {
+    proc key(elt) { return elt; }
+  }
+
+  param intbits = numBits(0.type);
+  assert(intbits == bitsInCommon(0, 0, new myIntKeyComparator()));
+  assert(intbits-8 == bitsInCommon(0xff, 0x11, new myIntKeyComparator()));
+
+  var a = (0, 0xff);
+  var b = (0, 0x11);
+  assert(intbits + intbits - 8 == bitsInCommon(a, b, new myTupleComparator()));
+
+  // test the related functionality in createRadixSplitters
+  {
+    var s = createRadixSplitters([0, 0], 0..1, new myIntKeyComparator(),
+                                 activeLocs=[here], radixBits=1,
+                                 startbit=0, endbit=max(int),
+                                 nTasksPerLocale=computeNumTasks());
+    assert(s.startbit == intbits);
+  }
+  {
+    var s = createRadixSplitters([0, 1], 0..1, new myIntKeyComparator(),
+                                 activeLocs=[here], radixBits=1,
+                                 startbit=0, endbit=max(int),
+                                 nTasksPerLocale=computeNumTasks());
+    assert(s.startbit == intbits-1);
+  }
+  {
+    var s = createRadixSplitters([0, 1], 0..1, new myIntKeyComparator(),
+                                 activeLocs=[here], radixBits=8,
+                                 startbit=0, endbit=max(int),
+                                 nTasksPerLocale=computeNumTasks());
+    assert(s.startbit == intbits-8);
+  }
+  {
+    var s = createRadixSplitters([a, b], 0..1, new myTupleComparator(),
+                                 activeLocs=[here], radixBits=1,
+                                 startbit=0, endbit=max(int),
+                                 nTasksPerLocale=computeNumTasks());
+    assert(s.startbit == intbits + intbits - 8);
+  }
+  {
+    var s = createRadixSplitters([a, b], 0..1, new myTupleComparator(),
+                                 activeLocs=[here], radixBits=8,
+                                 startbit=0, endbit=max(int),
+                                 nTasksPerLocale=computeNumTasks());
+    assert(s.startbit == intbits + intbits - 8);
+  }
+}
 
 
 proc runTests() {
@@ -1094,6 +1157,9 @@ proc runTests() {
 
   // test divideByBuckets
   testDivideByBuckets();
+
+  // test bitsInCommon
+  testBitsInCommon();
 
   // test sorters
   testSorts();

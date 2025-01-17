@@ -104,10 +104,25 @@ private inline proc myCompareByPart(a, b, comparator) {
   return 1;
 }
 
+// TODO: this is a workaround for warnings along the lines of
+// warning: Using keyPart without 'keyPartStatus' is deprecated, compile with '-suseKeyPartStatus' and update your types if necessary
+// It should be removed and defaultComparator should be used instead.
 record integralKeyPartComparator : keyPartComparator {
   inline proc keyPart(elt: integral, i: int): (keyPartStatus, elt.type) {
     var section = if i > 0 then keyPartStatus.pre else keyPartStatus.returned;
     return (section, elt);
+  }
+}
+
+inline proc myGetKeyPart(a, comparator, i:int) {
+  if canResolveMethod(comparator, "keyPart", a, 0) {
+    return comparator.keyPart(a, i);
+  } else if canResolveMethod(comparator, "key", a) {
+    const ikp = new integralKeyPartComparator();
+    return ikp.keyPart(comparator.key(a), i);
+  } else {
+    compilerError("Bad comparator for radix sort ", comparator.type:string,
+                  " with eltType ", a.type:string);
   }
 }
 
@@ -1787,7 +1802,7 @@ proc partitioningSorter.init(type eltType, type splitterType,
   init this;
 
   if (radixBits == 0) != isSampleSplitters(splitterType) {
-    compilerError("bad call to partitioningSorter.init");
+    compilerError("bad call to partitioningSorter.init -- radix bits wrong");
   }
 }
 
@@ -1885,7 +1900,7 @@ proc createSampleSplitters(const ref ADom,
   return split;
 }
 
-proc createRadixSplitters(/*const*/ ref A: [],
+proc createRadixSplitters(const ref A: [],
                           region: range,
                           comparator,
                           activeLocs: [] locale,
@@ -1901,20 +1916,47 @@ proc createRadixSplitters(/*const*/ ref A: [],
                               endbit=endbit);
   }
 
-  var minElt = A[region.low];
-  var maxElt = A[region.low];
-  forall (activeLocIdx, taskIdInLoc, chunk)
-  in divideIntoTasks(A.domain, region, nTasksPerLocale)
-  with (min reduce minElt, max reduce maxElt) {
-    for i in chunk {
-      const ref elt = A[i];
-      minElt reduce= elt;
-      maxElt reduce= elt;
+  var nBitsInCommon = 0;
+  var part = 0;
+  while true {
+    // compute the minimum and maximum key part
+    var minElt = myGetKeyPart(A[region.low], comparator, part)(1);
+    var maxElt = myGetKeyPart(A[region.low], comparator, part)(1);
+    var nEnd = 0;
+    const p = part;
+    forall (activeLocIdx, taskIdInLoc, chunk)
+    in divideIntoTasks(A.domain, region, nTasksPerLocale, activeLocs)
+    with (min reduce minElt, max reduce maxElt, + reduce nEnd) {
+      for i in chunk {
+        const (section, elt) = myGetKeyPart(A[i], comparator, p);
+        if section == keyPartStatus.returned {
+          minElt reduce= elt;
+          maxElt reduce= elt;
+        } else {
+          nEnd += 1;
+        }
+      }
+    }
+    if nEnd > 0 {
+      // stop because we reached an end element, make no change to startbit
+      break;
+    } else if minElt == maxElt {
+      // continue the while loop, but advance to the next part
+      // and adjust nBitsInCommon
+      nBitsInCommon += numBits(minElt.type);
+      part += 1;
+    } else {
+      // stop the loop because we reached elements that differed
+      // and adjust nBitsInCommon according to the min and max element
+      nBitsInCommon += BitOps.clz(minElt ^ maxElt):int;
+      break;
     }
   }
-  var nBitsInCommon = bitsInCommon(minElt, maxElt, comparator);
+
+  // set startbit to nBitsInCommon rounded down to a radixBits group
   var nRadixesInCommon = nBitsInCommon / radixBits;
   startbit = nRadixesInCommon * radixBits;
+
   return new radixSplitters(radixBits=radixBits,
                             startbit=startbit,
                             endbit=endbit);
@@ -1986,6 +2028,19 @@ private proc partitionSortBaseCase(ref A: [], region: range, comparator) {
 }
 
 proc bitsInCommon(a, b, comparator) {
+  if canResolveMethod(comparator, "keyPart", a, 0) {
+    return bitsInCommonForKeyPart(a, b, comparator);
+  } else if canResolveMethod(comparator, "key", a) {
+    return bitsInCommonForKeyPart(comparator.key(a), comparator.key(b),
+                                  new integralKeyPartComparator());
+  } else {
+    compilerError("Bad comparator for radix sort ", comparator.type:string,
+                  " with eltType ", a.type:string);
+  }
+
+}
+
+proc bitsInCommonForKeyPart(a, b, comparator) {
   var curPart = 0;
   var bitsInCommon = 0;
   while true {
@@ -2195,12 +2250,12 @@ proc decodeFromTuple(tup: encodedTupleType) {
   return ret;
 }
 
-proc partitioningSorter.setBucketBoundary(ref BucketBoundaries: [] uint(8),
-                                          boundaryType: uint(8),
-                                          bktStart: int,
-                                          bktSize: int,
-                                          bktStartBit: int,
-                                          ref agg: DstAggregator(uint(8)))
+proc setBucketBoundary(ref BucketBoundaries: [] uint(8),
+                       boundaryType: uint(8),
+                       bktStart: int,
+                       bktSize: int,
+                       bktStartBit: int,
+                       ref agg: DstAggregator(uint(8)))
 {
   // set the first byte
   agg.copy(BucketBoundaries[bktStart], boundaryType);
@@ -2252,12 +2307,12 @@ proc partitioningSorter.setBucketBoundary(ref BucketBoundaries: [] uint(8),
   }
 }
 
-proc partitioningSorter.readBucketBoundary(ref BucketBoundaries: [] uint(8),
-                                           allRegion:range,
-                                           bktStart: int,
-                                           out boundaryType: uint(8),
-                                           out bktSize: int,
-                                           out bktStartBit: int) : void {
+proc readBucketBoundary(ref BucketBoundaries: [] uint(8),
+                        allRegion:range,
+                        bktStart: int,
+                        out boundaryType: uint(8),
+                        out bktSize: int,
+                        out bktStartBit: int) : void {
   boundaryType = BucketBoundaries[bktStart];
   const endAll = allRegion.high+1;
   var bktSizeRead = false;
@@ -2353,11 +2408,11 @@ record spanHelper {
   var startbit: int;
 }
 
-proc partitioningSorter.nextBucket(ref BucketBoundaries: [] uint(8),
-                                   taskRegion: range,
-                                   allRegion:range,
-                                   in cur: int,
-                                   out bktType: uint(8)) {
+proc nextBucket(ref BucketBoundaries: [] uint(8),
+                taskRegion: range,
+                allRegion:range,
+                in cur: int,
+                out bktType: uint(8)) {
   const end = taskRegion.high+1;
 
   // move 'cur' forward until it finds a bucket boundary
@@ -2385,12 +2440,12 @@ proc partitioningSorter.nextBucket(ref BucketBoundaries: [] uint(8),
 // returns a range indicating the bucket.
 //
 // Each task is responsible for buckets that start in its taskRegion.
-proc partitioningSorter.nextUnsortedBucket(ref BucketBoundaries: [] uint(8),
-                                           taskRegion: range,
-                                           allRegion:range,
-                                           in cur: int,
-                                           out bktType: uint(8),
-                                           out bktStartBit: int) {
+proc nextUnsortedBucket(ref BucketBoundaries: [] uint(8),
+                        taskRegion: range,
+                        allRegion:range,
+                        in cur: int,
+                        out bktType: uint(8),
+                        out bktStartBit: int) {
   const end = taskRegion.high+1;
 
   // move 'cur' forward until it finds a bucket boundary
@@ -2766,9 +2821,8 @@ proc partitioningSorter.psort(ref A: [],
       // find the next unsorted bucket, starting at cur
       var bktType: uint(8);
       var bktStartBit: int;
-      var bkt = s.nextUnsortedBucket(BucketBoundaries, taskRegion, region,
-                                     cur,
-                                     /*out*/ bktType, bktStartBit);
+      var bkt = nextUnsortedBucket(BucketBoundaries, taskRegion, region, cur,
+                                   /*out*/ bktType, bktStartBit);
       // if the initial position has moved forward, record that in 'cur'
       cur = bkt.low;
 
@@ -2839,6 +2893,33 @@ proc psort(ref A: [],
     sorterRunTime.stop();
     writeln("sorter run time : ", sorterRunTime.elapsed());
   }
+}
+
+proc psort(ref A: [],
+           ref Scratch: [] A.eltType,
+           region: range,
+           comparator,
+           param radixBits: int,
+           logBuckets:int=radixBits,
+           endbit:int=max(int),
+           nTasksPerLocale: int = computeNumTasks()) {
+  type splitterType = if radixBits != 0
+                      then radixSplitters(radixBits)
+                      else splitters(A.eltType);
+
+  var sorter = new partitioningSorter(A.eltType, splitterType,
+                                      radixBits=radixBits,
+                                      logBuckets=logBuckets,
+                                      nTasksPerLocale=nTasksPerLocale,
+                                      endbit=endbit);
+
+  if region.size <= sorter.baseCaseLimit {
+    partitionSortBaseCase(A, region, comparator);
+    return;
+  }
+
+  var BucketBoundaries:[A.domain[region]] uint(8);
+  sorter.psort(A, Scratch, BucketBoundaries, region, comparator);
 }
 
 /*
