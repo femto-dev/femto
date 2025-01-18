@@ -831,7 +831,6 @@ proc loadNextWords(const cfg:ssortConfig(?),
       if !isBaseCaseBoundary(bktType) {
         nUnsortedBucketsThisTask += 1;
         // load it
-        writeln("loading ", A[i].offset);
         const off = A[i].offset:int;
         if bitsPerChar == wordBits {
           // load directly into 'cached', no need to shift
@@ -1389,6 +1388,10 @@ proc linearSortOffsetsInRegionBySampleRanksSerial(
   writeln("A.domain is ", A.domain, " region is ", region, " A.locales is ",
       A.targetLocales());
 
+  for i in region {
+    writeln("before distance partition A[", i, "] = ", A[i]);
+  }
+
   var maxDistanceTmp = 0;
   for i in 0..<cover.period {
     maxDistanceTmp = max(maxDistanceTmp, cover.nextCoverIndex(i));
@@ -1444,6 +1447,14 @@ proc linearSortOffsetsInRegionBySampleRanksSerial(
 
   assert(Bkts.size == nDistanceToSampleBuckets);
 
+  writeln("after phase partition in linearSortOffsetsInRegionBySampleRanksSerial ", region);
+  for bkt in Bkts {
+    writeln("bkt");
+    for i in bkt.start..#bkt.count {
+      writeln("Scratch[", i, "] = ", Scratch[i]);
+    }
+  }
+
   // radix sort each sub-bucket of Scratch within each partition
   for bucketIdx in 0..<nDistanceToSampleBuckets {
     const bucketStart = Bkts[bucketIdx].start;
@@ -1481,11 +1492,20 @@ proc linearSortOffsetsInRegionBySampleRanksSerial(
     if bucketSize > 0 {
       InputRanges[cur] = bucketStart..bucketEnd;
       cur += 1;
+
+      writeln("bkt");
+      for i in bucketStart..bucketEnd {
+        writeln("before multi-way merge Scratch[", i, "] = ", Scratch[i]);
+      }
     }
   }
 
   // do the serial multi-way merging from Scratch back into A
   multiWayMerge(Scratch, InputRanges, A, region, new finalComparator3());
+
+  for i in region {
+    writeln("after v-way merge A[", i, "] = ", A[i]);
+  }
 }
 
 /* Sort the offsetAndSampleRanks values in A
@@ -1532,17 +1552,24 @@ proc linearSortOffsetsInRegionBySampleRanks(
                          activeLocs=activeLocs);
 
 
-  writeln("after partition");
-  for i in region {
-    writeln("Scratch[", i, "] = ", Scratch[i]);
+  writeln("after sample splitters partition in linearSortOffsetsInRegionBySampleRanks ", region);
+  for bkt in Bkts {
+    writeln("bkt ", bkt.start..#bkt.count);
+    for i in bkt.start..#bkt.count {
+      writeln("Scratch[", i, "] = ", Scratch[i]);
+    }
   }
+
+  // TODO: make divideByBuckets more efficient
 
   // process each bucket
   forall (bkt, bktIndex, activeLocIdx, taskIdInLoc)
-  in divideByBuckets(A, region, Bkts, nTasksPerLocale, activeLocs)
+  in divideByBuckets(Scratch, region, Bkts, nTasksPerLocale, activeLocs)
   with (in cfg,
-        const locRegion = A.domain.localSubdomain().dim(0),
+        const locRegion = Scratch.domain.localSubdomain().dim(0),
         var writeAgg = new DstAggregator(offsetType)) {
+    //const bkt = b.start..#b.count;
+    writeln("processing bucket ", bkt, " with saStart=", saStart);
     if locRegion.contains(bkt) && !cfg.assumeNonLocal {
       // sort it
       local {
@@ -2416,7 +2443,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
 
   const ret = sortAllOffsets(cfg, PackedText, SampleText, SampleSplitters,
                              ResultDom, stats);
-  if EXTRA_CHECKS && n < 100_000 {
+  if EXTRA_CHECKS && n < 1_000 {
     const B = computeSuffixArrayDirectly(cfg, PackedText, ResultDom);
     if !ret.equals(B) {
       for i in 0..<n {

@@ -1200,10 +1200,9 @@ proc testOthers() {
   testLCP("abaababa", [7,2,5,0,3,6,1,4], [0,1,1,3,3,0,2,2]);
 }
 
-proc testRepeatsCase(c: uint(8), n: int, param period,
-                     finalSortSimpleSortLimit: int = SIMPLE_SORT_LIMIT) {
+proc testRepeatsCase(c: uint(8), n: int, param period, noBaseCase: bool=false) {
   writeln("testRepeatsCase(c=", c, ", n=", n, ", period=", period,
-          ", finalSortSimpleSortLimit=", finalSortSimpleSortLimit, ")");
+          ", noBaseCase=", noBaseCase, ")");
 
   var inputArr: [0..<n+INPUT_PADDING] uint(8);
   var expectSA: [0..<n] int;
@@ -1215,15 +1214,30 @@ proc testRepeatsCase(c: uint(8), n: int, param period,
 
   type offsetType = int; // always int for this test
 
-  const cfg = new ssortConfig(idxType=inputArr.idxType,
-                              offsetType=offsetType,
-                              bitsPerChar=8,
-                              n=n,
-                              cover=new differenceCover(period),
-                              locales=Locales,
-                              nTasksPerLocale=computeNumTasks(),
-                              finalSortSimpleSortLimit=finalSortSimpleSortLimit,
-                              assumeNonLocal=finalSortSimpleSortLimit<SIMPLE_SORT_LIMIT);
+  var cfg;
+
+  if !noBaseCase {
+    cfg = new ssortConfig(idxType=inputArr.idxType,
+                          offsetType=offsetType,
+                          bitsPerChar=8,
+                          n=n,
+                          cover=new differenceCover(period),
+                          locales=Locales,
+                          nTasksPerLocale=computeNumTasks());
+  } else {
+    cfg = new ssortConfig(idxType=inputArr.idxType,
+                          offsetType=offsetType,
+                          bitsPerChar=8,
+                          n=n,
+                          cover=new differenceCover(period),
+                          locales=Locales,
+                          nTasksPerLocale=computeNumTasks(),
+                          minBucketsPerTask=2,
+                          minBucketsSpace=10,
+                          logBucketsSerial=2,
+                          finalSortSimpleSortLimit=3,
+                          assumeNonLocal=true);
+  }
 
   const Packed = packInput(cfg.loadWordType,
                            inputArr, n, cfg.bitsPerChar);
@@ -1251,23 +1265,23 @@ proc testRepeats() {
     const chr = i:uint(8);
     testRepeatsCase(c=chr, n=size, period=3);
     testRepeatsCase(c=0, n=size, period=3);
-    testRepeatsCase(c=chr, n=size, period=3, finalSortSimpleSortLimit=3);
+    testRepeatsCase(c=chr, n=size, period=3, noBaseCase=true);
 
     testRepeatsCase(c=chr, n=size, period=7);
     testRepeatsCase(c=0, n=size, period=7);
-    testRepeatsCase(c=chr, n=size, period=7, finalSortSimpleSortLimit=3);
+    testRepeatsCase(c=chr, n=size, period=7, noBaseCase=true);
 
     testRepeatsCase(c=chr, n=size, period=13);
     testRepeatsCase(c=0, n=size, period=13);
-    testRepeatsCase(c=chr, n=size, period=13, finalSortSimpleSortLimit=3);
+    testRepeatsCase(c=chr, n=size, period=13, noBaseCase=true);
 
     testRepeatsCase(c=chr, n=size, period=21);
     testRepeatsCase(c=0, n=size, period=21);
-    testRepeatsCase(c=chr, n=size, period=21, finalSortSimpleSortLimit=3);
+    testRepeatsCase(c=chr, n=size, period=21, noBaseCase=true);
 
     testRepeatsCase(c=chr, n=size, period=133);
     testRepeatsCase(c=0, n=size, period=133);
-    testRepeatsCase(c=chr, n=size, period=133, finalSortSimpleSortLimit=3);
+    testRepeatsCase(c=chr, n=size, period=133, noBaseCase=true);
   }
 }
 
@@ -1278,10 +1292,12 @@ proc testRepeats() {
 
    max must be at most 256.
  */
-proc testDescendingCase(max: int, repeats: int, in n: int, param period) {
+proc testDescendingCase(max: int, repeats: int, in n: int,
+                        param period, noBaseCase: bool) {
   writeln("testDescendingCase(",
           "max=", max, ", repeats=", repeats, ", n=", n, ", ",
-          "period=", period, ")");
+          "period=", period, ", ",
+          "noBaseCase=", noBaseCase, ")");
 
   var inputArr: [0..<n+INPUT_PADDING] uint(8);
   var expectSA: [0..<n] int;
@@ -1350,13 +1366,31 @@ proc testDescendingCase(max: int, repeats: int, in n: int, param period) {
  
   type offsetType = int; // always int for this test
 
-  const cfg = new ssortConfig(idxType=int,
-                              offsetType=offsetType,
-                              bitsPerChar=8,
-                              n=n,
-                              cover=new differenceCover(period),
-                              locales=Locales,
-                              nTasksPerLocale=computeNumTasks());
+  var cfg;
+
+  if !noBaseCase {
+    cfg = new ssortConfig(idxType=int,
+                          offsetType=offsetType,
+                          bitsPerChar=8,
+                          n=n,
+                          cover=new differenceCover(period),
+                          locales=Locales,
+                          nTasksPerLocale=computeNumTasks());
+  } else {
+    cfg = new ssortConfig(idxType=int,
+                          offsetType=offsetType,
+                          bitsPerChar=8,
+                          n=n,
+                          cover=new differenceCover(period),
+                          locales=Locales,
+                          nTasksPerLocale=computeNumTasks(),
+                          minBucketsPerTask=2,
+                          minBucketsSpace=10,
+                          logBucketsSerial=2,
+                          finalSortSimpleSortLimit=3,
+                          assumeNonLocal=true);
+  }
+
   const Packed = packInput(uint, inputArr, n, cfg.bitsPerChar);
   const SA = ssortDcx(cfg, Packed);
 
@@ -1402,31 +1436,35 @@ proc testDescending() {
 
   for tup in configs {
     const (max, repeats, n) = tup;
-    testDescendingCase(max, repeats, n, period=3);
+    testDescendingCase(max, repeats, n, period=3, false);
+    testDescendingCase(max, repeats, n, period=3, true);
 
-    testDescendingCase(max, repeats, n, period=7);
+    testDescendingCase(max, repeats, n, period=7, false);
+    testDescendingCase(max, repeats, n, period=7, true);
 
-    testDescendingCase(max, repeats, n, period=13);
+    testDescendingCase(max, repeats, n, period=13, false);
+    testDescendingCase(max, repeats, n, period=13, true);
 
-    testDescendingCase(max, repeats, n, period=21);
+    testDescendingCase(max, repeats, n, period=21, false);
+    testDescendingCase(max, repeats, n, period=21, true);
 
-    testDescendingCase(max, repeats, n, period=133);
+    testDescendingCase(max, repeats, n, period=133, false);
+    testDescendingCase(max, repeats, n, period=133, true);
   }
 }
 
 
 proc runTests() {
-  //testDescendingCase(max=2, repeats=8, n=32, period=21);
-  //testDescendingCase(max=2, repeats=4, n=56, period=13)
-
   /*
   for i in 1..1000 {
-    for max in 2..16 {
-      for repeats in 1..16 {
-        testDescendingCase(max, repeats, max*repeats*i, period=21);
-        testDescendingCase(max, repeats, max*repeats*i, period=13);
-      }
-    }
+    var max=4;
+    var repeats=8;
+    testDescendingCase(max, repeats, max*repeats*i, period=13, false);
+    testDescendingCase(max, repeats, max*repeats*i, period=13, true);
+    testDescendingCase(max, repeats, max*repeats*i, period=21, false);
+    testDescendingCase(max, repeats, max*repeats*i, period=21, true);
+    testDescendingCase(max, repeats, max*repeats*i, period=133, false);
+    testDescendingCase(max, repeats, max*repeats*i, period=133, true);
   }*/
 
   testHelpers();
