@@ -756,10 +756,11 @@ proc comparisonSortLocal(ref A: [], ref Scratch: [], comparator, region: range,
   }
 
   local {
+    /*
     writeln("entering comparisonSortLocal");
     for i in region {
       writeln("A[", i, "] = ", A[i]);
-    }
+    }*/
 
     if region.size == 2 {
       const i = region.low;
@@ -772,10 +773,11 @@ proc comparisonSortLocal(ref A: [], ref Scratch: [], comparator, region: range,
             nTasksPerLocale=nTasksPerLocale);
     }
 
+    /*
     writeln("after comparisonSortLocal");
     for i in region {
       writeln("A[", i, "] = ", A[i]);
-    }
+    }*/
   }
 }
 
@@ -1090,7 +1092,7 @@ proc computeSuffixArrayDirectlyLocal(const cfg:ssortConfig(?),
   // First, construct the offsetAndCached array that will be sorted.
   var A = buildAllOffsets(cfg, resultDom);
 
-  writeln("A is ", A);
+  //writeln("A is ", A);
 
   record directComparator : keyPartComparator {
     proc keyPart(a, i: int) {
@@ -1102,11 +1104,11 @@ proc computeSuffixArrayDirectlyLocal(const cfg:ssortConfig(?),
   var Scratch: [A.domain] A.eltType;
   radixSortLocal(A, Scratch, new directComparator(), 0..<n);
 
-  writeln("now A is ", A);
+  //writeln("now A is ", A);
 
   fixTrailingZeros(cfg, PackedText, n, A);
 
-  writeln("then A is ", A);
+  //writeln("then A is ", A);
 
   return A;
 }
@@ -1189,7 +1191,7 @@ proc setName(const cfg:ssortConfig(?),
   // Adding this amount to the ranks enables multiple end-of-string
   // markers to make it easier to handle the separators between cover regions
   const useName = (bktStart+shift):cfg.unsignedOffsetType;
-  writeln("Setting name for offset ", off, " suboffset ", useIdx, " to ", useName);
+  //writeln("Setting name for offset ", off, " suboffset ", useIdx, " to ", useName);
   writeAgg.copy(SampleNames[useIdx], useName);
 }
 
@@ -1363,7 +1365,7 @@ proc linearSortOffsetsInRegionBySampleRanksSerial(
                             ref Scratch: [] offsetAndSampleRanks(?),
                             region: range) {
 
-  writeln("in linearSortOffsetsInRegionBySampleRanksSerial ", region);
+  //writeln("in linearSortOffsetsInRegionBySampleRanksSerial ", region);
 
   const cover = cfg.cover;
   const n = cfg.n;
@@ -1373,7 +1375,7 @@ proc linearSortOffsetsInRegionBySampleRanksSerial(
   record finalComparator3 : relativeComparator {
     proc compare(a: offsetAndSampleRanks(?), b: offsetAndSampleRanks(?)) {
       var ret = compareLoadedSampleRanks(a, b, a.r, b.r, n, cover);
-      writeln("comparing ", a, " ", b, " -> ", ret);
+      //writeln("comparing ", a, " ", b, " -> ", ret);
       return ret;
     }
   }
@@ -1383,6 +1385,7 @@ proc linearSortOffsetsInRegionBySampleRanksSerial(
     return;
   }
 
+  /*
   writeln("in sortOffsetsInRegionBySampleRanks running v-way merge", " for size=", region.size);
 
   writeln("A.domain is ", A.domain, " region is ", region, " A.locales is ",
@@ -1390,7 +1393,7 @@ proc linearSortOffsetsInRegionBySampleRanksSerial(
 
   for i in region {
     writeln("before distance partition A[", i, "] = ", A[i]);
-  }
+  }*/
 
   var maxDistanceTmp = 0;
   for i in 0..<cover.period {
@@ -1447,13 +1450,13 @@ proc linearSortOffsetsInRegionBySampleRanksSerial(
 
   assert(Bkts.size == nDistanceToSampleBuckets);
 
-  writeln("after phase partition in linearSortOffsetsInRegionBySampleRanksSerial ", region);
+  /*writeln("after phase partition in linearSortOffsetsInRegionBySampleRanksSerial ", region);
   for bkt in Bkts {
     writeln("bkt");
     for i in bkt.start..#bkt.count {
       writeln("Scratch[", i, "] = ", Scratch[i]);
     }
-  }
+  }*/
 
   // radix sort each sub-bucket of Scratch within each partition
   for bucketIdx in 0..<nDistanceToSampleBuckets {
@@ -1493,19 +1496,21 @@ proc linearSortOffsetsInRegionBySampleRanksSerial(
       InputRanges[cur] = bucketStart..bucketEnd;
       cur += 1;
 
+      /*
       writeln("bkt");
       for i in bucketStart..bucketEnd {
         writeln("before multi-way merge Scratch[", i, "] = ", Scratch[i]);
-      }
+      }*/
     }
   }
 
   // do the serial multi-way merging from Scratch back into A
   multiWayMerge(Scratch, InputRanges, A, region, new finalComparator3());
 
+  /*
   for i in region {
     writeln("after v-way merge A[", i, "] = ", A[i]);
-  }
+  }*/
 }
 
 /* Sort the offsetAndSampleRanks values in A
@@ -1526,7 +1531,7 @@ proc linearSortOffsetsInRegionBySampleRanks(
   record finalComparator2 : relativeComparator {
     proc compare(a: offsetAndSampleRanks(?), b: offsetAndSampleRanks(?)) {
       var ret = compareLoadedSampleRanks(a, b, a.r, b.r, n, cover);
-      writeln("comparing ", a, " ", b, " -> ", ret);
+      //writeln("comparing ", a, " ", b, " -> ", ret);
       return ret;
     }
   }
@@ -1645,7 +1650,7 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   record finalComparator1 : relativeComparator {
     proc compare(a: offsetAndSampleRanks(?), b: offsetAndSampleRanks(?)) {
       var ret = compareLoadedSampleRanks(a, b, a.r, b.r, n, cover);
-      writeln("comparing ", a, " ", b, " -> ", ret);
+      //writeln("comparing ", a, " ", b, " -> ", ret);
       return ret;
     }
   }
@@ -1656,11 +1661,12 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                       A, Scratch, BucketBoundaries,
                       region, maxPrefix=cover.period);
 
+  /*
   writeln("after sortByPrefixAndMark A[", region, "]");
   for i in region {
     writeln("A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ",
             BucketBoundaries[i]);
-  }
+  }*/
 
   // Load anything that needs to be sorted by sample ranks into SampleRanksA
   // Reset any bucket boundaries for unsorted regions
@@ -1715,11 +1721,12 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
       cur = bkt.high + 1; // record start of next bucket
 
       if bkt.size > 1 {
+        /*
         writeln("comparison sorting bucket ", bkt); 
         writeln("the input for sorting is");
         for i in bkt {
           writeln("SampleRanksA[", i, "] = ", SampleRanksA[i]);
-        }
+        }*/
 
         if bkt.size < finalSortSimpleSortLimit {
           if locRegion.contains(bkt) && !cfg.assumeNonLocal {
@@ -1754,13 +1761,13 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                                                  bkt, SA, saStart);
         }
 
-        { //TODO REMOVE
+        /*{ //TODO REMOVE
           writeAgg.flush();
           for i in bkt {
             var idx = i + saStart;
             writeln("after comparison sorting SA[", idx, "] = ", SA[idx]);
           }
-        }
+        }*/
       }
     }
   }
@@ -1847,6 +1854,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   var SampleRanksA: [ScratchDom] offsetAndSampleRanksType;
   var SampleRanksScratch: [ScratchDom] offsetAndSampleRanksType;
 
+  /*
   writeln("after partitioning into ", Bkts.size, " serial buckets");
   for bkt in Bkts {
     for i in bkt.start..#bkt.count {
@@ -1856,16 +1864,18 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   }
 
   writeln("sorting serial buckets");
+  */
 
   for bkt in Bkts {
     if bkt.count <= 1 {
       continue;
     }
 
+    /*
     writeln("serial bucket ", bkt);
     for i in bkt.start..#bkt.count {
       writeln("SA[", i, "] = ", SA[i]);
-    }
+    }*/
 
     // Reset BucketBoundaries
     BucketBoundaries = 0;
@@ -1880,10 +1890,11 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     loadNextWords(cfg, PackedText, A, Scratch, BucketBoundaries,
                   0..<bkt.count, 0);
 
+    /*
     writeln("loading words for serial bucket");
     for i in 0..<bkt.count {
       writeln("A[", i, "] = ", A[i]);
-    }
+    }*/
 
     // Sort the offsets & store the result in SA
     sortAllOffsetsInRegion(cfg, PackedText, SampleRanks,
@@ -1893,15 +1904,16 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
                            SA,
                            bkt.start);
 
+    /*
     writeln("sorted serial bucket ", bkt);
     for i in bkt.start..#bkt.count {
       writeln("SA[", i, "] = ", SA[i]);
-    }
+    }*/
 
 
   }
 
-  writeln("done sorting serial buckets");
+  //writeln("done sorting serial buckets");
 
   return SA;
 }
@@ -1999,7 +2011,7 @@ inline proc compareIntegers(a: integral, b: a.type) {
    these will be to sort whatever offset is closest to the terminator
    first; that is, to sort the offsets in reverse order.
  */
-proc compareEndOfString(a: integral, b: integral, n: integral) {
+inline proc compareEndOfString(a: integral, b: integral, n: integral) {
   // This should not be necessary anymore now that
   // there are different end of string markers for each offset
   return 0;
@@ -2131,8 +2143,7 @@ proc compareLoadedSampleRanks(a, b, // anything where offset(a) works
   const rankB = bRanks.ranks[bRankIdx];
 
   const cmp = compareEndOfString(offset(a) + k, offset(b) + k, n);
-  writeln("compareEndOfString(", offset(a) + k, ",", offset(b) + k, ",", n,
-          ") gave ", cmp);
+  //writeln("compareEndOfString(", offset(a) + k, ",", offset(b) + k, ",", n, ") gave ", cmp);
 
   if cmp != 0 {
     return cmp;
@@ -2209,10 +2220,12 @@ proc ssortDcx(const cfg:ssortConfig(?),
     writeln("in ssortDcx ", cfg.type:string, " n=", n);
   }
 
+  /*
   writeln("PackedText is");
   for i in PackedText.domain {
     writef("PackedText[%i] = %xu\n", i, PackedText[i]);
-  }
+  }*/
+
   if PackedText.domain.low != 0 {
     halt("sortDcx expects input array to start at 0");
   }
@@ -2323,10 +2336,10 @@ proc ssortDcx(const cfg:ssortConfig(?),
 
   //// recursively sort the subproblem ////
   {
-    writeln("Recursive Input");
+    /*writeln("Recursive Input");
     for i in 0..<subCfg.n {
       writeln("SampleText[", i, "] = ", SampleText[i]);
-    }
+    }*/
 
     const SubSA = ssortDcx(subCfg, SampleText);
 
@@ -2334,12 +2347,13 @@ proc ssortDcx(const cfg:ssortConfig(?),
       writeln("back in ssortDcx n=", n);
     }
 
+    /*
     writeln("Recursive Output");
     for i in 0..<subCfg.n {
       var offset = subproblemOffsetToOffset(SubSA[i], cover, charsPerMod);
       writeln("SubSA[", i, "] = ", SubSA[i],
               " (offset ", offset, ")");
-    }
+    }*/
 
     {
       var update : Time.stopwatch;
@@ -2367,10 +2381,11 @@ proc ssortDcx(const cfg:ssortConfig(?),
         agg.copy(SampleText[rankOffset], useRank:cfg.unsignedOffsetType);
       }
 
+      /*
       for i in 0..<sampleN {
         writeln("SampleRanks[", i, "] = ", SampleText[i],
                 " offset=", sampleRankIndexToOffset(i, cover));
-      }
+      }*/
     }
 
     // gather splitters and store them in saveSplitters
@@ -2395,7 +2410,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
 
       // writeln("sampleCreator(", i, ") :: SA[i] = ", subOffset, " -> offset ", off, " -> ", ret);
 
-      writeln("Making splitter ", ret);
+      //writeln("Making splitter ", ret);
       saveSplitters[i] = ret;
     }
     saveSplitters[numSplitters] = saveSplitters[numSplitters-1];
@@ -2418,7 +2433,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
 
     if EXTRA_CHECKS {
       assert(isSorted(saveSplitters[0..<numSplitters], new sampleComparator()));
-      writeln("Splitters A are ", tmp);
+      //writeln("Splitters A are ", tmp);
     }
   }
 
@@ -2439,7 +2454,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
 
   const SampleSplitters = new splitters(saveSplitters[0..<numSplitters],
                                         /* equal buckets */ false);
-  writeln("Splitters B are ", SampleSplitters);
+  //writeln("Splitters B are ", SampleSplitters);
 
   const ret = sortAllOffsets(cfg, PackedText, SampleText, SampleSplitters,
                              ResultDom, stats);
