@@ -1660,7 +1660,6 @@ iter divideByBuckets(param tag: iterKind,
     }
   }
 
-  const arrShift = region.low;
   const arrEnd = region.high;
   const bucketsEnd = Bkts.domain.high;
 
@@ -1670,7 +1669,7 @@ iter divideByBuckets(param tag: iterKind,
     const bucketStart = bkt.start;
     const bucketSize = bkt.count;
     // count it towards the locale owning the middle of the bucket
-    var checkIdx = bucketStart + bucketSize/2 + arrShift;
+    var checkIdx = bucketStart + bucketSize/2;
     // any 0-size buckets at the end of buckets to the last locale
     if checkIdx > arrEnd then checkIdx = arrEnd;
     const localeId = Arr[checkIdx].locale.id;
@@ -1737,7 +1736,7 @@ iter divideByBuckets(param tag: iterKind,
           const bkt = Bkts[bucketIdx];
           const bucketStart = bkt.start;
           const bucketSize = bkt.count;
-          const start = bucketStart + arrShift;
+          const start = bucketStart;
           const end = start + bucketSize;
           yield (start..<end, bucketIdx, locId, taskId);
         }

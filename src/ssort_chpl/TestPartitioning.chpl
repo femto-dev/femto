@@ -397,7 +397,7 @@ proc testSplitters() {
 }
 
 proc testBucketBoundary() {
-  writeln("testBucketBoundary())");
+  writeln("testBucketBoundary()");
 
   for x in [0:uint,
             1:uint,
@@ -862,30 +862,46 @@ proc testDivideByBucketsCases() {
   const n = numLocales*100;
   const nBuckets = numLocales*10; // -> each bucket is 10 elements
   const nTasksPerLocale = 5;
-  const Dom = BlockDist.blockDist.createDomain(0..<n);
+  const Dom = BlockDist.blockDist.createDomain(1..n);
   var Input:[Dom] int;
   var Counts:[0..<nBuckets] int = 10;
   var Ends = + scan Counts;
   var Bkts:[0..<nBuckets] bktCount;
-  for i in 0..<nBuckets {
-    Bkts[i].start = Ends[i] - Counts[i];
-    Bkts[i].count = Counts[i];
-  }
   const region = Dom.dim(0);
+  for i in 0..<nBuckets {
+    Bkts[i].start = 1 + Ends[i] - Counts[i];
+    Bkts[i].count = Counts[i];
+    assert(region.contains(Bkts[i].start..#Bkts[i].count));
+  }
 
   var BucketIds:[Dom] int = -1; // store bucket IDs
   var TaskIds:[Dom] int = -1; // store task IDs
   var LocaleIds:[Dom] int = -1; // store locale IDs
 
-  forall (region, bucketIdx, activeLocIdx, taskIdInLoc)
+  forall (bkt, bucketIdx, activeLocIdx, taskIdInLoc)
   in divideByBuckets(Input, region, Bkts, nTasksPerLocale) {
-    //writeln("region=", region, " bucketIdx=", bucketIdx,
-    //        " taskId=", taskId, " on here.id=", here.id);
-    assert(region.size == 10); // all buckets are 10 elements
-    const start = region.low;
+    //writeln("region=", region, " bkt=", bkt, " bucketIdx=", bucketIdx,
+    //        " taskId=", taskIdInLoc, " on here.id=", here.id);
+    assert(bkt.size == 10); // all buckets are 10 elements
+    assert(region.contains(bkt));
+    const start = bkt.low;
     const taskId = here.id * nTasksPerLocale + taskIdInLoc;
     assert(start / 20 == taskId);
     assert(start / 100 == here.id);
+  }
+
+  {
+    var Input = BlockDist.blockDist.createArray(0..100, int);
+    var Bkts = [new bktCount(48, 2), new bktCount(50, 2), new bktCount(53, 0)];
+    forall (bkt, bucketIdx, activeLocIdx, taskIdInLoc)
+    in divideByBuckets(Input, 48..51, Bkts, nTasksPerLocale=1) {
+      //writeln("bkti is ", bkt);
+      if bkt.size > 0 {
+        assert(bkt.size == 2);
+        assert(bkt.low == 48 || bkt.low == 50);
+        assert(region.contains(bkt));
+      }
+    }
   }
 }
 
@@ -933,23 +949,24 @@ proc testDivideByBuckets(n: int, nBuckets: int,
   var TaskIds:[Dom] int = -1; // store task IDs
   var LocaleIds:[Dom] int = -1; // store locale IDs
 
-  forall (region, bucketIdx, activeLocIdx, taskIdInLoc)
+  forall (bkt, bucketIdx, activeLocIdx, taskIdInLoc)
   in divideByBuckets(Input, region, Bkts, nTasksPerLocale) {
     // check that the region's start is either 0 or an entry in Ends
     var foundCount = false;
     for c in Counts {
-      if region.size == c then foundCount = true;
+      if bkt.size == c then foundCount = true;
     }
     assert(foundCount);
     var foundEnd = false;
     for e in Ends {
-      if region.low + region.size == e then foundEnd = true;
+      if bkt.low + bkt.size == e then foundEnd = true;
     }
     assert(foundEnd);
 
-    if region.size > 0 {
+    if bkt.size > 0 {
       //writeln("bucket ", bucketIdx, " task ", taskId, " region ", region);
-      for i in region {
+      assert(region.contains(bkt));
+      for i in bkt {
         BucketIds[i] = bucketIdx;
         TaskIds[i] = here.id*nTasksPerLocale + taskIdInLoc;
         LocaleIds[i] = here.id;
