@@ -1126,9 +1126,9 @@ proc computeSuffixArrayDirectly(const cfg:ssortConfig(?),
                                 const PackedText: [] cfg.loadWordType,
                                 resultDom: domain(?)) {
 
-  if cfg.assumeNonLocal ||
-     isDistributedDomain(resultDom) ||
-     isDistributedDomain(PackedText.domain) {
+  if isDistributedDomain(resultDom) ||
+     isDistributedDomain(PackedText.domain) ||
+     cfg.assumeNonLocal {
     // When directly computing the suffix array on a distributed array,
     // move everything local first and then copy back to the result array.
     //
@@ -1145,9 +1145,9 @@ proc computeSuffixArrayDirectly(const cfg:ssortConfig(?),
 
     const A: [resultDom] cfg.offsetType = LocalA;
     return A;
+  } else {
+    return computeSuffixArrayDirectlyLocal(cfg, PackedText, resultDom);
   }
-
-  return computeSuffixArrayDirectlyLocal(cfg, PackedText, resultDom);
 }
 
 /**
@@ -1311,10 +1311,10 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     var cur = taskRegion.low;
     var end = taskRegion.high+1;
     while cur < end {
-      const bktStart = cur;
       var bktType: uint(8);
       var bkt = nextBucket(BucketBoundaries, taskRegion, 0..<sampleN, cur,
                            /*out*/ bktType);
+      const bktStart = bkt.low;
       cur = bkt.high + 1; // go to the next bucket on the next iteration
       if bkt.size <= 0 {
         // nothing to do
@@ -1574,13 +1574,15 @@ proc linearSortOffsetsInRegionBySampleRanks(
   in divideByBuckets(Scratch, region, Bkts, nTasksPerLocale, activeLocs)
   with (in cfg,
         const locRegion = Scratch.domain.localSubdomain().dim(0),
+        ref locA = A.localSlice(locRegion),
+        ref locScratch = Scratch.localSlice(locRegion),
         var writeAgg = new DstAggregator(offsetType)) {
     //const bkt = b.start..#b.count;
     writeln("processing bucket ", bkt, " with saStart=", saStart);
     if locRegion.contains(bkt) && !cfg.assumeNonLocal {
       // sort it
       local {
-        linearSortOffsetsInRegionBySampleRanksSerial(cfg, Scratch, A, bkt);
+        linearSortRegionBySampleRanksSerial(cfg, locScratch, locA, bkt);
       }
       // copy sorted values back to SA
       for i in bkt {
@@ -1594,7 +1596,7 @@ proc linearSortOffsetsInRegionBySampleRanks(
       LocScratch[bkt] = Scratch[bkt];
       // sort it
       local {
-        linearSortOffsetsInRegionBySampleRanksSerial(cfg, LocScratch, LocA, bkt);
+        linearSortRegionBySampleRanksSerial(cfg, LocScratch, LocA, bkt);
       }
       // copy sorted values back to SA
       for i in bkt {

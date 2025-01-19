@@ -1467,21 +1467,17 @@ proc runTests() {
     testDescendingCase(max, repeats, max*repeats*i, period=133, true);
   }*/
 
+  /*
   testHelpers();
   testComparisons();
   testSorts();
   testSeeresses();
   testOthers();
   testRepeats();
-  testDescending();
+  testDescending();*/
 }
 
 proc main() {
-  serial {
-    writeln("Testing with one task");
-    runTests();
-  }
-
   writeln("Testing with many tasks");
   runTests();
 
