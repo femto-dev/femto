@@ -2064,11 +2064,11 @@ proc bitsInCommonForKeyPart(a, b, comparator) {
 }
 
 // mark the bucket boundaries
-proc partitioningSorter.markBoundaries(ref BucketBoundaries: [] uint(8),
-                                       Split, // splitters / radixSplitters
-                                       Bkts: [] bktCount,
-                                       const nowInA: bool,
-                                       const nextbit: int) {
+proc markBoundaries(ref BucketBoundaries: [] uint(8),
+                    Split, // splitters / radixSplitters
+                    Bkts: [] bktCount,
+                    const nowInA: bool,
+                    const nextbit: int) {
   const equalType;
   const sortedType;
   const unsortedType;
@@ -2584,7 +2584,7 @@ proc partitioningSortInitialPartition(ref A: [],
                      s.nTasksPerLocale, activeLocs,
                      GlobCounts, Ends, Bkts);
 
-  s.markBoundaries(BucketBoundaries, Split, Bkts, nowInA=false, nextbit);
+  markBoundaries(BucketBoundaries, Split, Bkts, nowInA=false, nextbit);
 }
 
 /* A parallel partitioning sort.

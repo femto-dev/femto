@@ -975,8 +975,8 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
                              useExistingBuckets=true);
 
     // mark the boundaries from the existing partition
-    sorter.markBoundaries(BucketBoundaries, SplitForBkts, Bkts,
-                          nowInA=true, nextbit=0);
+    markBoundaries(BucketBoundaries, SplitForBkts, Bkts,
+                   nowInA=true, nextbit=0);
 
     // sort the rest of the way
     sorter.psort(A, Scratch, BucketBoundaries, region, new byCached1());
