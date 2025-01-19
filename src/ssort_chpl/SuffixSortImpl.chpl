@@ -1565,7 +1565,9 @@ proc linearSortOffsetsInRegionBySampleRanks(
     }
   }
 
-  // TODO: make divideByBuckets more efficient
+  // TODO: make divideByBuckets more efficient or use BucketBoundaries
+  //       instead. The main problem with using BucketBoundaries here
+  //       is that it would require creating a distributed array.
 
   // process each bucket
   forall (bkt, bktIndex, activeLocIdx, taskIdInLoc)
@@ -1740,6 +1742,9 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
               writeAgg.copy(SA[saStart+i], off);
             }
           } else {
+            // TODO: is this reasonably performant?
+            // Would it be better to use psort?
+
             var TmpA:[bkt] SampleRanksA.eltType;
             var TmpScratch:[bkt] SampleRanksA.eltType;
             // copy to local temp
