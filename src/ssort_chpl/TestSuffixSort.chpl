@@ -735,7 +735,7 @@ proc testSorts() {
   //var stats: statistics;
   writeln("Sorting by first word");
 
-  sortByPrefixAndMark(cfg, Packed, none, none,
+  sortByPrefixAndMark(cfg, Packed, alreadySortedByCached=false,
                       B, Scratch, Boundaries, 0..<n, 1);
 
   /*for i in 0..<n {
@@ -773,7 +773,7 @@ proc testSorts() {
   Scratch = Empty;
   Boundaries = EmptyBoundaries;
 
-  sortByPrefixAndMark(cfg, Packed, none, none,
+  sortByPrefixAndMark(cfg, Packed, alreadySortedByCached=false,
                       B, Scratch, Boundaries, 0..<n, 16);
 
   /*for i in 0..<n {
@@ -792,7 +792,7 @@ proc testSorts() {
   Scratch = Empty;
   Boundaries = EmptyBoundaries;
 
-  sortByPrefixAndMark(cfg, Packed, none, none,
+  sortByPrefixAndMark(cfg, Packed, alreadySortedByCached=false,
                       B, Scratch, Boundaries, 0..<n, 24);
 
   /*for i in 0..<n {
@@ -1455,6 +1455,20 @@ proc testDescending() {
 
 
 proc runTests() {
+  //testDescendingCase(max=2, repeats=5, n=40, period=3, noBaseCase=false);
+  // fails with nl 1
+  // Fail: ret[21] = 14 but separately computed B[21] = 24
+
+  //testDescendingCase(max=2, repeats=8, n=64, period=3, noBaseCase=false);
+  // fails with nl 1
+  //Fail: ret[6] = 19 but separately computed B[6] = 42
+  //SuffixSortImpl.chpl:2475: error: assert failed
+
+  //testDescendingCase(max=4, repeats=8, n=128, period=7, noBaseCase=false)
+  // fails with nl 2
+  //Fail: ret[8] = 24 but separately computed B[8] = 88
+  //Fail: ret[8] = 24 but separately computed B[8] = 88
+
   /*
   for i in 1..1000 {
     var max=4;
@@ -1467,14 +1481,13 @@ proc runTests() {
     testDescendingCase(max, repeats, max*repeats*i, period=133, true);
   }*/
 
-  /*
   testHelpers();
   testComparisons();
   testSorts();
   testSeeresses();
   testOthers();
   testRepeats();
-  testDescending();*/
+  testDescending();
 }
 
 proc main() {
