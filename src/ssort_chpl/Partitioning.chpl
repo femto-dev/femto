@@ -23,7 +23,7 @@ module Partitioning {
 // This code is based upon Chapel's package module Sort SampleSortHelp module
 // which in turn was based on the IPS4 implementation
 
-import SuffixSort.{EXTRA_CHECKS,TIMING};
+import SuffixSort.{EXTRA_CHECKS};
 
 use Utility;
 
@@ -49,6 +49,8 @@ config const seed = 1;
 
 // switch to base case sort if number of elements is < nBuckets * this
 config const partitionSortBaseCaseMultiplier = 100.0;
+
+config param SORT_TIMING = false;
 
 param CLASSIFY_UNROLL_FACTOR = 7;
 const SAMPLE_RATIO = min(1.0, sampleRatio);
@@ -2642,7 +2644,7 @@ proc partitioningSorter.psort(ref A: [],
 
   if !useExistingBuckets {
     var firstPartitionTime: Time.stopwatch;
-    if TIMING {
+    if SORT_TIMING {
       firstPartitionTime.start();
     }
 
@@ -2683,7 +2685,7 @@ proc partitioningSorter.psort(ref A: [],
                                        noBaseCase=noBaseCase);
     }
 
-    if TIMING {
+    if SORT_TIMING {
       firstPartitionTime.stop();
       writeln("first step time : ", firstPartitionTime.elapsed());
     }
@@ -2694,7 +2696,7 @@ proc partitioningSorter.psort(ref A: [],
   }*/
 
   var spanTime: Time.stopwatch;
-  if TIMING {
+  if SORT_TIMING {
     spanTime.start();
   }
 
@@ -2793,7 +2795,7 @@ proc partitioningSorter.psort(ref A: [],
     }
   }
 
-  if TIMING {
+  if SORT_TIMING {
     spanTime.stop();
     writeln("span time ", spanTime.elapsed());
   }
@@ -2805,7 +2807,7 @@ proc partitioningSorter.psort(ref A: [],
   // sort buckets within each task's region
 
   var innerSortTime: Time.stopwatch;
-  if TIMING {
+  if SORT_TIMING {
     innerSortTime.start();
   }
 
@@ -2848,7 +2850,7 @@ proc partitioningSorter.psort(ref A: [],
     }
   }
 
-  if TIMING {
+  if SORT_TIMING {
     innerSortTime.stop();
     writeln("inner sort time ", innerSortTime.elapsed());
   }
@@ -2885,13 +2887,13 @@ proc psort(ref A: [],
                                       noBaseCase=noBaseCase);
 
   var sorterRunTime: Time.stopwatch;
-  if TIMING {
+  if SORT_TIMING {
     sorterRunTime.start();
   }
 
   sorter.psort(A, Scratch, BucketBoundaries, region, comparator);
 
-  if TIMING {
+  if SORT_TIMING {
     sorterRunTime.stop();
     writeln("sorter run time : ", sorterRunTime.elapsed());
   }

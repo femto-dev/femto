@@ -1359,10 +1359,11 @@ proc testDescendingCase(max: int, repeats: int, in n: int,
     }
   }
 
+  /*
   writeln("descending INPUT ");
   for i in 0..<n {
     writeln("T[", i, "] = ", inputArr[i]);
-  }
+  }*/
  
   type offsetType = int; // always int for this test
 

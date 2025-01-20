@@ -103,7 +103,6 @@ proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
   // note that 2, 3 or 4 are common with fasta files
 
        if bitsPerChar <=  2 { return helper(2); }
-  else if bitsPerChar <=  3 { return helper(3); }
   else if bitsPerChar <=  4 { return helper(4); }
   else if bitsPerChar <=  8 { return helper(8); }
   else if bitsPerChar <= 16 { return helper(16); }

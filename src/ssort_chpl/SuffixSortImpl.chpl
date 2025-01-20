@@ -49,6 +49,7 @@ config const minBucketsSpace = 2_000_000; // a size in bytes
 config const simpleSortLimit = 1000; // for sizes >= this,
                                      // use radix sort + multi-way merge
 config const finalSortPasses = 8;
+config const initialSortRadix = false;
 
 // upper-case names for the config constants to better identify them in code
 const MIN_BUCKETS_PER_TASK = minBucketsPerTask;
@@ -1329,7 +1330,11 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     }
   }
 
-  if requestedNumBuckets >= (1 << INITIAL_RADIX_BITS) {
+  if initialSortRadix == false {
+    // using a comparison sort for the start covers the case that
+    // there's a lot of similar prefixes
+    sortByFirstWord(0);
+  } else if requestedNumBuckets >= (1 << INITIAL_RADIX_BITS) {
     sortByFirstWord(INITIAL_RADIX_BITS);
   } else {
     sortByFirstWord(RADIX_BITS);
@@ -1890,6 +1895,10 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
                          nTasksPerLocale, cfg.locales);
 
   var maxBktSize = max reduce [b in Bkts] b.count;
+
+  if TRACE {
+    writeln("in sortAllOffsets maxBktSize=", maxBktSize);
+  }
 
   const ScratchDom = makeBlockDomain(0..<maxBktSize, cfg.locales);
   var Offsets: [ScratchDom] offsetType;
