@@ -1291,8 +1291,6 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
                              useExistingBuckets=true);
 
     if useRadixBits == 0 {
-      // TODO: this case can be deleted if it is unused
-
       const comparator = new myPrefixComparator3();
 
       const sp = createSampleSplitters(PackedText.domain,
@@ -1312,6 +1310,9 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
 
       sorter.psort(Sample, Scratch, BucketBoundaries, 0..<sampleN, new byCached0());
     } else {
+      // can't use createRadixSplitters because SampleProducer
+      // might not produce all values, so we can't compute min/max with it
+
       const sp = new radixSplitters(radixBits=useRadixBits,
                                     startbit=0,
                                     endbit=wordBits);
@@ -1906,7 +1907,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   var avgBktSize = totalBktSize:real/Bkts.size;
 
   if TRACE {
-    writeln("in sortAllOffsets bucket size min/max/average ",
+    writeln("in sortAllOffsets with ", Bkts.size, " buckets",
+            " size statistics: min/max/average ",
             100.0*minBktSize/n, "/", 100.0*maxBktSize/n, "/",
             100.0*avgBktSize/n, "%)");
   }
@@ -1960,9 +1962,9 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
 
     if TIMING {
       bktCopyIn.stop();
-      writeln("copy offsets for bkt ", bktIndex,
+      writeln("copy offsets for bkt ", bktIndex, " of size ", bkt.count,
               " ", bktCopyIn.elapsed(), " s for ",
-              numBytes(offsetType)*bkt.count/1024.0/1024.0, " MB/s");
+              numBytes(offsetType)*bkt.count/bktCopyIn.elapsed()/1024.0/1024.0, " MB/s");
     }
 
     var bktLoadWords : Time.stopwatch;
@@ -1978,7 +1980,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       bktLoadWords.stop();
       writeln("load words for bkt ", bktIndex,
               " ", bktLoadWords.elapsed(), " s for ",
-              numBytes(wordType)*bkt.count/1024.0/1024.0, " MB/s");
+              numBytes(wordType)*bkt.count/bktLoadWords.elapsed()/1024.0/1024.0, " MB/s");
     }
 
     /*
@@ -2004,7 +2006,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       bktSort.stop();
       writeln("sort bkt ", bktIndex,
               " ", bktSort.elapsed(), " s for ",
-              bkt.count/1000.0/1000.0, " M elements/s");
+              bkt.count/bktSort.elapsed()/1000.0/1000.0, " M elements/s");
     }
 
     /*
@@ -2387,8 +2389,8 @@ proc ssortDcx(const cfg:ssortConfig(?),
   requestedNumPrefixBuckets = min(requestedNumPrefixBuckets, sampleN / 2);
 
   // create space for final step splitters now to avoid memory fragmentation
-  var numSplitters = min((1<<cfg.logBucketsSerial) - 1, sampleN / 2);
-  var saveSplitters:[0..numSplitters] unusedPrefixAndSampleRanks.type;
+  var numSerialBuckets = min(1<<cfg.logBucketsSerial, sampleN / 2);
+  var saveSplitters:[0..<numSerialBuckets] unusedPrefixAndSampleRanks.type;
 
   if TRACE {
     writeln(" each prefix is ", prefixSize, " bytes");
@@ -2396,7 +2398,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
             prefixAndSampleRanksSize, " bytes");
     writeln(" requesting ", requestedNumPrefixBuckets,
             " prefix buckets for sample");
-    writeln(" final sort with ", numSplitters+1, " serial buckets");
+    writeln(" final sort with ", numSerialBuckets, " serial buckets");
     writeln(" nTasksPerLocale is ", cfg.nTasksPerLocale);
     writeln(" charsPerMod is ", charsPerMod);
   }
@@ -2491,12 +2493,12 @@ proc ssortDcx(const cfg:ssortConfig(?),
 
     // gather splitters and store them in saveSplitters
 
-    const perSplitter = sampleN:real / (numSplitters+1):real;
+    const perSplitter = sampleN:real / numSerialBuckets;
     var start = perSplitter:int;
 
     // note: this does a bunch of GETs, is not distributed or aggregated
     // compare with createSampleSplitters which is more distributed
-    forall i in 0..<numSplitters {
+    forall i in 0..numSerialBuckets-2 {
       var sampleIdx = start + (i*perSplitter):int;
       sampleIdx = min(max(sampleIdx, 0), sampleN-1);
 
@@ -2514,7 +2516,9 @@ proc ssortDcx(const cfg:ssortConfig(?),
       //writeln("Making splitter ", ret);
       saveSplitters[i] = ret;
     }
-    saveSplitters[numSplitters] = saveSplitters[numSplitters-1];
+    // duplicate the last element
+    saveSplitters[numSerialBuckets-1] = saveSplitters[numSerialBuckets-2];
+
 
     record sampleComparator : relativeComparator {
       proc compare(a: prefixAndSampleRanks(?), b: prefixAndSampleRanks(?)) {
@@ -2524,16 +2528,19 @@ proc ssortDcx(const cfg:ssortConfig(?),
       }
     }
 
+    // make sure it is sorted
+    sort(saveSplitters[0..<numSerialBuckets], new sampleComparator());
+
     // note, a bunch of serial work inside this call
-    const tmp = new splitters(saveSplitters,
-                              numSplitters,
+    const tmp = new splitters(saveSplitters[0..<numSerialBuckets],
+                              numSerialBuckets,
                               new sampleComparator(),
-                              howSorted=sortLevel.approximately);
-    numSplitters = tmp.myNumBuckets;
-    saveSplitters[0..<numSplitters] = tmp.sortedStorage[0..<numSplitters];
+                              howSorted=sortLevel.fully);
+    numSerialBuckets = tmp.myNumBuckets;
+    saveSplitters[0..<numSerialBuckets] = tmp.sortedStorage[0..<numSerialBuckets];
 
     if EXTRA_CHECKS {
-      assert(isSorted(saveSplitters[0..<numSplitters], new sampleComparator()));
+      assert(isSorted(saveSplitters[0..<numSerialBuckets-1], new sampleComparator()));
       //writeln("Splitters A are ", tmp);
     }
   }
@@ -2553,7 +2560,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
     }
   }
 
-  const SampleSplitters = new splitters(saveSplitters[0..<numSplitters],
+  const SampleSplitters = new splitters(saveSplitters[0..<numSerialBuckets],
                                         /* equal buckets */ false);
   //writeln("Splitters B are ", SampleSplitters);
 

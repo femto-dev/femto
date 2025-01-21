@@ -213,7 +213,10 @@ private proc computeSplitters(const SortedSample,
   var SortedSplitters:[0..<myNumBuckets] SortedSample.eltType;
 
   // gather the sample assuming that SortedSample is sorted
-  {
+  if myNumBuckets == SortedSample.size {
+    // don't try to sample it, we already have what we need!
+    SortedSplitters = SortedSample;
+  } else {
     const perSplitter = SortedSample.size:real / (numSplitters+1):real;
     var start = perSplitter:int;
 
