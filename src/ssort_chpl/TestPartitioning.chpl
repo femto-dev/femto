@@ -468,7 +468,7 @@ proc testSort(n: int, max: uint, param logBuckets: int, seed: int,
     halt("Unknown sorter in testSort");
   }
 
- 
+
   /*for i in 0..<n {
     writeln("Elts[", i, "] = ", Elts[i], " BucketBoundaries[", i, "] = ",
         BucketBoundaries[i]);
@@ -1208,7 +1208,7 @@ proc max(type t: testElt) {
 
 record testEltKeyPartComparator : keyPartComparator {
   inline proc keyPart(elt: testElt, i: int): (keyPartStatus, uint) {
-    if i > wordsper {
+    if i >= wordsper {
       return (keyPartStatus.pre, elt.elts(0));
     } else {
       return (keyPartStatus.returned, elt.elts(i));
@@ -1250,7 +1250,6 @@ proc testTiming() {
             logBuckets=sampleLogBuckets,
             nTasksPerLocale,
             endbit=numBits(uint));
-
       sample.stop();
     }
 
@@ -1271,40 +1270,57 @@ proc testTiming() {
 
     var stdstable: Time.stopwatch;
     var stdunstable: Time.stopwatch;
-    if !isDistributedDomain(Dom) {
-      for trial in 0..<ntrials {
-        BucketBoundaries = 0;
-        BucketBoundaries[0] = boundaryTypeBaseCaseSortedBucketInA;
-        fillRandomTuples(Elts);
-        stdstable.start();
-        sort(Elts, new testEltKeyPartComparator(), region=0..<n, stable=true);
-        forall i in 0..<n {
-          if i > 0 {
-            if Elts[i-1] < Elts[i] {
-              BucketBoundaries[i] = boundaryTypeBaseCaseSortedBucketInA;
-            }
+    for trial in 0..<ntrials {
+      BucketBoundaries = 0;
+      BucketBoundaries[0] = boundaryTypeBaseCaseSortedBucketInA;
+      fillRandomTuples(Elts);
+      stdstable.start();
+
+      // copy to a local array
+      const region = 0..<n;
+      var LocA:[region] Elts.eltType;
+      LocA[region] = Elts[region];
+
+      sort(LocA, new testEltKeyPartComparator(), region=0..<n, stable=true);
+      forall i in 0..<n {
+        if i > 0 {
+          if LocA[i-1] < LocA[i] {
+            BucketBoundaries[i] = boundaryTypeBaseCaseSortedBucketInA;
           }
         }
-        stdstable.stop();
       }
 
-      for trial in 0..<ntrials {
-        BucketBoundaries = 0;
-        BucketBoundaries[0] = boundaryTypeBaseCaseSortedBucketInA;
-        fillRandomTuples(Elts);
-        stdunstable.start();
-        sort(Elts, new testEltKeyPartComparator(), region=0..<n, stable=false);
-        forall i in 0..<n {
-          if i > 0 {
-            if Elts[i-1] < Elts[i] {
-              BucketBoundaries[i] = boundaryTypeBaseCaseSortedBucketInA;
-            }
-          }
-        }
-        stdunstable.stop();
-      }
+      // copy back
+      Elts[region] = LocA[region];
+
+      stdstable.stop();
     }
 
+    for trial in 0..<ntrials {
+      BucketBoundaries = 0;
+      BucketBoundaries[0] = boundaryTypeBaseCaseSortedBucketInA;
+      fillRandomTuples(Elts);
+      stdunstable.start();
+
+      // copy to a local array
+      const region = 0..<n;
+      var LocA:[region] Elts.eltType;
+      LocA[region] = Elts[region];
+
+      sort(LocA, new testEltKeyPartComparator(), region=0..<n, stable=false);
+      forall i in 0..<n {
+        if i > 0 {
+          if LocA[i-1] < LocA[i] {
+            BucketBoundaries[i] = boundaryTypeBaseCaseSortedBucketInA;
+          }
+        }
+      }
+
+      // copy back
+      Elts[region] = LocA[region];
+
+      stdunstable.stop();
+    }
 
     if n == minn {
       writeln("sorting ", wordsper, " words per element");
