@@ -1894,10 +1894,21 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
                          Splitters, new finalPartitionComparator(),
                          nTasksPerLocale, cfg.locales);
 
-  var maxBktSize = max reduce [b in Bkts] b.count;
+  var minBktSize = n;
+  var maxBktSize = 0;
+  var totalBktSize = 0;
+  forall b in Bkts
+  with (min reduce minBktSize, max reduce maxBktSize, + reduce totalBktSize) {
+    minBktSize reduce= b.count;
+    maxBktSize reduce= b.count;
+    totalBktSize += b.count;
+  }
+  var avgBktSize = totalBktSize:real/Bkts.size;
 
   if TRACE {
-    writeln("in sortAllOffsets maxBktSize=", maxBktSize);
+    writeln("in sortAllOffsets bucket size min/max/average ",
+            100.0*minBktSize/n, "/", 100.0*maxBktSize/n, "/",
+            100.0*avgBktSize/n, "%)");
   }
 
   const ScratchDom = makeBlockDomain(0..<maxBktSize, cfg.locales);
@@ -1922,7 +1933,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   writeln("sorting serial buckets");
   */
 
-  for bkt in Bkts {
+  for (bkt,bktIndex) in zip(Bkts, Bkts.domain) {
     if bkt.count <= 1 {
       continue;
     }
@@ -1933,6 +1944,11 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       writeln("SA[", i, "] = ", SA[i]);
     }*/
 
+    var bktCopyIn : Time.stopwatch;
+    if TIMING {
+      bktCopyIn.start();
+    }
+
     // Reset BucketBoundaries
     BucketBoundaries = 0;
 
@@ -1942,15 +1958,39 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       elt.offset = offset;
     }
 
+    if TIMING {
+      bktCopyIn.stop();
+      writeln("copy offsets for bkt ", bktIndex,
+              " ", bktCopyIn.elapsed(), " s for ",
+              numBytes(offsetType)*bkt.count/1024.0/1024.0, " MB/s");
+    }
+
+    var bktLoadWords : Time.stopwatch;
+    if TIMING {
+      bktLoadWords.start();
+    }
+
     // Load the first word into A.cached
     loadNextWords(cfg, PackedText, A, Scratch, BucketBoundaries,
                   0..<bkt.count, 0);
+
+    if TIMING {
+      bktLoadWords.stop();
+      writeln("load words for bkt ", bktIndex,
+              " ", bktLoadWords.elapsed(), " s for ",
+              numBytes(wordType)*bkt.count/1024.0/1024.0, " MB/s");
+    }
 
     /*
     writeln("loading words for serial bucket");
     for i in 0..<bkt.count {
       writeln("A[", i, "] = ", A[i]);
     }*/
+
+    var bktSort : Time.stopwatch;
+    if TIMING {
+      bktSort.start();
+    }
 
     // Sort the offsets & store the result in SA
     sortAllOffsetsInRegion(cfg, PackedText, SampleRanks,
@@ -1959,6 +1999,13 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
                            0..<bkt.count,
                            SA,
                            bkt.start);
+
+    if TIMING {
+      bktSort.stop();
+      writeln("sort bkt ", bktIndex,
+              " ", bktSort.elapsed(), " s for ",
+              bkt.count/1000.0/1000.0, " M elements/s");
+    }
 
     /*
     writeln("sorted serial bucket ", bkt);
@@ -2457,7 +2504,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
       // find the offset in the subproblem
       var subOffset = offset(SubSA[sampleIdx]);
       // find the index in the parent problem.
-      var off = sampleRankIndexToOffset(subOffset, cover);
+      var off = subproblemOffsetToOffset(subOffset, cover, charsPerMod);
       var ret = makePrefixAndSampleRanks(cfg, off,
                                          PackedText, SampleText,
                                          n, nBits);
