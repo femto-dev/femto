@@ -39,7 +39,6 @@ import CopyAggregation.{SrcAggregator,DstAggregator};
 import SuffixSort.DEFAULT_PERIOD;
 import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.TRACE;
-import SuffixSort.TIMING;
 import SuffixSort.STATS;
 import SuffixSort.INPUT_PADDING;
 
@@ -1712,9 +1711,13 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
 
   var EmptyBkts: [1..0] bktCount;
 
+  var sortByPrefix = startTime();
+
   sortByPrefixAndMark(cfg, PackedText, alreadySortedByCached=false,
                       A, Scratch, BucketBoundaries,
                       region, maxPrefix=cover.period);
+
+  reportTime(sortByPrefix, "sort by prefix", region.size);
 
   /*
   writeln("after sortByPrefixAndMark A[", region, "]");
@@ -1723,13 +1726,20 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
             BucketBoundaries[i]);
   }*/
 
+  var loadSampleRanks = startTime();
+
+  var nBucketsNeedingSort = 0;
+  var nEltsNeedingSort = 0;
+
   // Load anything that needs to be sorted by sample ranks into SampleRanksA
   // Reset any bucket boundaries for unsorted regions
   // Store any suffixes ordered by the prefix back to SA
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(BucketBoundaries.domain, region, nTasksPerLocale)
   with (var readAgg = new SrcAggregator(rankType),
-        var writeAgg = new DstAggregator(offsetType)) {
+        var writeAgg = new DstAggregator(offsetType),
+        + reduce nBucketsNeedingSort,
+        + reduce nEltsNeedingSort) {
     for i in chunk {
       const bktType = BucketBoundaries[i];
       if isBaseCaseBoundary(bktType) {
@@ -1742,6 +1752,16 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
         if isBucketBoundary(bktType) {
           // change it to an unsorted bucket
           BucketBoundaries[i] = boundaryTypeUnsortedBucketInA;
+
+          if TRACE {
+            var gotBoundaryType: uint(8);
+            var gotBktSize: int;
+            var gotBktStartBit: int;
+            readBucketBoundary(BucketBoundaries, region,
+                               i, gotBoundaryType, gotBktSize, gotBktStartBit);
+            nBucketsNeedingSort += 1;
+            nEltsNeedingSort += gotBktSize;
+          }
         }
 
         // set up the value in SampleRanksA[i]
@@ -1755,6 +1775,16 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
       }
     }
   }
+
+  reportTime(loadSampleRanks, "load sample ranks", region.size);
+
+  if TRACE {
+    writeln("need to sort ", nBucketsNeedingSort, " buckets with ",
+            nEltsNeedingSort, " elements ",
+            "(", 100.0*nEltsNeedingSort/region.size, "%)");
+  }
+
+  var sortBySampleRanks = startTime();
 
   // Sort any sample ranks regions by the sample ranks
   forall (activeLocIdx, taskIdInLoc, taskRegion)
@@ -1824,6 +1854,8 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
       }
     }
   }
+
+  reportTime(sortBySampleRanks, "sort by sample ranks", region.size);
 }
 
 /* Sorts all offsets using the ranks of the difference cover sample.
@@ -1866,10 +1898,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     }
   }
 
-  var makeBuckets : Time.stopwatch;
-  if TIMING {
-    makeBuckets.start();
-  }
+  var makeBuckets = startTime();
 
   const comparator = new finalPartitionComparator();
   const InputProducer = new offsetProducer2();
@@ -1894,6 +1923,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
                          OutputShift=none, Output=SA,
                          Splitters, new finalPartitionComparator(),
                          nTasksPerLocale, cfg.locales);
+
+  reportTime(makeBuckets, "partition", n, numBytes(offsetType));
 
   var minBktSize = n;
   var maxBktSize = 0;
@@ -1923,6 +1954,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   var SampleRanksA: [ScratchDom] offsetAndSampleRanksType;
   var SampleRanksScratch: [ScratchDom] offsetAndSampleRanksType;
 
+  var sortBuckets = startTime();
+
   /*
   writeln("after partitioning into ", Bkts.size, " serial buckets");
   for bkt in Bkts {
@@ -1946,10 +1979,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       writeln("SA[", i, "] = ", SA[i]);
     }*/
 
-    var bktCopyIn : Time.stopwatch;
-    if TIMING {
-      bktCopyIn.start();
-    }
+    var copyAndLoad = startTime();
 
     // Reset BucketBoundaries
     BucketBoundaries = 0;
@@ -1960,28 +1990,12 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       elt.offset = offset;
     }
 
-    if TIMING {
-      bktCopyIn.stop();
-      writeln("copy offsets for bkt ", bktIndex, " of size ", bkt.count,
-              " ", bktCopyIn.elapsed(), " s for ",
-              numBytes(offsetType)*bkt.count/bktCopyIn.elapsed()/1024.0/1024.0, " MB/s");
-    }
-
-    var bktLoadWords : Time.stopwatch;
-    if TIMING {
-      bktLoadWords.start();
-    }
-
     // Load the first word into A.cached
     loadNextWords(cfg, PackedText, A, Scratch, BucketBoundaries,
                   0..<bkt.count, 0);
 
-    if TIMING {
-      bktLoadWords.stop();
-      writeln("load words for bkt ", bktIndex,
-              " ", bktLoadWords.elapsed(), " s for ",
-              numBytes(wordType)*bkt.count/bktLoadWords.elapsed()/1024.0/1024.0, " MB/s");
-    }
+    reportTime(copyAndLoad, "copy and load words for bkt " + bktIndex:string,
+               bkt.count, numBytes(wordType));
 
     /*
     writeln("loading words for serial bucket");
@@ -1989,10 +2003,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       writeln("A[", i, "] = ", A[i]);
     }*/
 
-    var bktSort : Time.stopwatch;
-    if TIMING {
-      bktSort.start();
-    }
+    var bktSort = startTime();
 
     // Sort the offsets & store the result in SA
     sortAllOffsetsInRegion(cfg, PackedText, SampleRanks,
@@ -2002,12 +2013,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
                            SA,
                            bkt.start);
 
-    if TIMING {
-      bktSort.stop();
-      writeln("sort bkt ", bktIndex,
-              " ", bktSort.elapsed(), " s for ",
-              bkt.count/bktSort.elapsed()/1000.0/1000.0, " M elements/s");
-    }
+    reportTime(bktSort, "sort bkt " + bktIndex:string + " total", bkt.count);
 
     /*
     writeln("sorted serial bucket ", bkt);
@@ -2016,6 +2022,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     }*/
   }
 
+  reportTime(sortBuckets, "sort buckets total", n);
   //writeln("done sorting serial buckets");
 
   return SA;
@@ -2280,8 +2287,6 @@ proc ssortDcx(const cfg:ssortConfig(?),
               ResultDom = makeBlockDomain(0..<(cfg.n:cfg.idxType), cfg.locales))
  : [ResultDom] cfg.offsetType {
 
-  var total : Time.stopwatch;
-
   type offsetType = cfg.offsetType;
   const ref cover = cfg.cover;
 
@@ -2309,15 +2314,9 @@ proc ssortDcx(const cfg:ssortConfig(?),
   assert(PackedText.domain.rank == 1 &&
          PackedText.domain.dim(0).low == 0);
 
-  if TIMING {
-    writeln("begin ssortDcx n=", n);
-    total.start();
-  }
+  var total = startTime();
   defer {
-    if TIMING {
-      total.stop();
-      writeln("end ssortDcx n=", n, " after ", total.elapsed(), " s");
-    }
+    reportTime(total, "end ssortDcx n=" + n:string, n);
   }
   if TRACE {
     writeln("in ssortDcx ", cfg.type:string, " n=", n);
@@ -2405,15 +2404,9 @@ proc ssortDcx(const cfg:ssortConfig(?),
 
   // these are initialized below
   {
-    var pre : Time.stopwatch;
-    if TIMING {
-      pre.start();
-    }
+    var pre = startTime();
     defer {
-      if TIMING {
-        pre.stop();
-        writeln("pre in ", pre.elapsed(), " s");
-      }
+      reportTime(pre, "pre");
       if STATS {
         writeln("pre statistics ", stats);
       }
@@ -2459,15 +2452,9 @@ proc ssortDcx(const cfg:ssortConfig(?),
     }*/
 
     {
-      var update : Time.stopwatch;
-      if TIMING {
-        update.start();
-      }
+      var update = startTime();
       defer {
-        if TIMING {
-          update.stop();
-          writeln("update SampleText ranks in ", update.elapsed(), " s");
-        }
+        reportTime(update, "update SampleText ranks");
       }
 
       // Replace the values in SampleText with
@@ -2546,15 +2533,9 @@ proc ssortDcx(const cfg:ssortConfig(?),
   }
 
   //// Step 2: Sort everything all together ////
-  var post : Time.stopwatch;
-  if TIMING {
-    post.start();
-  }
+  var post = startTime();
   defer {
-    if TIMING {
-      post.stop();
-      writeln("post in ", post.elapsed(), " s");
-    }
+    reportTime(post, "post");
     if STATS {
       writeln("pre+post statistics ", stats);
     }

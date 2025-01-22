@@ -2646,10 +2646,7 @@ proc partitioningSorter.psort(ref A: [],
   const activeLocs = computeActiveLocales(A.domain, region);
 
   if !useExistingBuckets {
-    var firstPartitionTime: Time.stopwatch;
-    if SORT_TIMING {
-      firstPartitionTime.start();
-    }
+    var firstPartitionTime = startTime(SORT_TIMING);
 
     // Get started by partitioning from A into Scratch
     // Ideally, this creates a number of buckets >> num tasks
@@ -2688,20 +2685,14 @@ proc partitioningSorter.psort(ref A: [],
                                        noBaseCase=noBaseCase);
     }
 
-    if SORT_TIMING {
-      firstPartitionTime.stop();
-      writeln("first step time : ", firstPartitionTime.elapsed());
-    }
+    reportTime(firstPartitionTime, "first step time", region.size);
   }
 
   /*for i in region {
     writeln("after initial Scratch[", i, "] = ", Scratch[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
 
-  var spanTime: Time.stopwatch;
-  if SORT_TIMING {
-    spanTime.start();
-  }
+  var spanTime = startTime(SORT_TIMING);
 
   const s = this;
 
@@ -2798,10 +2789,7 @@ proc partitioningSorter.psort(ref A: [],
     }
   }
 
-  if SORT_TIMING {
-    spanTime.stop();
-    writeln("span time ", spanTime.elapsed());
-  }
+  reportTime(spanTime, "span time", 0);
 
   /*for i in region {
     writeln("after spans A[", i, "] = ", A[i], " Scratch[", i, "] = ", Scratch[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
@@ -2809,10 +2797,7 @@ proc partitioningSorter.psort(ref A: [],
 
   // sort buckets within each task's region
 
-  var innerSortTime: Time.stopwatch;
-  if SORT_TIMING {
-    innerSortTime.start();
-  }
+  var innerSortTime = startTime(SORT_TIMING);
 
   forall (activeLocIdx, taskIdInLoc, taskRegion)
   in divideIntoTasks(A.domain, region, nTasksPerLocale, activeLocs)
@@ -2853,10 +2838,7 @@ proc partitioningSorter.psort(ref A: [],
     }
   }
 
-  if SORT_TIMING {
-    innerSortTime.stop();
-    writeln("inner sort time ", innerSortTime.elapsed());
-  }
+  reportTime(spanTime, "inner sort time", region.size);
 
   /*for i in region {
     writeln("after inner A[", i, "] = ", A[i], " Scratch[", i, "] = ", Scratch[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
@@ -2889,17 +2871,11 @@ proc psort(ref A: [],
                                       useExistingBuckets=useExistingBuckets,
                                       noBaseCase=noBaseCase);
 
-  var sorterRunTime: Time.stopwatch;
-  if SORT_TIMING {
-    sorterRunTime.start();
-  }
+  var sorterRunTime = startTime(SORT_TIMING);
 
   sorter.psort(A, Scratch, BucketBoundaries, region, comparator);
 
-  if SORT_TIMING {
-    sorterRunTime.stop();
-    writeln("sorter run time : ", sorterRunTime.elapsed());
-  }
+  reportTime(sorterRunTime, "sorter run time", region.size);
 }
 
 proc psort(ref A: [],

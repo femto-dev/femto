@@ -34,8 +34,10 @@ import BlockDist.blockDist;
 import ChplConfig.CHPL_COMM;
 import RangeChunk;
 import Version;
+import Time;
 
-import SuffixSort.{EXTRA_CHECKS, INPUT_PADDING, DISTRIBUTE_EVEN_WITH_COMM_NONE};
+import SuffixSort.{EXTRA_CHECKS, TIMING, INPUT_PADDING,
+                   DISTRIBUTE_EVEN_WITH_COMM_NONE};
 
 /* For FASTA files, when reading them, also read in the reverse complement */
 config param INCLUDE_REVERSE_COMPLEMENT=true;
@@ -1053,5 +1055,34 @@ inline proc loadWordWithWords(word0: ?wordType, word1: wordType,
                else word0 << shift | word1 >> (numBits(wordType) - shift);
   return ret;
 }
+
+/* start timing if TIMING, returning something to be used by reportTime */
+proc startTime(param doTiming=TIMING) {
+  if doTiming {
+    var ret: Time.stopwatch;
+    ret.start();
+    return ret;
+  } else {
+    return none;
+  }
+}
+
+/* report time started by startTime */
+proc reportTime(ref x, desc:string, n: int = 0, bytesPer: int = 0) {
+  if x.type != nothing {
+    x.stop();
+    if n == 0 {
+      writeln(desc ," in ", x.elapsed(), " s");
+    } else if bytesPer == 0 {
+      writeln(desc ," in ", x.elapsed(), " s for ",
+              n/x.elapsed()/1000.0/1000.0, " M elements/s");
+    } else {
+      writeln(desc ," in ", x.elapsed(), " s for ",
+              n/x.elapsed()/1000.0/1000.0, " M elements/s and ",
+              bytesPer*n/x.elapsed()/1024.0/1024.0, " MB/s");
+    }
+  }
+}
+
 
 }
