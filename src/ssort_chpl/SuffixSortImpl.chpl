@@ -32,7 +32,7 @@ use Random; // 'use' (vs 'import') to work around an error about
             // PCGRandomPrivate_iterate_bounded
 import BitOps;
 import Reflection;
-import CTypes.{c_sizeof,c_array,c_int};
+import CTypes.{c_sizeof,c_int};
 import Time;
 import CopyAggregation.{SrcAggregator,DstAggregator};
 
@@ -57,6 +57,7 @@ const SIMPLE_SORT_LIMIT = simpleSortLimit;
 const FINAL_SORT_NUM_PASSES = finalSortPasses;
 const LOG_BUCKETS_SERIAL = logBucketsSerial;
 
+config param WORDS_PER_CACHED = 2;
 config param RADIX_BITS = 8;
 config param INITIAL_RADIX_BITS = 16;
 
@@ -96,6 +97,7 @@ record ssortConfig {
   const nTasksPerLocale: int;
 
   // these are implementation details & can be overridden for testing
+  param wordsPerCached = WORDS_PER_CACHED;
   const finalSortNumPasses: int = FINAL_SORT_NUM_PASSES;
   const finalSortSimpleSortLimit: int = SIMPLE_SORT_LIMIT;
   const minBucketsPerTask: int = MIN_BUCKETS_PER_TASK;
@@ -121,22 +123,30 @@ operator +(x: statistics, y: statistics) {
 /**
   This record helps to avoid indirect access at the expense of using
   more memory. Here we store together an offset for the suffix array
-  along with some of the data that is present at that offset.
+  along with some of the data that is present at that offset
+  (or at a later offset, when sorting by prefix).
   */
 record offsetAndCached : writeSerializable {
   type offsetType;
-  type cacheType; // should be cfg.loadWordType
+  type wordType; // should be cfg.loadWordType
+  param nWords;
 
   var offset: offsetType;
-  var cached: cacheType;
+  var cached: nWords*wordType;
 
   // this function is a debugging aid
   proc serialize(writer, ref serializer) throws {
-    if cacheType == nothing {
-      writer.write(offset);
-    } else {
-      writer.writef("%i (%016xu)", offset, cached);
+    writer.writef("%i ", offset);
+    writer.write("(");
+    for i in 0..<nWords {
+      if i != 0 then writer.writef(" ");
+      if wordType == uint(8) {
+        writer.writef("%02xu", cached[i]);
+      } else {
+        writer.writef("%016xu", cached[i]);
+      }
     }
+    writer.write(")");
   }
 }
 
@@ -153,13 +163,13 @@ proc max(type t: offsetAndCached(?)) {
 
 /** Helper type function to use a simple integer offset
     when there is no cached data */
-proc offsetAndCachedT(type offsetType, type cacheType) type {
+/*proc offsetAndCachedT(type offsetType, type cacheType) type {
   if cacheType == nothing {
     return offsetType;
   } else {
     return offsetAndCached(offsetType, cacheType);
   }
-}
+}*/
 
 
 /**
@@ -171,9 +181,7 @@ proc offsetAndCachedT(type offsetType, type cacheType) type {
 record prefix : writeSerializable {
   type wordType; // should be cfg.loadWordType
   param nWords;
-  //var words: c_array(wordType, nWords);
   var words: nWords*wordType;
-  // it would be a tuple nWords*wordType but that compiles slower
 
   // this function is a debugging aid
   proc serialize(writer, ref serializer) throws {
@@ -213,9 +221,7 @@ record sampleRanks : writeSerializable {
   type rankType; // should be cfg.unsignedOffsetType
   param nRanks;
 
-  //var ranks: c_array(rankType, nRanks);
   var ranks: nRanks*rankType;
-  // it would be a tuple nRanks*rankType but that compiles slower
 
   // this function is a debugging aid
   proc serialize(writer, ref serializer) throws {
@@ -304,32 +310,34 @@ inline proc offset(a: offsetAndSampleRanks(?)) {
 }
 
 // these casts from prefixAndSampleRanks help with multiWayMerge
-operator :(x: prefixAndSampleRanks(?), type t:x.offsetType) {
+/*operator :(x: prefixAndSampleRanks(?), type t:x.offsetType) {
   return offset(x);
 }
 operator :(x: prefixAndSampleRanks(?),
-           type t:offsetAndCached(x.offsetType,nothing)) {
+           type t:offsetAndCached(x.offsetType,nothing,0)) {
   return new offsetAndCached(offsetType=x.offsetType,
-                             cacheType=nothing,
+                             wordType=nothing,
+                             nWords=1, // should be 0
                              offset=offset(x),
                              cached=none);
 }
 operator :(x: prefixAndSampleRanks(?),
            type t:offsetAndCached(x.offsetType,x.wordType)) {
-  return new offsetAndCached(offsetType=x.offsetType,
-                             cacheType=x.wordType,
-                             offset=offset(x),
-                             cached=x.words[0]);
+  var ret =
+    new offsetAndCached(offsetType=x.offsetType,
+                        wordType=x.wordType,
+                        x.
+                        offset=offset(x),
+                        cached=x.words[0]);
 }
+*/
 
 proc ssortConfig.checkWordType(a: integral) {
   return true;
 }
 proc ssortConfig.checkWordType(a: offsetAndCached(?)) param {
-  if a.cacheType != nothing {
-    if a.cacheType != this.loadWordType {
-      compilerError("bad configuration for offsetAndCached");
-    }
+  if a.wordType != this.loadWordType {
+    compilerError("bad configuration for offsetAndCached");
   }
   return true;
 }
@@ -371,26 +379,31 @@ inline proc makeOffsetAndCached(const cfg: ssortConfig(?),
                                 offset: cfg.idxType,
                                 const PackedText: [] cfg.loadWordType,
                                 const n: cfg.idxType,
-                                const nBits: cfg.idxType) {
+                                const nBits: cfg.idxType,
+                                param nWords = cfg.wordsPerCached) {
   type wordType = cfg.loadWordType;
   param bitsPerChar = cfg.bitsPerChar;
   const bitIdx = offset*bitsPerChar;
+  param bitsPerWord = numBits(wordType);
 
-  var cached: wordType = 0;
-  if bitsPerChar == numBits(wordType) {
-    if offset < n {
-      cached = PackedText[offset];
-    }
-  } else {
-    if bitIdx < nBits {
-      cached = loadWord(PackedText, bitIdx);
+  var ret = new offsetAndCached(offsetType=cfg.offsetType,
+                                wordType=wordType,
+                                nWords=nWords,
+                                offset=offset:cfg.offsetType);
+
+  for param i in 0..<nWords {
+    if bitsPerChar == bitsPerWord {
+      if offset + i < n {
+        ret.cached[i] = PackedText[offset+i];
+      }
+    } else {
+      if bitIdx + i*bitsPerWord < nBits {
+        ret.cached[i] = loadWord(PackedText, bitIdx + i*bitsPerWord);
+      }
     }
   }
 
-  return new offsetAndCached(offsetType=cfg.offsetType,
-                             cacheType=wordType,
-                             offset=offset:cfg.offsetType,
-                             cached=cached);
+  return ret;
 }
 
 /**
@@ -591,9 +604,9 @@ inline proc getKeyPartForOffsetAndCached(const cfg: ssortConfig(?),
                                          i: integral,
                                          const PackedText: [] cfg.loadWordType,
                                          maxPrefixWords: cfg.idxType) {
-  if a.cacheType != nothing && cfg.loadWordType == a.cacheType && i == 0 {
+  if i < a.nWords {
     // return the cached data
-    return (keyPartStatus.returned, a.cached);
+    return (keyPartStatus.returned, a.cached[i]);
   }
 
   return getKeyPartForOffset(cfg, a.offset, i, PackedText, maxPrefixWords);
@@ -783,7 +796,9 @@ proc comparisonSortLocal(ref A: [], ref Scratch: [], comparator, region: range,
 }
 
 /**
- Loads the next word into A.cached for anything in an equal or unsorted bucket.
+ Loads the next word(s) into A.cached for anything in an equal or unsorted
+ bucket.
+
  Uses Scratch.cached as temporary storage.
 
  For all equal buckets, resets them to be unsorted buckets with 0 as startbit.
@@ -794,13 +809,17 @@ proc comparisonSortLocal(ref A: [], ref Scratch: [], comparator, region: range,
  */
 proc loadNextWords(const cfg:ssortConfig(?),
                    const PackedText: [] cfg.loadWordType,
-                   ref A:[] offsetAndCached(cfg.offsetType,
-                                            cfg.loadWordType),
-                   ref Scratch:[] offsetAndCached(cfg.offsetType,
-                                                  cfg.loadWordType),
+                   ref A:[] offsetAndCached(?),
+                   ref Scratch:[] A.eltType,
                    ref BucketBoundaries:[] uint(8),
                    const region: range,
                    const sortedByBits: int) {
+
+  if A.eltType.offsetType != cfg.offsetType ||
+     A.eltType.wordType != cfg.loadWordType {
+    compilerError("bad call to loadNextWords");
+  }
+
   if region.size == 0 {
     return 0;
   }
@@ -808,11 +827,15 @@ proc loadNextWords(const cfg:ssortConfig(?),
   type wordType = cfg.loadWordType;
   param wordBits = numBits(wordType);
   param bitsPerChar = cfg.bitsPerChar;
+  param wordsPerCached = A.eltType.nWords;
   const n = cfg.n;
   const nBits = cfg.nBits;
   const nTasksPerLocale = cfg.nTasksPerLocale;
+  const nWordsWithData = divCeil(nBits, wordBits);
 
-  /*writeln("in loadNextWords nBits=", nBits, " wordBits=", wordBits);
+  /*
+  writeln("in loadNextWords nBits=", nBits, " wordBits=", wordBits,
+          " sortedByBits=", sortedByBits);
   for i in region {
     writeln("A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
   }*/
@@ -836,13 +859,19 @@ proc loadNextWords(const cfg:ssortConfig(?),
         // load it
         const off = A[i].offset:int;
         if bitsPerChar == wordBits {
+          if EXTRA_CHECKS {
+            // sortedByBits should be a multiple of wordBits in this case
+            assert(sortedByBits % wordBits == 0);
+          }
           // load directly into 'cached', no need to shift
           const bitOffset = off*bitsPerChar + sortedByBits;
           const wordIdx = bitOffset / wordBits; // divides evenly in this case
-          if bitOffset < nBits {
-            readAgg.copy(A[i].cached, PackedText[wordIdx]);
-          } else {
-            A[i].cached = 0; // word starts after the end of the string
+          for param j in 0..<wordsPerCached {
+            if wordIdx < nWordsWithData {
+              readAgg.copy(A[i].cached[j], PackedText[wordIdx+j]);
+            } else {
+              A[i].cached[j] = 0; // word starts after the end of the string
+            }
           }
         } else {
           // load into 'A.cached' and 'Scratch.cached' and then combine
@@ -852,25 +881,29 @@ proc loadNextWords(const cfg:ssortConfig(?),
           const wordIdx = bitOffset / wordBits;
           const shift = bitOffset % wordBits;
           //writeln("bitOffset ", bitOffset, " wordIdx ", wordIdx, " shift ", shift);
-          if bitOffset < nBits {
-            //writef("word one from %i %xu\n", wordIdx, PackedText[wordIdx]);
-            readAgg.copy(A[i].cached, PackedText[wordIdx]);
-          } else {
-            //writef("word one eof\n");
-            A[i].cached = 0; // word starts after the end of the string
+          for param j in 0..<wordsPerCached {
+            if wordIdx+j < nWordsWithData {
+              //writef("word from %i %xu\n", wordIdx+j, PackedText[wordIdx+j]);
+              readAgg.copy(A[i].cached[j], PackedText[wordIdx+j]);
+            } else {
+              //writef("word eof\n");
+              A[i].cached[j] = 0; // word starts after the end of the string
+            }
           }
           // also load the next word if it will be needed
           if shift != 0 {
             // we might only need a single bit from the next word!
             // here we assume that PackedText has at least a word at the end.
-            if bitOffset < nBits {
-              //writef("word two from %i %xu\n", wordIdx+1, PackedText[wordIdx+1]);
-              // load an additional word to 'Scratch.cached'
+            if wordIdx+wordsPerCached < nWordsWithData {
+              /*writef("next word from %i %xu\n", wordIdx+wordsPerCached,
+                       PackedText[wordIdx+wordsPerCached]);*/
+              // load an additional word to 'Scratch.cached[0]'
               // stats don't count this one assuming it comes from prev
-              readAgg.copy(Scratch[i].cached, PackedText[wordIdx + 1]);
+              readAgg.copy(Scratch[i].cached[0], PackedText[wordIdx +
+                  wordsPerCached]);
             } else {
               //writef("word two eof\n");
-              Scratch[i].cached = 0; // next word starts after end
+              Scratch[i].cached[0] = 0; // next word starts after end
             }
           }
         }
@@ -900,11 +933,26 @@ proc loadNextWords(const cfg:ssortConfig(?),
           }
           const off = A[i].offset:int;
           const b = off*bitsPerChar + sortedByBits;
-          //writef("Loading %i b=%i %xu %xu\n", A[i].offset, b, A[i].cached, Scratch[i].cached);
-          A[i].cached = loadWordWithWords(A[i].cached, Scratch[i].cached, b);
-          //writef("A[i].cached=%xu\n", A[i].cached);
+          const shift = b % wordBits;
+          ref elt = A[i];
+          var words: (wordsPerCached+1)*wordType;
+          for param j in 0..<wordsPerCached {
+            words[j] = elt.cached[j];
+          }
+          if shift != 0 {
+            words[wordsPerCached] = Scratch[i].cached[0];
+          }
+
+          for param j in 0..<wordsPerCached {
+            /*writef("Loading %i b=%i %xu %xu\n", A[i].offset, b,
+                     words[j], words[j+1]);*/
+            A[i].cached[j] = loadWordWithWords(words[j], words[j+1], b);
+            //writef("A[%i].cached[%i]=%xu\n", i, j, A[i].cached[j]);
+          }
         } else if EXTRA_CHECKS {
-          A[i].cached = (-1):wordType; // to ease debugging
+          for param j in 0..<wordsPerCached {
+            A[i].cached[j] = (-1):wordType; // to ease debugging
+          }
         }
       }
     }
@@ -922,8 +970,11 @@ proc loadNextWords(const cfg:ssortConfig(?),
 /**
   Sort suffixes in A[region] by the first maxPrefix character values.
   Assumes that A[i].offset and A[i].cached are already set up,
-  where A[i].cached should be the first word of character data,
-  and that A is not yet sorted by 'cached'.
+  where A[i].cached should be the first words of character data
+  for that offset.
+
+  'alreadySortedByCached' indicates if A is already sorted by these cached
+  words.
 
   Bkts can be passed with size > 1 if A is already partitioned by prefix.
   In that case, 'SplitForBkts' should also be passed.
@@ -936,10 +987,8 @@ proc loadNextWords(const cfg:ssortConfig(?),
 proc sortByPrefixAndMark(const cfg:ssortConfig(?),
                          const PackedText: [] cfg.loadWordType,
                          alreadySortedByCached: bool,
-                         ref A:[] offsetAndCached(cfg.offsetType,
-                                                  cfg.loadWordType),
-                         ref Scratch:[] offsetAndCached(cfg.offsetType,
-                                                        cfg.loadWordType),
+                         ref A:[] offsetAndCached(?),
+                         ref Scratch:[] A.eltType,
                          ref BucketBoundaries:[] uint(8),
                          region: range,
                          /*ref readAgg: SrcAggregator(cfg.loadWordType),*/
@@ -953,16 +1002,24 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
   type wordType = cfg.loadWordType;
   param wordBits = numBits(wordType);
   param bitsPerChar = cfg.bitsPerChar;
+  param bitsPerCached = A.eltType.nWords * wordBits;
   const n = cfg.n;
   const nBits = cfg.nBits;
   const nTasksPerLocale = cfg.nTasksPerLocale;
 
   // to help sort by 'cached'
-  record byCached1 : keyComparator {
-    proc key(elt) { return elt.cached; }
+  record byCached1 : keyPartComparator {
+    proc keyPart(a: offsetAndCached(?), i: int) {
+      if i < a.nWords {
+        return (keyPartStatus.returned, a.cached[i]);
+      }
+      // otherwise, return that we reached the end
+      return (keyPartStatus.pre, 0:a.wordType);
+    }
   }
 
-  /*writeln("input to sortByPrefixAndMark for ", region);
+  /*
+  writeln("input to sortByPrefixAndMark for ", region);
   for i in region {
     writeln("A[", i, "] = ", A[i]);
   }*/
@@ -975,7 +1032,7 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
                              radixBits=RADIX_BITS,
                              logBuckets=RADIX_BITS,
                              nTasksPerLocale=nTasksPerLocale,
-                             endbit=wordBits,
+                             endbit=bitsPerCached,
                              markAllEquals=true,
                              useExistingBuckets=false);
 
@@ -986,7 +1043,7 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
   // now the data is in A sorted by cached, and BucketBoundaries
   // indicates which buckets are so far equal
 
-  var sortedByBits = wordBits;
+  var sortedByBits = bitsPerCached;
   const prefixBits = maxPrefix*bitsPerChar;
   while sortedByBits < prefixBits {
     /*writeln("in sortByPrefixAndMark sorted by ", sortedByBits, " for ", region);
@@ -1012,7 +1069,7 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
                              radixBits=RADIX_BITS,
                              logBuckets=RADIX_BITS,
                              nTasksPerLocale=nTasksPerLocale,
-                             endbit=wordBits,
+                             endbit=bitsPerCached,
                              markAllEquals=true,
                              useExistingBuckets=true);
     sorter.psort(A, Scratch, BucketBoundaries, region, new byCached1());
@@ -1023,8 +1080,8 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
       writeln("A[", i, "] = ", A[i], " BucketBoundaries[", i, "] = ", BucketBoundaries[i]);
     }*/
 
-    // now we have sorted by an additional word
-    sortedByBits += wordBits;
+    // now we have sorted by more cached words
+    sortedByBits += bitsPerCached;
   }
 }
 
@@ -1160,8 +1217,7 @@ proc setName(const cfg:ssortConfig(?),
              bktStart: int,
              i: int,
              charsPerMod: cfg.idxType,
-             const ref Sample: [] offsetAndCached(cfg.offsetType,
-                                                  cfg.loadWordType),
+             const ref Sample: [] offsetAndCached(?),
              ref SampleNames:[] cfg.unsignedOffsetType,
              ref writeAgg: DstAggregator(cfg.unsignedOffsetType)) {
   const off = Sample[i].offset;
@@ -1211,12 +1267,20 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
 
   type offsetType = cfg.offsetType;
   type wordType = cfg.loadWordType;
+  param wordsPerCached = cfg.wordsPerCached;
   param wordBits = numBits(wordType);
+  param bitsPerCached = wordsPerCached * wordBits;
   param prefixWords = cfg.getPrefixWords(cover.period);
   type prefixType = makePrefix(cfg, 0, PackedText, n, nBits).type;
 
-  record byCached0 : keyComparator {
-    proc key(elt) { return elt.cached; }
+  record byCached0 : keyPartComparator {
+    proc keyPart(a: offsetAndCached(?), i: int) {
+      if i < a.nWords {
+        return (keyPartStatus.returned, a.cached[i]);
+      }
+      // otherwise, return that we reached the end
+      return (keyPartStatus.pre, 0:a.wordType);
+    }
   }
 
   record myPrefixComparator3 : keyPartComparator {
@@ -1239,11 +1303,12 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
   }
 
   record inputProducer1 {
-    proc eltType type do return offsetAndCached(offsetType, wordType);
+    proc eltType type do return offsetAndCached(offsetType, wordType, wordsPerCached);
     proc this(i: cfg.idxType) {
       const ret = makeOffsetAndCached(cfg,
                                       sampleRankIndexToOffset(i, cover),
-                                      PackedText, n, nBits);
+                                      PackedText, n, nBits,
+                                      nWords=wordsPerCached);
       //writeln("producing ", ret);
       return ret;
     }
@@ -1272,8 +1337,8 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
   const SampleDom = makeBlockDomain(0..<sampleN,
                                     targetLocales=cfg.locales);
 
-  var Sample: [SampleDom] offsetAndCached(offsetType, wordType);
-  var Scratch: [SampleDom] offsetAndCached(offsetType, wordType);
+  var Sample: [SampleDom] offsetAndCached(offsetType, wordType, wordsPerCached);
+  var Scratch: [SampleDom] offsetAndCached(offsetType, wordType, wordsPerCached);
   var BucketBoundaries: [SampleDom] uint(8);
 
   // partition from InputProducer into Sample
@@ -1285,7 +1350,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
                              radixBits=RADIX_BITS,
                              logBuckets=RADIX_BITS,
                              nTasksPerLocale=nTasksPerLocale,
-                             endbit=wordBits,
+                             endbit=bitsPerCached,
                              markAllEquals=true,
                              useExistingBuckets=true);
 
@@ -1314,7 +1379,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
 
       const sp = new radixSplitters(radixBits=useRadixBits,
                                     startbit=0,
-                                    endbit=wordBits);
+                                    endbit=bitsPerCached);
 
       const comparator = new byCached0();
 
@@ -1669,10 +1734,8 @@ proc linearSortOffsetsInRegionBySampleRanks(
 proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                             const PackedText: [] cfg.loadWordType,
                             const SampleRanks: [] cfg.unsignedOffsetType,
-                            ref A: [] offsetAndCached(cfg.offsetType,
-                                                            cfg.loadWordType),
-                            ref Scratch: [] offsetAndCached(cfg.offsetType,
-                                                            cfg.loadWordType),
+                            ref A: [] offsetAndCached(?),
+                            ref Scratch: [] A.eltType,
                             ref SampleRanksA: [] offsetAndSampleRanks(?),
                             ref SampleRanksScratch: [] offsetAndSampleRanks(?),
                             ref BucketBoundaries: [] uint(8),
@@ -1875,13 +1938,13 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   const nBits = cfg.nBits;
   type offsetType = cfg.offsetType;
   type wordType = cfg.loadWordType;
+  param wordsPerCached = cfg.wordsPerCached;
 
   record offsetProducer2 {
     //proc eltType type do return offsetAndCached(offsetType, wordType);
     proc eltType type do return offsetType;
     proc this(i: cfg.idxType) {
       return i: offsetType;
-      //return makeOffsetAndCached(cfg, i, PackedText, n, nBits);
     }
   }
 
@@ -1946,8 +2009,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
 
   const ScratchDom = makeBlockDomain(0..<maxBktSize, cfg.locales);
   var Offsets: [ScratchDom] offsetType;
-  var A: [ScratchDom] offsetAndCached(offsetType, wordType);
-  var Scratch: [ScratchDom] offsetAndCached(offsetType, wordType);
+  var A: [ScratchDom] offsetAndCached(offsetType, wordType, wordsPerCached);
+  var Scratch: [ScratchDom] offsetAndCached(offsetType, wordType, wordsPerCached);
   var BucketBoundaries: [ScratchDom] uint(8);
   type offsetAndSampleRanksType =
     makeOffsetAndSampleRanks(cfg, 0, SampleRanks).type;
@@ -1990,7 +2053,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       elt.offset = offset;
     }
 
-    // Load the first word into A.cached
+    // Load the first words into A.cached
     loadNextWords(cfg, PackedText, A, Scratch, BucketBoundaries,
                   0..<bkt.count, 0);
 
@@ -2433,7 +2496,8 @@ proc ssortDcx(const cfg:ssortConfig(?),
 
   //// recursively sort the subproblem ////
   {
-    /*writeln("Recursive Input");
+    /*
+    writeln("Recursive Input");
     for i in 0..<subCfg.n {
       writeln("SampleText[", i, "] = ", SampleText[i]);
     }*/

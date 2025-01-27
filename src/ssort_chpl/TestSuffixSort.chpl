@@ -259,25 +259,35 @@ private proc testPrefixComparisons(type loadWordType) {
   const n = inputStr.size;
 
   const cfg = new ssortConfig(idxType=int,
-                              offsetType=int(16),
+                              offsetType=int(numBits(loadWordType)),
                               bitsPerChar=bitsPerChar,
                               n=n,
                               cover=cover,
                               locales=Locales,
-                              nTasksPerLocale=1);
+                              nTasksPerLocale=1,
+                              wordsPerCached=1);
   const nBits = cfg.nBits;
 
   const packed = packInput(cfg.loadWordType, text, n, cfg.bitsPerChar);
+  writeln("loadWordType is ", loadWordType:string);
+  for (elt, i) in zip(packed, packed.domain) {
+    writef("packed[%i] = %016xu\n", i, elt);
+  }
 
   // these are irrelevant here
   const charsPerMod = 2;
   const ranks:[0..n+INPUT_PADDING+cover.period] cfg.unsignedOffsetType;
   var ranksN = n;
 
-  const prefixAA =  makeOffsetAndCached(cfg, 0, packed, n, nBits);
-  const prefixAA2 = makeOffsetAndCached(cfg, 6, packed, n, nBits);
-  const prefixAA3 = makeOffsetAndCached(cfg, 18, packed, n, nBits);
-  const prefixBB =  makeOffsetAndCached(cfg, 2, packed, n, nBits);
+  const prefixAA =  makeOffsetAndCached(cfg, 0, packed, n, nBits, nWords=1);
+  const prefixAA2 = makeOffsetAndCached(cfg, 6, packed, n, nBits, nWords=1);
+  const prefixAA3 = makeOffsetAndCached(cfg, 18, packed, n, nBits, nWords=1);
+  const prefixBB =  makeOffsetAndCached(cfg, 2, packed, n, nBits, nWords=1);
+
+  const prefixAA_ =  makeOffsetAndCached(cfg, 0, packed, n, nBits, nWords=2);
+  const prefixAA2_ = makeOffsetAndCached(cfg, 6, packed, n, nBits, nWords=2);
+  const prefixAA3_ = makeOffsetAndCached(cfg, 18, packed, n, nBits, nWords=2);
+  const prefixBB_ =  makeOffsetAndCached(cfg, 2, packed, n, nBits, nWords=2);
 
   const prefixAAp = makePrefix(cfg, 0, packed, n, nBits);
   const prefixAA2p = makePrefix(cfg, 6, packed, n, nBits);
@@ -294,24 +304,34 @@ private proc testPrefixComparisons(type loadWordType) {
   const prefixBBs = makePrefixAndSampleRanks(cfg, 2,
                                              packed, ranks, n, nBits);
 
-  proc helpCompare(a, b) {
-    return comparePrefixes(cfg, a, b, packed, maxPrefixWords=2);
+  proc helpCompare(a, b, maxPrefixWords=2) {
+    return comparePrefixes(cfg, a, b, packed, maxPrefixWords=maxPrefixWords);
   }
 
   assert(helpCompare(0, 0)==0);
   assert(helpCompare(0, 2)<0);
 
   assert(helpCompare(prefixAA, prefixAA)==0);
-  assert(helpCompare(prefixAA, prefixAA3)==0);
+  assert(helpCompare(prefixAA, prefixAA3, 1)==0);
   assert(helpCompare(prefixAA, prefixAA2)<=0);
   assert(helpCompare(prefixAA, prefixBB)<0);
   assert(helpCompare(prefixBB, prefixAA)>0);
+
+  assert(helpCompare(prefixAA_, prefixAA_)==0);
+  assert(helpCompare(prefixAA_, prefixAA3_)>=0);
+  if loadWordType == uint(64) {
+    assert(helpCompare(prefixAA_, prefixAA3_)>0);
+  }
+  assert(helpCompare(prefixAA_, prefixAA2_)<=0);
+  assert(helpCompare(prefixAA_, prefixBB_)<0);
+  assert(helpCompare(prefixBB_, prefixAA_)>0);
+
 
   assert(helpCompare(prefixAAp, prefixAAp)==0);
   assert(helpCompare(prefixAAp, prefixBBp)<0);
   assert(helpCompare(prefixBBp, prefixAAp)>0);
 
-  assert(helpCompare(prefixAA, prefixAAp)==0);
+  assert(helpCompare(prefixAA, prefixAAp, 1)==0);
   assert(helpCompare(prefixAA, prefixBBp)<0);
   assert(helpCompare(prefixAAp, prefixBB)<0);
   assert(helpCompare(prefixBBp, prefixAA)>0);
@@ -630,7 +650,9 @@ private proc testComparisons() {
   testRankComparisons21();
 }
 
-proc testSorts() {
+proc testSorts(param wordsPerCached) {
+  writeln("testSorts(", wordsPerCached, ")");
+
   const inputStr = "aaaaaaaaaaaabbbbbbbbbbaA";
                 //            11111111112222
                 //  012345678901234567890123
@@ -710,12 +732,14 @@ proc testSorts() {
                               n=n,
                               cover=cover,
                               locales=Locales,
-                              nTasksPerLocale=1);
+                              nTasksPerLocale=1,
+                              wordsPerCached=wordsPerCached);
+
   const nBits = cfg.nBits;
 
   const Packed = packInput(cfg.loadWordType, text, n, cfg.bitsPerChar);
 
-  var A: [0..<n] offsetAndCached(cfg.offsetType, cfg.loadWordType);
+  var A: [0..<n] offsetAndCached(cfg.offsetType, cfg.loadWordType, cfg.wordsPerCached);
   var Empty: [A.domain] A.eltType;
   var EmptyBoundaries: [A.domain] uint(8);
   for i in 0..<n {
@@ -742,30 +766,39 @@ proc testSorts() {
     writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
   }*/
 
-  assert(isBucketBoundary(Boundaries[2]));
-  assert(isEqualBucketBoundary(Boundaries[2]));
-  assert(isBucketBoundary(Boundaries[21]));
-  assert(isEqualBucketBoundary(Boundaries[21]));
+  if wordsPerCached == 1 {
+    assert(isBucketBoundary(Boundaries[2]));
+    assert(isEqualBucketBoundary(Boundaries[2]));
+    assert(isBucketBoundary(Boundaries[21]));
+    assert(isEqualBucketBoundary(Boundaries[21]));
 
-  for i in 0..<n {
-    if 2 <= i && i <= 6 {
-      var off = offset(B[i]);
-      assert(0 <= off && off <= 4);
-      if i > 2 {
-        assert(!isBucketBoundary(Boundaries[i]));
+    for i in 0..<n {
+      if 2 <= i && i <= 6 {
+        var off = offset(B[i]);
+        assert(0 <= off && off <= 4);
+        if i > 2 {
+          assert(!isBucketBoundary(Boundaries[i]));
+        }
+      } else if 21 <= i && i <= 23 {
+        var off = offset(B[i]);
+        assert(12 <= off && off <= 14);
+        if i > 21 {
+          assert(!isBucketBoundary(Boundaries[i]));
+        }
+      } else {
+        assert(isBucketBoundary(Boundaries[i]));
+        var off = offset(B[i]);
+        assert(off == Expect[i]);
       }
-    } else if 21 <= i && i <= 23 {
-      var off = offset(B[i]);
-      assert(12 <= off && off <= 14);
-      if i > 21 {
-        assert(!isBucketBoundary(Boundaries[i]));
-      }
-    } else {
+    }
+  } else {
+    for i in 0..<n {
       assert(isBucketBoundary(Boundaries[i]));
       var off = offset(B[i]);
       assert(off == Expect[i]);
     }
   }
+
 
   // sort by 2 words
   writeln("Sorting by two words");
@@ -818,6 +851,12 @@ private proc testSeeresses() {
 
     seeresses
     012345678
+
+    here it is in packed form (4 bits per character)
+    200102202
+    012345678
+
+    0 1 2 3 4
 
     here is the suffix array and LCP:
               SA         LCP
@@ -899,6 +938,7 @@ private proc testSeeresses() {
   const expectOffsets = [1,2,7,4,3,8,0,6,5];
 
   // check different cached data types
+
   checkSeeressesCase(inputArr, n, expectOffsets, period=3);
   checkSeeressesCase(inputArr, n, expectOffsets, period=3, wordType=uint(8));
   checkSeeressesCase(inputArr, n, expectOffsets, period=3, bitsPerChar=8);
@@ -1456,35 +1496,11 @@ proc testDescending() {
 
 
 proc runTests() {
-  //testDescendingCase(max=2, repeats=5, n=40, period=3, noBaseCase=false);
-  // fails with nl 1
-  // Fail: ret[21] = 14 but separately computed B[21] = 24
-
-  //testDescendingCase(max=2, repeats=8, n=64, period=3, noBaseCase=false);
-  // fails with nl 1
-  //Fail: ret[6] = 19 but separately computed B[6] = 42
-  //SuffixSortImpl.chpl:2475: error: assert failed
-
-  //testDescendingCase(max=4, repeats=8, n=128, period=7, noBaseCase=false)
-  // fails with nl 2
-  //Fail: ret[8] = 24 but separately computed B[8] = 88
-  //Fail: ret[8] = 24 but separately computed B[8] = 88
-
-  /*
-  for i in 1..1000 {
-    var max=4;
-    var repeats=8;
-    testDescendingCase(max, repeats, max*repeats*i, period=13, false);
-    testDescendingCase(max, repeats, max*repeats*i, period=13, true);
-    testDescendingCase(max, repeats, max*repeats*i, period=21, false);
-    testDescendingCase(max, repeats, max*repeats*i, period=21, true);
-    testDescendingCase(max, repeats, max*repeats*i, period=133, false);
-    testDescendingCase(max, repeats, max*repeats*i, period=133, true);
-  }*/
-
   testHelpers();
   testComparisons();
-  testSorts();
+  testSorts(1);
+  testSorts(2);
+  testSorts(3);
   testSeeresses();
   testOthers();
   testRepeats();
