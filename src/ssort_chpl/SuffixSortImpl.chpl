@@ -48,7 +48,7 @@ config const minBucketsSpace = 2_000_000; // a size in bytes
 config const simpleSortLimit = 1000; // for sizes >= this,
                                      // use radix sort + multi-way merge
 config const finalSortPasses = 8;
-config const initialSortRadix = false;
+config const initialSortRadix = false; // use sample sort
 
 // upper-case names for the config constants to better identify them in code
 const MIN_BUCKETS_PER_TASK = minBucketsPerTask;
@@ -56,6 +56,7 @@ const MIN_BUCKETS_SPACE = minBucketsSpace;
 const SIMPLE_SORT_LIMIT = simpleSortLimit;
 const FINAL_SORT_NUM_PASSES = finalSortPasses;
 const LOG_BUCKETS_SERIAL = logBucketsSerial;
+const INITIAL_SORT_RADIX = initialSortRadix;
 
 config param WORDS_PER_CACHED = 2;
 config param RADIX_BITS = 8;
@@ -98,6 +99,7 @@ record ssortConfig {
 
   // these are implementation details & can be overridden for testing
   param wordsPerCached = WORDS_PER_CACHED;
+  const initialSortRadix: bool = INITIAL_SORT_RADIX;
   const finalSortNumPasses: int = FINAL_SORT_NUM_PASSES;
   const finalSortSimpleSortLimit: int = SIMPLE_SORT_LIMIT;
   const minBucketsPerTask: int = MIN_BUCKETS_PER_TASK;
@@ -1263,6 +1265,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
   const nTasksPerLocale = cfg.nTasksPerLocale;
   const nPeriods = myDivCeil(n, cover.period); // nPeriods * period >= n
   const sampleN = cover.sampleSize * nPeriods;
+  const initialSortRadix = cfg.initialSortRadix;
   var nToSampleForSplitters = (SAMPLE_RATIO*requestedNumBuckets):int;
 
   type offsetType = cfg.offsetType;
@@ -1343,7 +1346,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
 
   // partition from InputProducer into Sample
   // sort Sample the rest of the way by the 'cached' data
-  proc sortByFirstWord(param useRadixBits) {
+  proc sortInitial(param useRadixBits) {
     const sorter =
       new partitioningSorter(eltType=Sample.eltType,
                              splitterType=radixSplitters(RADIX_BITS),
@@ -1398,11 +1401,16 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
   if initialSortRadix == false {
     // using a comparison sort for the start covers the case that
     // there's a lot of similar prefixes
-    sortByFirstWord(0);
-  } else if requestedNumBuckets >= (1 << INITIAL_RADIX_BITS) {
-    sortByFirstWord(INITIAL_RADIX_BITS);
+    sortInitial(0);
   } else {
-    sortByFirstWord(RADIX_BITS);
+    halt("uncomment this code for initialSortRadix=true");
+    /* commented out to avoid compile time for unused code
+    if initialSortRadix >= INITIAL_RADIX_BITS &&
+            requestedNumBuckets >= (1 << INITIAL_RADIX_BITS) {
+      sortInitial(INITIAL_RADIX_BITS);
+    } else {
+      sortInitial(RADIX_BITS);
+    }*/
   }
 
   // Sort the rest of the way by the prefix
