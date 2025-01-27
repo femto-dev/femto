@@ -2031,6 +2031,9 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
             " size statistics: min/max/average ",
             100.0*minBktSize/n, "/", 100.0*maxBktSize/n, "/",
             100.0*avgBktSize/n, "%)");
+    writeln("using perTaskBufferSize of ", perTaskBufferSize,
+            " (vs max bucket size ", maxBktSize, ")",
+            " elements for ", cfg.locales.size*cfg.nTasksPerLocale, " tasks");
   }
 
   var sortBuckets = startTime();
