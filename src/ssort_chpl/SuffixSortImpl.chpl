@@ -1888,11 +1888,12 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
     // aggregators finish their work here
   }
 
+  /*
   if TRACE {
     writeln("need to sort ", nBucketsNeedingSort, " buckets with ",
             nEltsNeedingSort, " elements ",
             "(", 100.0*nEltsNeedingSort/region.size, "%)");
-  }
+  }*/
 
   // Sort any sample ranks regions by the sample ranks
   if nBucketsNeedingSort > 0 {

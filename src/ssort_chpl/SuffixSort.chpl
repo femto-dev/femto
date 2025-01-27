@@ -102,16 +102,12 @@ proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
   // dispatch to the version instantiated for a close bitsPerChar
   // note that 2, 3 or 4 are common with fasta files
 
-  // TODO: quick compile change
-/*       if bitsPerChar <=  2 { return helper(2); }
+       if bitsPerChar <=  2 { return helper(2); }
   else if bitsPerChar <=  4 { return helper(4); }
   else if bitsPerChar <=  8 { return helper(8); }
   else if bitsPerChar <= 16 { return helper(16); }
   else if bitsPerChar <= 32 { return helper(32); }
-  else if bitsPerChar <= 64 { return helper(64); }
-  else { halt("should not be possible"); }*/
-
-  return helper(8);
+  else                      { return helper(64); }
 }
 
 
