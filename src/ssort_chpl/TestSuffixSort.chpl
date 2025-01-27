@@ -128,20 +128,17 @@ private proc checkSeeressesCase(inputArr, n:int,
   }
 
   const nTasksPerLocale = computeNumTasks(ignoreRunning=true);
-  var finalSortNumPasses: int = FINAL_SORT_NUM_PASSES;
   var finalSortSimpleSortLimit: int = SIMPLE_SORT_LIMIT;
   var minBucketsPerTask: int = MIN_BUCKETS_PER_TASK;
   var minBucketsSpace: int = MIN_BUCKETS_SPACE;
   var assumeNonLocal: bool = false;
 
   if simulateBig {
-    finalSortNumPasses = 2;
     finalSortSimpleSortLimit = 2;
     minBucketsPerTask = 8;
     minBucketsSpace = 1000;
     assumeNonLocal = true;
   } else {
-    finalSortNumPasses = 1;
     finalSortSimpleSortLimit = 10000;
     minBucketsPerTask = 2;
     minBucketsSpace = 10;
@@ -159,7 +156,6 @@ private proc checkSeeressesCase(inputArr, n:int,
                               cover=new differenceCover(period),
                               locales=Locales,
                               nTasksPerLocale=nTasksPerLocale,
-                              finalSortNumPasses=finalSortNumPasses,
                               finalSortSimpleSortLimit=finalSortSimpleSortLimit,
                               minBucketsPerTask=minBucketsPerTask,
                               minBucketsSpace=minBucketsSpace,
@@ -759,8 +755,8 @@ proc testSorts(param wordsPerCached) {
   //var stats: statistics;
   writeln("Sorting by first word");
 
-  sortByPrefixAndMark(cfg, Packed, alreadySortedByCached=false,
-                      B, Scratch, Boundaries, 0..<n, 1);
+  sortByPrefixAndMark(cfg, Packed, B, Scratch, Boundaries, 0..<n,
+                      maxPrefix=1, nTasksPerLocale=cfg.nTasksPerLocale);
 
   /*for i in 0..<n {
     writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
@@ -806,8 +802,8 @@ proc testSorts(param wordsPerCached) {
   Scratch = Empty;
   Boundaries = EmptyBoundaries;
 
-  sortByPrefixAndMark(cfg, Packed, alreadySortedByCached=false,
-                      B, Scratch, Boundaries, 0..<n, 16);
+  sortByPrefixAndMark(cfg, Packed, B, Scratch, Boundaries, 0..<n,
+                      maxPrefix=16, nTasksPerLocale=cfg.nTasksPerLocale);
 
   /*for i in 0..<n {
     writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
@@ -825,8 +821,9 @@ proc testSorts(param wordsPerCached) {
   Scratch = Empty;
   Boundaries = EmptyBoundaries;
 
-  sortByPrefixAndMark(cfg, Packed, alreadySortedByCached=false,
-                      B, Scratch, Boundaries, 0..<n, 24);
+  sortByPrefixAndMark(cfg, Packed,
+                      B, Scratch, Boundaries, 0..<n,
+                      maxPrefix=24, nTasksPerLocale=cfg.nTasksPerLocale);
 
   /*for i in 0..<n {
     writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
@@ -1274,7 +1271,6 @@ proc testRepeatsCase(c: uint(8), n: int, param period, noBaseCase: bool=false) {
                           nTasksPerLocale=computeNumTasks(),
                           minBucketsPerTask=2,
                           minBucketsSpace=10,
-                          logBucketsSerial=2,
                           finalSortSimpleSortLimit=3,
                           assumeNonLocal=true);
   }
@@ -1427,7 +1423,6 @@ proc testDescendingCase(max: int, repeats: int, in n: int,
                           nTasksPerLocale=computeNumTasks(),
                           minBucketsPerTask=2,
                           minBucketsSpace=10,
-                          logBucketsSerial=2,
                           finalSortSimpleSortLimit=3,
                           assumeNonLocal=true);
   }
