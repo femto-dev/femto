@@ -46,7 +46,6 @@ config const minBucketsPerTask = 8;
 config const minBucketsSpace = 2_000_000; // a size in bytes
 config const simpleSortLimit = 1000; // for sizes >= this,
                                      // use radix sort + multi-way merge
-config const finalSortPasses = 8;
 config const initialSortRadix = false; // use sample sort
 config const finalSortPerTaskBufferSize = 100_000;
 
@@ -997,7 +996,7 @@ proc finishSortByPrefix(const cfg:ssortConfig(?),
                         ref Scratch:[] A.eltType,
                         ref BucketBoundaries:[] uint(8),
                         region: range,
-                        maxPrefix: cfg.idxType,
+                        maxPrefix: cfg.idxType, // in characters
                         nTasksPerLocale:int
                         /*ref readAgg: SrcAggregator(cfg.loadWordType),*/
                         /*ref stats: statistics*/) {
@@ -1082,8 +1081,9 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
                          ref Scratch:[] A.eltType,
                          ref BucketBoundaries:[] uint(8),
                          region: range,
-                         maxPrefix: cfg.idxType,
-                         nTasksPerLocale:int
+                         maxPrefix: cfg.idxType, // in characters
+                         nTasksPerLocale:int,
+                         useExistingBuckets = false
                         /*ref readAgg: SrcAggregator(cfg.loadWordType),*/
                         /*ref stats: statistics*/) {
 
@@ -1099,7 +1099,7 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
                            nTasksPerLocale=nTasksPerLocale,
                            endbit=bitsPerCached,
                            markAllEquals=true,
-                           useExistingBuckets=false);
+                           useExistingBuckets=useExistingBuckets);
 
   // sort it by 'cached' ignoring the bucket boundaries
   sorter.psort(A, Scratch, BucketBoundaries, region, new byCached());
@@ -1240,12 +1240,10 @@ proc buildSampleOffsets(const cfg: ssortConfig(?),
 
 proc setName(const cfg:ssortConfig(?),
              bktStart: int,
-             i: int,
+             off: int,
              charsPerMod: cfg.idxType,
-             const ref Sample: [] offsetAndCached(?),
              ref SampleNames:[] cfg.unsignedOffsetType,
              ref writeAgg: DstAggregator(cfg.unsignedOffsetType)) {
-  const off = Sample[i].offset;
 
   // offset is an unpacked offset. find the offset in
   // the recursive problem input to store the rank into.
@@ -1268,6 +1266,79 @@ proc setName(const cfg:ssortConfig(?),
   writeAgg.copy(SampleNames[useIdx], useName);
 }
 
+/* This iterator yields ranges corresponding to buckets */
+iter taskBuckets(taskRegion: range, allRegion: range,
+                 BucketBoundaries:[] uint(8))
+{
+  // find buckets that start in taskRegion
+  var cur = taskRegion.low;
+  var end = taskRegion.high+1;
+  while cur < end {
+    var bktType: uint(8);
+    var bkt = nextBucket(BucketBoundaries, taskRegion, allRegion, cur,
+                         /*out*/ bktType);
+    cur = bkt.high + 1; // go to the next bucket on the next iteration
+    yield bkt;
+  }
+}
+
+/* This iterator yields ranges corresponding to one or more buckets
+   that have total size <= bufSz.
+   All buckets yielded will start in taskRegion, but some might
+   span beyond it.
+   Assumes that bufSz is larger than the maximum bucket size. */
+iter bucketGroups(taskRegion: range, allRegion: range, bufSz: int,
+                  BucketBoundaries:[] uint(8)) {
+  // we need to process buckets that begin in 'taskRegion'
+  var cur = taskRegion.low;
+  var end = taskRegion.high+1;
+
+  if cur < end {
+    // advance to the first bucket starting in this task's region
+    var bktType: uint(8);
+    var bkt = nextBucket(BucketBoundaries, taskRegion, allRegion, cur,
+                         /*out*/ bktType);
+    cur = bkt.low;
+  }
+
+  // process groups of buckets
+  while cur < end {
+
+    // find the next buckets starting from 'cur' and start before 'end'
+    // that fit within 'bufSz' elements
+    var next = cur;
+    while next < end {
+      var bktType: uint(8);
+      var bkt = nextBucket(BucketBoundaries, taskRegion, allRegion, next,
+                           /*out*/ bktType);
+      if bkt.low >= end then break; // bucket starts in another task's region
+      if bkt.high + 1 - cur > bufSz then break; // it would go beyond buffer
+      next = bkt.high + 1; // go to the next bucket on the next iteration
+    }
+
+    if EXTRA_CHECKS {
+      // make sure we got at least one bucket
+      assert(!(next < end && next == cur));
+
+      var i = cur;
+      while i < next {
+        var bktType: uint(8);
+        var bkt = nextBucket(BucketBoundaries, taskRegion, allRegion, i,
+                             /*out*/ bktType);
+        assert(taskRegion.contains(i)); // or else, race conditions
+        assert(next - cur <= bufSz);     // or else, out of bounds
+        i = bkt.high + 1;
+      }
+    }
+
+    // process the group of buckets in cur..<next
+    yield cur..<next;
+
+    // move on to the next region that we can buffer here
+    cur = next;
+  }
+}
+
 /* Returns an array of the sample offsets sorted
    by at least the first cover.period characters.
 
@@ -1278,6 +1349,7 @@ proc setName(const cfg:ssortConfig(?),
 proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
                               const PackedText: [] cfg.loadWordType,
                               const requestedNumBuckets: int,
+                              ref SubSA: [] cfg.offsetType,
                               ref SampleNames: [] cfg.unsignedOffsetType,
                               charsPerMod: cfg.idxType,
                               ref stats: statistics) {
@@ -1298,6 +1370,8 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
   param bitsPerCached = wordsPerCached * wordBits;
   param prefixWords = cfg.getPrefixWords(cover.period);
   type prefixType = makePrefix(cfg, 0, PackedText, n, nBits).type;
+  type offsetAndCachedType =
+    offsetAndCached(offsetType, wordType, wordsPerCached);
 
   record myPrefixComparator3 : keyPartComparator {
     proc keyPart(a: offsetAndCached(?), i: int) {
@@ -1318,15 +1392,10 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     }
   }
 
-  record inputProducer1 {
-    proc eltType type do return offsetAndCached(offsetType, wordType, wordsPerCached);
+  record offsetProducer1 {
+    proc eltType type do return offsetType;
     proc this(i: cfg.idxType) {
-      const ret = makeOffsetAndCached(cfg,
-                                      sampleRankIndexToOffset(i, cover),
-                                      PackedText, n, nBits,
-                                      nWords=wordsPerCached);
-      //writeln("producing ", ret);
-      return ret;
+      return sampleRankIndexToOffset(i: offsetType, cover);
     }
   }
 
@@ -1347,29 +1416,19 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
   }
 
   //const comparator = new myPrefixComparator3();
-  const InputProducer = new inputProducer1();
+  const InputProducer = new offsetProducer1();
   const SampleProducer = new sampleProducer1();
 
-  const SampleDom = makeBlockDomain(0..<sampleN,
-                                    targetLocales=cfg.locales);
+  var BucketBoundaries: [SubSA.domain] uint(8);
 
-  var Sample: [SampleDom] offsetAndCached(offsetType, wordType, wordsPerCached);
-  var Scratch: [SampleDom] offsetAndCached(offsetType, wordType, wordsPerCached);
-  var BucketBoundaries: [SampleDom] uint(8);
+  var minBktSize = sampleN;
+  var maxBktSize = 0;
+  var totalBktSize = 0;
+  var nBuckets = 0;
 
-  // partition from InputProducer into Sample
-  // sort Sample the rest of the way by the 'cached' data
+  // partition from InputProducer into SubSA
   proc sortInitial(param useRadixBits) {
-    const sorter =
-      new partitioningSorter(eltType=Sample.eltType,
-                             splitterType=radixSplitters(RADIX_BITS),
-                             radixBits=RADIX_BITS,
-                             logBuckets=RADIX_BITS,
-                             nTasksPerLocale=nTasksPerLocale,
-                             endbit=bitsPerCached,
-                             markAllEquals=true,
-                             useExistingBuckets=true);
-
+    var nextBit = 0;
     if useRadixBits == 0 {
       const comparator = new myPrefixComparator3();
 
@@ -1381,19 +1440,26 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
                                        nTasksPerLocale=nTasksPerLocale,
                                        logBuckets=log2int(requestedNumBuckets));
 
-      const Bkts = partition(SampleDom, 0..<sampleN, InputProducer,
-                             OutputShift=none, Output=Sample,
+      const Bkts = partition(SampleNames.domain, 0..<sampleN, InputProducer,
+                             OutputShift=none, Output=SubSA,
                              sp, comparator, nTasksPerLocale,
                              activeLocs=cfg.locales);
+      nextBit = 0;
+      markBoundaries(BucketBoundaries, sp, Bkts, nowInA=true, nextbit=nextBit);
 
-      markBoundaries(BucketBoundaries, sp, Bkts, nowInA=true, nextbit=0);
-
-      sorter.psort(Sample, Scratch, BucketBoundaries, 0..<sampleN,
-                   new byCached());
+      forall b in Bkts
+      with (min reduce minBktSize,
+            max reduce maxBktSize,
+            + reduce totalBktSize) {
+        minBktSize reduce= b.count;
+        maxBktSize reduce= b.count;
+        totalBktSize += b.count;
+      }
+      nBuckets = Bkts.size;
     } else {
-      // can't use createRadixSplitters because SampleProducer
+      /*
+      // note: can't use createRadixSplitters because SampleProducer
       // might not produce all values, so we can't compute min/max with it
-
       const sp = new radixSplitters(radixBits=useRadixBits,
                                     startbit=0,
                                     endbit=bitsPerCached);
@@ -1401,15 +1467,12 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
       const comparator = new byCached();
 
       const Bkts = partition(SampleDom, 0..<sampleN, InputProducer,
-                             OutputShift=none, Output=Sample,
+                             OutputShift=none, Output=SubSA,
                              sp, comparator, nTasksPerLocale,
                              activeLocs=cfg.locales);
 
-      markBoundaries(BucketBoundaries, sp, Bkts,
-                     nowInA=true, nextbit=useRadixBits);
-
-      sorter.psort(Sample, Scratch, BucketBoundaries, 0..<sampleN,
-                   new byCached());
+      nextBit = useRadixBits;*/
+      halt("not implemented");
     }
   }
 
@@ -1428,52 +1491,176 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     }*/
   }
 
-  // Sort the rest of the way by the prefix
-  finishSortByPrefix(cfg, PackedText,
-                      Sample, Scratch, BucketBoundaries,
-                      0..<sampleN,
-                      maxPrefix=cover.period,
-                      nTasksPerLocale=cfg.nTasksPerLocale);
+  // each task will sort regions of SA with chunks of this size
+  var tmpSize = min(n, cfg.finalSortPerTaskBufferSize);
+  // round it up to a multiple of the maximum bucket size
+  const perTaskBufferSize = divCeil(tmpSize, maxBktSize) * maxBktSize;
+
+  var avgBktSize = totalBktSize:real/nBuckets;
+
+  var distributedReSort = (maxBktSize > sampleN/cfg.locales.size ||
+                           cfg.assumeNonLocal);
+  if TRACE {
+    writeln("in sortAndNameSampleOffsets with ", nBuckets, " buckets",
+            " size statistics: min/max/average ",
+            100.0*minBktSize/n, "/", 100.0*maxBktSize/n, "/",
+            100.0*avgBktSize/n, "%)");
+    writeln("using perTaskBufferSize of ", perTaskBufferSize,
+            " (vs max bucket size ", maxBktSize, ")",
+            " elements for ", cfg.locales.size*nTasksPerLocale, " tasks");
+    if distributedReSort then writeln("-- doing distributed re-sort");
+  }
+
+  // now SubSA has buckets from the initial partition
+  // and BucketBoundaries stores the boundaries
+  // sort it the rest of the way by the prefix
+
+  if distributedReSort {
+    // use Block-distributed temporary storage to do a distributed sort
+    var A:[SubSA.domain] offsetAndCachedType;
+    var Scratch:[SubSA.domain] offsetAndCachedType;
+
+    // copy the offsets from SubSA into A
+    forall (elt, offset) in zip(A, SubSA) {
+      elt.offset = offset;
+    }
+
+    // clear the bucket boundaries (since we are starting over)
+    BucketBoundaries = 0;
+
+    // Load the first words into LocA.cached
+    loadNextWords(cfg, PackedText, A, Scratch, BucketBoundaries,
+                  0..<sampleN, sortedByBits=0,
+                  nTasksPerLocale=nTasksPerLocale);
+
+    // Sort by the prefix
+    sortByPrefixAndMark(cfg, PackedText, A, Scratch, BucketBoundaries,
+                        0..<sampleN, maxPrefix=cover.period,
+                        nTasksPerLocale=nTasksPerLocale);
+
+    // copy back to SubSA to do the naming
+    forall (elt, offset) in zip(A, SubSA) {
+      offset = elt.offset;
+    }
+  } else {
+    // use local storage to sort the buckets
+
+    forall (activeLocIdx, taskIdInLoc, taskRegion)
+    in divideIntoTasks(SubSA.domain, 0..<sampleN, nTasksPerLocale, cfg.locales)
+    with (in cfg) {
+      // allocate temporary per-task storage for sorting perTaskBufferSize elts
+      const bufSz = perTaskBufferSize;
+      var LocOffsets: [0..<bufSz] offsetType;
+      var LocA: [0..<bufSz] offsetAndCachedType;
+      var LocScratch: [0..<bufSz] offsetAndCachedType;
+      var LocBucketBoundaries: [0..<bufSz] uint(8);
+
+      for region in bucketGroups(taskRegion, 0..<sampleN, bufSz,
+                                 BucketBoundaries) {
+        //writeln("task ", taskIdInLoc, " sorting region ", region);
+
+        const sz = region.size;
+
+        // reset LocBucketBoundaries
+        //LocBucketBoundaries = 0;
+
+        // Copy the bucket boundaries from BucketBoundaries
+        // Main point of doing this is to get equality buckets from
+        // the partitioning step.
+        LocBucketBoundaries[0..<sz] = BucketBoundaries[region];
+
+        // Copy the offsets from SubSA to LocOffsets
+        LocOffsets[0..<sz] = SubSA[region];
+
+        // and use those to set the offsets in LocA
+        for (elt, offset) in zip(LocA, LocOffsets) {
+          elt.offset = offset;
+        }
+
+        // Load the first words into LocA.cached
+        loadNextWords(cfg, PackedText, LocA, LocScratch, LocBucketBoundaries,
+                      0..<sz, sortedByBits=0, nTasksPerLocale=1);
+
+        /*for i in 0..<sz {
+          writeln("loaded LocA[", region.low+i, "] = ", LocA[i],
+                  " LocBucketBoundaries[", region.low+i, "] = ",
+                  LocBucketBoundaries[i]);
+        }*/
+
+        // sort by the prefix and mark boundaries
+        sortByPrefixAndMark(cfg, PackedText, LocA, LocScratch,
+                            LocBucketBoundaries, 0..<sz,
+                            maxPrefix=cover.period,
+                            nTasksPerLocale=nTasksPerLocale,
+                            useExistingBuckets=true);
+
+        /*
+        for i in 0..<sz {
+          writeln("sorted LocA[", region.low+i, "] = ", LocA[i],
+                  " LocBucketBoundaries[", region.low+i, "] = ",
+                  LocBucketBoundaries[i]);
+        }*/
+
+        // Copy the bucket boundaries back to BucketBoundaries
+        // so they can be used in the naming portion
+        BucketBoundaries[region] = LocBucketBoundaries[0..<sz];
+
+        // Copy the offsets back to SubSA for the naming
+        for (elt, offset) in zip(LocA, LocOffsets) {
+          offset = elt.offset;
+        }
+        SubSA[region] = LocOffsets[0..<sz];
+      }
+    }
+  }
+
+  /*writeln("after sorting sample by prefix");
+  for i in 0..<sampleN {
+    writeln("Sample[", i, "] = ", SubSA[i], " BucketBoundaries[", i, "] = ",
+            BucketBoundaries[i]);
+  }*/
 
   // give each sample position a "name" that is just the offset
   // where its bucket starts
   forall (activeLocIdx, taskIdInLoc, taskRegion)
-  in divideIntoTasks(Scratch.domain, 0..<sampleN, nTasksPerLocale, cfg.locales)
+  in divideIntoTasks(SubSA.domain,
+                     0..<sampleN, nTasksPerLocale, cfg.locales)
   with (in cfg,
         var writeAgg = new DstAggregator(SampleNames.eltType),
-        const locRegion = Scratch.domain.localSubdomain().dim(0)) {
+        const locRegion = SubSA.domain.localSubdomain().dim(0)) {
     // find buckets that start in taskRegion
-    var cur = taskRegion.low;
-    var end = taskRegion.high+1;
-    while cur < end {
-      var bktType: uint(8);
-      var bkt = nextBucket(BucketBoundaries, taskRegion, 0..<sampleN, cur,
-                           /*out*/ bktType);
+    for bkt in taskBuckets(taskRegion, 0..<sampleN, BucketBoundaries) {
       const bktStart = bkt.low;
-      cur = bkt.high + 1; // go to the next bucket on the next iteration
       if bkt.size <= 0 {
         // nothing to do
       } else if bkt.size == 1 {
         //writeln(taskIdInLoc, " setting name for ", bkt);
         // this is a common case
-        setName(cfg, bktStart, bktStart, charsPerMod,
-                Sample, SampleNames, writeAgg);
+        setName(cfg, bktStart, SubSA[bktStart], charsPerMod,
+                SampleNames, writeAgg);
       } else if bkt.size > 1 {
         // compute the local portion and the nonlocal portion
-        const localPart = bkt[locRegion];
-        const otherPart = bkt[localPart.high+1..];
+        var localPart = bkt[locRegion];
+        var otherPart = bkt[localPart.high+1..];
+        if cfg.assumeNonLocal {
+          // enable testing the other loop
+          localPart = 1..0;
+          otherPart = bkt;
+        }
         //writeln(taskIdInLoc, " setting name other for ", bkt, " localPart=", localPart, " otherPart=", otherPart);
-        for i in localPart {
-          setName(cfg, bktStart, i, charsPerMod,
-                  Sample, SampleNames, writeAgg);
+        if localPart.size > 0 {
+          for i in localPart {
+            setName(cfg, bktStart, SubSA[i], charsPerMod,
+                    SampleNames, writeAgg);
+          }
         }
         if otherPart.size > 0 {
           forall (activeLocIdx, taskIdInLoc, chunk)
-          in divideIntoTasks(Sample.domain, otherPart, nTasksPerLocale)
+          in divideIntoTasks(SubSA.domain, otherPart, nTasksPerLocale)
           with (var innerWriteAgg = new DstAggregator(SampleNames.eltType)) {
             for i in chunk {
-              setName(cfg, bktStart, i, charsPerMod,
-                      Sample, SampleNames, innerWriteAgg);
+              setName(cfg, bktStart, SubSA[i], charsPerMod,
+                      SampleNames, innerWriteAgg);
             }
           }
         }
@@ -1944,7 +2131,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
                     const PackedText: [] cfg.loadWordType,
                     const SampleRanks: [] cfg.unsignedOffsetType,
                     const Splitters,
-                    resultDom: domain(?),
+                    ref SA: [] cfg.offsetType,
                     ref stats: statistics) {
   // in a pass over the input,
   // partition the suffixes according to the splitters
@@ -1984,10 +2171,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   const comparator = new finalPartitionComparator();
   const InputProducer = new offsetProducer2();
 
-  var SA: [resultDom] offsetType;
-  var BucketBoundaries: [resultDom] uint(8);
-
   const TextDom = makeBlockDomain(0..<n, cfg.locales);
+  var BucketBoundaries: [SA.domain] uint(8);
 
   var UnusedOutput = none;
 
@@ -2062,56 +2247,16 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     var LocSampleRanksA: [0..<bufSz] offsetAndSampleRanksType;
     var LocSampleRanksScratch: [0..<bufSz] offsetAndSampleRanksType;
 
-    // process buckets that begin in 'taskRegion'
-    var cur = taskRegion.low;
-    var end = taskRegion.high+1;
-
-    if cur < end {
-      // advance to the first bucket starting in this task's region
-      var bktType: uint(8);
-      var bkt = nextBucket(BucketBoundaries, taskRegion, 0..<n, cur,
-                           /*out*/ bktType);
-      cur = bkt.low;
-    }
-
-    // process groups of buckets
-    while cur < end {
-
-      // find the next buckets starting from 'cur' and start before 'end'
-      // that fit within 'bufSz' elements
-      var next = cur;
-      while next < end {
-        var bktType: uint(8);
-        var bkt = nextBucket(BucketBoundaries, taskRegion, 0..<n, next,
-                             /*out*/ bktType);
-        if bkt.low >= end then break; // bucket starts in another task's region
-        if bkt.high + 1 - cur > bufSz then break; // it would go beyond buffer
-        next = bkt.high + 1; // go to the next bucket on the next iteration
-      }
-
-      if EXTRA_CHECKS {
-        var i = cur;
-        while i < next {
-          var bktType: uint(8);
-          var bkt = nextBucket(BucketBoundaries, taskRegion, 0..<n, i,
-                               /*out*/ bktType);
-          assert(taskRegion.contains(i)); // or else, race conditions
-          assert(next - cur <= bufSz);     // or else, out of bounds
-          i = bkt.high + 1;
-        }
-      }
-
-      // sort the data in 'cur..<next', respecting existing bucket boundaries
+    // loop over groups of buckets with total size <= bufSz
+    for region in bucketGroups(taskRegion, 0..<n, bufSz, BucketBoundaries) {
+      // sort the data in 'groupRegion', respecting existing bucket boundaries
       // by copying locally and then storing back to SA
       sortAllOffsetsInRegion(cfg, PackedText, SampleRanks,
                              SA, BucketBoundaries,
-                             cur..<next,
+                             region,
                              LocOffsets, LocA, LocScratch,
                              LocSampleRanksA, LocSampleRanksScratch,
                              LocBucketBoundaries);
-
-      // move on to the next region that we can buffer here
-      cur = next;
     }
   }
 
@@ -2371,15 +2516,24 @@ proc compareSampleRanks(a: offsetAndSampleRanks(?), b: offsetAndSampleRanks(?),
 
 
 /** Create and return a sorted suffix array for the suffixes 0..<n
-    referring to 'thetext'.
+    referring to 'PackedText'.
 
     The returned array is Block distributed over cfg.locales if CHPL_COMM!=none.
 */
 proc ssortDcx(const cfg:ssortConfig(?),
-              const PackedText: [] cfg.loadWordType,
-              ResultDom = makeBlockDomain(0..<(cfg.n:cfg.idxType), cfg.locales))
- : [ResultDom] cfg.offsetType {
+              const PackedText: [] cfg.loadWordType) {
+  const ResultDom = makeBlockDomain(0..<(cfg.n:cfg.idxType), cfg.locales);
+  var SA: [ResultDom] cfg.offsetType;
+  ssortDcxSA(cfg, PackedText, SA);
+  return SA;
+}
 
+/** Computes a sorted suffix array for the suffixes in 0..<n referring
+    to 'PackedText' and store it in 'SA'.
+ */
+proc ssortDcxSA(const cfg:ssortConfig(?),
+                const PackedText: [] cfg.loadWordType,
+                ref SA: [] cfg.offsetType): void {
   type offsetType = cfg.offsetType;
   const ref cover = cfg.cover;
 
@@ -2394,8 +2548,8 @@ proc ssortDcx(const cfg:ssortConfig(?),
   //writeln("charsPerMod ", charsPerMod);
 
   if !isDistributedDomain(PackedText.domain) &&
-     isDistributedDomain(ResultDom) &&
-     ResultDom.targetLocales().size > 1 {
+     isDistributedDomain(SA.domain) &&
+     SA.targetLocales().size > 1 {
     writeln("warning: PackedText not distributed but result is");
   }
   if PackedText.eltType != cfg.loadWordType {
@@ -2415,8 +2569,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
     writeln("in ssortDcx ", cfg.type:string, " n=", n);
   }
 
-  /*
-  writeln("PackedText is");
+  /*writeln("PackedText is");
   for i in PackedText.domain {
     writef("PackedText[%i] = %xu\n", i, PackedText[i]);
   }*/
@@ -2443,7 +2596,8 @@ proc ssortDcx(const cfg:ssortConfig(?),
     if TRACE {
       writeln("Base case suffix sort for n=", n);
     }
-    return computeSuffixArrayDirectly(cfg, PackedText, ResultDom);
+    SA = computeSuffixArrayDirectly(cfg, PackedText, SA.domain);
+    return;
   }
 
   // set up information for recursive subproblem
@@ -2455,14 +2609,15 @@ proc ssortDcx(const cfg:ssortConfig(?),
                                  locales=cfg.locales,
                                  nTasksPerLocale=cfg.nTasksPerLocale);
 
+  // SampleText (recursive problem input and sample ranks)
+  const SampleTextDom = makeBlockDomain(0..<sampleN+INPUT_PADDING+cover.period,
+                                        cfg.locales);
+
+  var SampleText: [SampleTextDom] cfg.unsignedOffsetType;
+
   //// Step 1: Sort Sample Suffixes ////
 
   // begin by computing the input text for the recursive subproblem
-  var SampleDom = makeBlockDomain(0..<sampleN+INPUT_PADDING+cover.period,
-                                  cfg.locales);
-  var SampleText:[SampleDom] cfg.unsignedOffsetType;
-
-  var allSamplesHaveUniqueRanks = false;
 
   // create a sample splitters that can be replaced later
   var unusedPrefix = makePrefix(cfg, 0, PackedText, n, nBits);
@@ -2473,7 +2628,7 @@ proc ssortDcx(const cfg:ssortConfig(?),
     c_sizeof(unusedPrefixAndSampleRanks.type):int;
 
   // compute number of buckets for sample partition & after recursion partition
-  var nTasks = ResultDom.targetLocales().size * cfg.nTasksPerLocale;
+  var nTasks = SA.targetLocales().size * cfg.nTasksPerLocale;
   var requestedNumBuckets = max(cfg.minBucketsPerTask * nTasks,
                                 cfg.minBucketsSpace/prefixAndSampleRanksSize);
 
@@ -2487,7 +2642,8 @@ proc ssortDcx(const cfg:ssortConfig(?),
   // how many buckets to use for naming
   const requestedNumPrefixBuckets = requestedNumBuckets;
 
-  // create space for final step splitters now to avoid memory fragmentation
+  // create space for final step splitters now
+  // so that SubSA can be freed before they are used
   var nFinalSortBuckets = requestedNumBuckets;
   var saveSplitters:[0..<nFinalSortBuckets] unusedPrefixAndSampleRanks.type;
 
@@ -2503,16 +2659,14 @@ proc ssortDcx(const cfg:ssortConfig(?),
   // these are initialized below
   {
     var pre = startTime();
-    defer {
-      reportTime(pre, "pre");
-      if STATS {
-        writeln("pre statistics ", stats);
-      }
-    }
+
+    // allocate SubSA (sample suffix array)
+    const SampleSaDom = makeBlockDomain(0..<sampleN, cfg.locales);
+    var SubSA: [SampleSaDom] offsetType;
 
     // compute the name (approximate rank) for each sample suffix
     sortAndNameSampleOffsets(cfg, PackedText, requestedNumPrefixBuckets,
-                             SampleText, charsPerMod, stats);
+                             SubSA, SampleText, charsPerMod, stats);
 
     // Adjust the end-of-string markers in SampleText so that
     // they sort in the correct order
@@ -2527,24 +2681,26 @@ proc ssortDcx(const cfg:ssortConfig(?),
       //writeln("Setting SampleText[", endOffset, "] = ", name);
       SampleText[endOffset] = name;
     }
-  }
 
-  //// recursively sort the subproblem ////
-  {
-    /*
-    writeln("Recursive Input");
+    reportTime(pre, "pre");
+    if STATS {
+      writeln("pre statistics ", stats);
+    }
+
+    //// recursively sort the subproblem ////
+
+    /*writeln("Recursive Input");
     for i in 0..<subCfg.n {
       writeln("SampleText[", i, "] = ", SampleText[i]);
     }*/
 
-    const SubSA = ssortDcx(subCfg, SampleText);
+    ssortDcxSA(subCfg, SampleText, SubSA);
 
     if TRACE {
       writeln("back in ssortDcx n=", n);
     }
 
-    /*
-    writeln("Recursive Output");
+    /*writeln("Recursive Output");
     for i in 0..<subCfg.n {
       var offset = subproblemOffsetToOffset(SubSA[i], cover, charsPerMod);
       writeln("SubSA[", i, "] = ", SubSA[i], " (offset ", offset, ")");
@@ -2656,21 +2812,19 @@ proc ssortDcx(const cfg:ssortConfig(?),
                                         /* equal buckets */ false);
   //writeln("Splitters B are ", SampleSplitters);
 
-  const ret = sortAllOffsets(cfg, PackedText, SampleText, SampleSplitters,
-                             ResultDom, stats);
+  sortAllOffsets(cfg, PackedText, SampleText, SampleSplitters, SA, stats);
   if EXTRA_CHECKS && n < 1_000 {
-    const B = computeSuffixArrayDirectly(cfg, PackedText, ResultDom);
-    if !ret.equals(B) {
+    const B = computeSuffixArrayDirectly(cfg, PackedText, SA.domain);
+    if !SA.equals(B) {
       for i in 0..<n {
-        if ret[i] != B[i] {
-          writeln("Fail: ret[", i, "] = ", ret[i],
+        if SA[i] != B[i] {
+          writeln("Fail: SA[", i, "] = ", SA[i],
                   " but separately computed B[", i, "] = ", B[i]);
           assert(false);
         }
       }
     }
   }
-  return ret;
 }
 
 // TODO: move this LCP stuff to a different file
