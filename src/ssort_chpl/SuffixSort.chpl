@@ -39,6 +39,7 @@ config param DISTRIBUTE_EVEN_WITH_COMM_NONE = false;
 // how much padding does the algorithm need at the end of the input?
 param INPUT_PADDING = 8;
 
+config const TRUNCATE_INPUT_TO: int = max(int);
 
 /* TODO after https://github.com/chapel-lang/chapel/issues/25569 is fixed
 include public module DifferenceCovers;
@@ -189,17 +190,28 @@ proc main(args: [] string) throws {
                fileStarts=fileStarts,
                totalSize=totalSize);
 
-  const n = totalSize;
   writeln("Files are: ", concisePaths);
   writeln("FileStarts are: ", fileStarts);
 
   var t: Time.stopwatch;
 
+  const n = min(TRUNCATE_INPUT_TO, totalSize);
+
   writeln("Computing suffix array");
   t.reset();
-  t.start();
-  var SA = computeSuffixArray(allData, totalSize);
-  t.stop();
+  if totalSize == n {
+    t.start();
+    var SA = computeSuffixArray(allData, n);
+    t.stop();
+  } else {
+    writeln("Truncating input to ", n, " bytes");
+    var TruncatedDom = makeBlockDomain(0..<n+INPUT_PADDING, Locales);
+    var TruncatedInput:[TruncatedDom] uint(8);
+    TruncatedInput[0..<n] = allData[0..<n];
+    t.start();
+    var SA = computeSuffixArray(TruncatedInput, n);
+    t.stop();
+  }
 
   writeln("suffix array construction of ", n, " bytes ",
           "took ", t.elapsed(), " seconds");
