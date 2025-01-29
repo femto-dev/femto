@@ -25,7 +25,6 @@ import FileSystem.{isFile, isDir, findFiles, getFileSize};
 import FileSystem;
 import IO;
 import List.list;
-import OS.EofError;
 import Path;
 import BitOps;
 import Sort.{sort,isSorted};
@@ -35,12 +34,13 @@ import ChplConfig.CHPL_COMM;
 import RangeChunk;
 import Version;
 import Time;
+import CopyAggregation;
 
-import SuffixSort.{EXTRA_CHECKS, TIMING, INPUT_PADDING,
+import SuffixSort.{EXTRA_CHECKS, TIMING, TRACE, INPUT_PADDING,
                    DISTRIBUTE_EVEN_WITH_COMM_NONE};
 
 /* For FASTA files, when reading them, also read in the reverse complement */
-config param INCLUDE_REVERSE_COMPLEMENT=true;
+config const INCLUDE_REVERSE_COMPLEMENT=true;
 
 /* Compute the number of tasks to be used for a data parallel operation */
 proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
@@ -562,37 +562,106 @@ proc isFastaFile(path: string): bool throws {
   return false;
 }
 
-/* Computes the size of the nucleotide data that will
-   be read by readFastaFileSequence */
-proc computeFastaFileSize(path: string) throws {
+/* Reads sequence data that starts within 'taskFileRegion'
+   and optionally stores it into data[dstRegion] (if 'data' is not 'none').
+   Stores the offsets of > characters in sequencesStarts,
+   if it is not 'none'.
+   Returns the count of number of characters read.
+ */
+proc readFastaSequencesStartingInRegion(path: string,
+                                        taskFileRegion: range,
+                                        allFileRegion: range,
+                                        ref data,
+                                        dstRegion: range,
+                                        ref sequenceStarts=none) throws {
   extern proc isspace(c: c_int): c_int;
 
-  // compute the file size without > lines or whitespace
-  var r = IO.openReader(path);
-  var inDescLine = false;
+  var agg = new CopyAggregation.DstAggregator(uint(8));
+
+  // skip to > within the task's chunk
+  var r = IO.openReader(path, region=taskFileRegion.low..allFileRegion.high);
+  try {
+    r.advanceTo(">");
+  } catch e: IO.EofError {
+    return 0;
+  } catch e: IO.UnexpectedEofError {
+    return 0;
+  }
+
+  var dataStart = dstRegion.low;
+  var dataSize = dstRegion.size;
   var count = 0;
+  var descOffset = r.offset();
+  var inDescLine = false;
+  var desc = "";
+  // find any sequences that start in this task's chunk
+  // (i.e. read sequences starting with > that is within taskFileRegion)
   while true {
     try {
       var byte = r.readByte();
       if byte == ">".toByte() {
         inDescLine = true;
-        count += 1; // we will put > characters to divide sequences
+        descOffset = r.offset() - 1; // the position of the >
+        if !taskFileRegion.contains(descOffset) {
+          break; // don't read sequences starting outside of task's region
+        }
+        if sequenceStarts.type != nothing {
+          sequenceStarts.append(descOffset);
+        }
+        // store > characters to divide sequences
+        if data.type != nothing && count < dataSize {
+          agg.copy(data[dataStart + count], byte);
+        }
+        count += 1;
       } else if byte == "\n".toByte() && inDescLine {
         inDescLine = false;
+        /*if TRACE {
+          writeln("Reading sequence ", desc);
+        }*/
       }
-      if isspace(byte) == 0 && !inDescLine {
+      if inDescLine {
+        desc.appendCodepointValues(byte);
+      } else if isspace(byte) == 0 {
+        // store non-space sequence data
+        if data.type != nothing && count < dataSize {
+          agg.copy(data[dataStart + count], byte);
+        }
         count += 1;
       }
-    } catch e: EofError {
+    } catch e: IO.EofError {
       break;
     }
   }
 
-  if INCLUDE_REVERSE_COMPLEMENT {
-    count = 2*count;
+  return count;
+}
+
+/* Computes the size of the nucleotide data that will
+   be read by readFastaFileSequence */
+proc computeFastaFileSize(path: string) throws {
+  // compute the file size without > lines or whitespace
+  const size = IO.open(path, IO.ioMode.r).size;
+  const Dom = {0..<size};
+  const nTasksPerLocale = computeNumTasks();
+  var totalCount = 0;
+
+  forall (activeLocIdx, taskIdInLoc, chunk)
+  in divideIntoTasks(Dom, 0..<size, nTasksPerLocale)
+  with (+ reduce totalCount) {
+    var unusedData = none;
+    var c = readFastaSequencesStartingInRegion(path, chunk, 0..<size,
+                                               unusedData, 1..0);
+    totalCount += c;
   }
 
-  return count;
+  if INCLUDE_REVERSE_COMPLEMENT {
+    totalCount = 2*totalCount;
+  }
+
+  /*writeln("computeFastaFileSize ", path,
+          " INCLUDE_REVERSE_COMPLEMENT=", INCLUDE_REVERSE_COMPLEMENT,
+          " totalCount=", totalCount);*/
+  return totalCount;
 }
 
 /* Reads a the sequence portion of a fasta file into a region of an array.
@@ -605,61 +674,78 @@ proc readFastaFileSequence(path: string,
                            region: range,
                            verbose = true) throws
 {
-  extern proc isspace(c: c_int): c_int;
+  const size = IO.open(path, IO.ioMode.r).size;
+  //writeln("readFastaFileSequence ", path, " region=", region, " file size=", size);
 
-  if region.strides != strideKind.one {
-    compilerError("Range should be stride one");
-  }
-  var dataStart = region.low;
-  var n = region.size;
-  var r = IO.openReader(path);
-  var inDescLine = false;
-  var count = 0;
-  var desc = "";
-  while true {
-    try {
-      var byte = r.readByte();
-      if byte == ">".toByte() {
-        inDescLine = true;
-        if count < n {
-          data[dataStart + count] = byte;
-        }
-        desc = "";
-        count += 1;
-      } else if byte == "\n".toByte() && inDescLine {
-        inDescLine = false;
-        if verbose {
-          writeln("Reading sequence ", desc);
-        }
-      }
-      if inDescLine {
-        desc.appendCodepointValues(byte);
-      } else if isspace(byte) == 0 {
-        if count < n {
-          data[dataStart + count] = toUpper(byte);
-        }
-        count += 1;
-      }
-    } catch e: EofError {
-      break;
-    }
-  }
-
+  // file has spaces and descriptions, data does not, so should be smaller
   if INCLUDE_REVERSE_COMPLEMENT {
+    // but with reverse complement it is doubled
+    assert(region.size <= 2*size);
+  } else {
+    assert(region.size <= size);
+  }
+
+  const Dom = {0..<size};
+  const activeLocs = [here];
+  const nTasksPerLocale = computeNumTasks();
+  const nTasks = activeLocs.size * nTasksPerLocale;
+
+  var totalCount = 0;
+  var Counts:[0..<nTasks] int;
+  // compute the data position where each task should start
+  // (this is not a distributed loop)
+  forall (activeLocIdx, taskIdInLoc, chunk)
+  in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs)
+  with (+ reduce totalCount) {
+    const taskId = activeLocIdx*nTasksPerLocale + taskIdInLoc;
+    var unusedData = none;
+    var c = readFastaSequencesStartingInRegion(path, chunk, 0..<size,
+                                               unusedData, 1..0);
+    Counts[taskId] = c;
+    totalCount += c;
+  }
+
+  var checkCount = totalCount;
+  if INCLUDE_REVERSE_COMPLEMENT {
+    checkCount *= 2;
+  }
+
+  if region.size != checkCount {
+    // region does not match the file
+    throw new Error("count mismatch in readFastaFileSequence");
+  }
+
+  // Scan to get the end of each task's region
+  var Ends = + scan Counts;
+
+  // read in the data for each task
+  forall (activeLocIdx, taskIdInLoc, chunk)
+  in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs) {
+    const taskId = activeLocIdx*nTasksPerLocale + taskIdInLoc;
+    const end = Ends[taskId];
+    const count = Counts[taskId];
+    const start = end - count;
+
+    var dataStart = region.low + start;
+
+    // now read in sequences in the task's region
+    var c = readFastaSequencesStartingInRegion(path, chunk, 0..<size,
+                                               data, dataStart..#count);
+
+    assert(c == Counts[taskId]);
+  }
+
+  if INCLUDE_REVERSE_COMPLEMENT && totalCount > 0 {
+    var dataStart = region.low;
     // store the reverse complement just after the original sequence;
     // except the initial > would be a trailing >,
     // so emit a separator and don't revcomp the initial >
-    data[dataStart + count] = ">".toByte();
-    const countLessOne = count - 1; // don't revcomp the initial separator,
-                                    // because it would end up at the end
-    reverseComplement(data, dataStart+1..#countLessOne,
-                      data, dataStart+1+count..#countLessOne);
-    count = 2*count;
-  }
-
-  if n != count {
-    // region does not match the file
-    throw new Error("count mismatch in readFastaFileSequence");
+    var c = totalCount;
+    data[dataStart + c] = ">".toByte();
+    const cLessOne = c - 1; // don't revcomp the initial separator,
+                            // because it would end up at the end
+    reverseComplement(data, dataStart+1..#cLessOne,
+                      data, dataStart+1+c..#cLessOne);
   }
 }
 
@@ -722,6 +808,10 @@ proc readAllFiles(const ref files: list(string),
                   out fileSizes: [] int,
                   out fileStarts: [] int,
                   out totalSize: int) throws {
+  if TRACE {
+    writeln("in readAllFiles, reading ", files.size, " files");
+  }
+
   var locPaths = files.toArray();
   for p in locPaths {
     p = Path.normPath(p);
@@ -736,6 +826,10 @@ proc readAllFiles(const ref files: list(string),
     throw new Error("no input files provided");
   }
 
+  if TRACE {
+    writeln("in readAllFiles, computing file sizes");
+  }
+
   // compute the size for the concatenated input
   var sizes: [paths.domain] int;
   forall (path, sz) in zip(paths, sizes) {
@@ -748,6 +842,10 @@ proc readAllFiles(const ref files: list(string),
 
   const TextDom = makeBlockDomain(0..<total+INPUT_PADDING, locales);
   var thetext:[TextDom] uint(8);
+
+  if TRACE {
+    writeln("in readAllFiles, reading file contents");
+  }
 
   // read each file
   forall (path, sz, end) in zip(paths, sizes, fileEnds) {
@@ -773,6 +871,10 @@ proc readAllFiles(const ref files: list(string),
   fileSizes = sizes;
   fileStarts = starts;
   totalSize = total;
+
+  if TRACE {
+    writeln("readAllFiles complete");
+  }
 }
 
 proc offsetToFileIdx(const fileStarts: [] int, offset: int) {

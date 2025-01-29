@@ -172,18 +172,16 @@ proc testRevComp() {
   assert(A.equals(Expect));
 }
 
-proc testFastaFiles() throws {
-  writeln("testFastaFiles");
-  var fileContents = "> test \t seq\nA\n\rC\tG  TTA\nGGT\n\n\nA\n> seq 2\nCCG";
-  var expect = ">ACGTTAGGTA>CCG";
+proc testFastaFile(contents:string, seq:string, revcomp:string) throws {
+  var expect = seq;
   if Utility.INCLUDE_REVERSE_COMPLEMENT {
-    expect +=  ">CGG>TACCTAACGT";
+    expect += revcomp;
   }
   var n = expect.size;
   var filename = "tmp-testFastaFiles-test.fna";
   {
     var w = IO.openWriter(filename);
-    w.write(fileContents);
+    w.write(contents);
   }
   {
     assert(computeFastaFileSize(filename) == n);
@@ -193,6 +191,8 @@ proc testFastaFiles() throws {
     assert(A[0] == 0);
     assert(A[n+1] == 0);
     var str = arrToString(A[1..n]);
+    writeln("Got ", str);
+    writeln("Exp ", expect);
     assert(str == expect);
 
     A = 0;
@@ -204,6 +204,16 @@ proc testFastaFiles() throws {
   }
 
   FileSystem.remove(filename);
+}
+
+proc testFastaFiles() throws {
+  writeln("testFastaFiles()");
+
+  testFastaFile("> test \t seq\nA\n\rC\tG  TTA\nGGT\n\n\nA\n> seq 2\nCCG",
+                ">ACGTTAGGTA>CCG",
+                ">CGG>TACCTAACGT");
+  testFastaFile(">\n>\n>\nACAT\n>\n>\n", ">>>ACAT>>", ">>>ATGT>>");
+  testFastaFile(">\nAAAA>\nTTT>\nCC>\nG", ">AAAA>TTT>CC>G", ">C>GG>AAA>TTTT");
 }
 
 proc testAtomicMinMax() {

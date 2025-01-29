@@ -75,13 +75,17 @@ proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
 
   const bitsPerChar = computeBitsPerChar(Input, n);
 
-
-  writeln("computed bitsPerChar=", bitsPerChar);
+  if TRACE {
+    writeln("computed bitsPerChar=", bitsPerChar);
+  }
 
   // now proceed with suffix sorting with the packed data
   // and a compile-time known bitsPerChar
 
   proc helper(param pBitsPerChar) {
+    if TRACE {
+      writeln("using bitsPerChar=", pBitsPerChar);
+    }
     // pack using pBitsPerChar
     const packed = packInput(wordType, Input, n, pBitsPerChar);
     assert(pBitsPerChar >= bitsPerChar);
