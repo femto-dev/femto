@@ -534,11 +534,17 @@ proc reverseComplement(const ref input: [] uint(8),
     assert(inputRegion.size == outputRegion.size);
   }
 
+  const nTasksPerLocale = computeNumTasks(ignoreRunning=true);
   const n = inputRegion.size;
-  for i in 0..<n {
-    const inputIdx = i + inputRegion.first;
-    const outputIdx = n - 1 - i + outputRegion.first;
-    output[outputIdx] = complement(input[inputIdx]);
+  forall (_, _, chunk)
+  in divideIntoTasks(input.domain, inputRegion, nTasksPerLocale) {
+    var agg = new CopyAggregation.DstAggregator(uint(8));
+    for inputIdx in chunk {
+      const i = inputIdx - inputRegion.first;
+      const outputIdx = n - 1 - i + outputRegion.first;
+      const val = complement(input[inputIdx]);
+      agg.copy(output[outputIdx], val);
+    }
   }
 }
 
@@ -672,7 +678,7 @@ proc computeFastaFileSize(path: string) throws {
 proc readFastaFileSequence(path: string,
                            ref data: [] uint(8),
                            region: range,
-                           verbose = true) throws
+                           param distributed: bool = false) throws
 {
   const size = IO.open(path, IO.ioMode.r).size;
   //writeln("readFastaFileSequence ", path, " region=", region, " file size=", size);
@@ -685,13 +691,21 @@ proc readFastaFileSequence(path: string,
     assert(region.size <= size);
   }
 
-  const Dom = {0..<size};
-  const activeLocs = [here];
-  const nTasksPerLocale = computeNumTasks();
+  const activeLocs = if distributed
+                     then computeActiveLocales(data.domain, region)
+                     else [here];
+  const Dom = if distributed
+              then makeBlockDomain(0..<size, activeLocs)
+              else {0..<size};
+  const nTasksPerLocale = computeNumTasks(ignoreRunning=distributed);
   const nTasks = activeLocs.size * nTasksPerLocale;
 
   var totalCount = 0;
-  var Counts:[0..<nTasks] int;
+  const CountsDom = if distributed
+                    then makeBlockDomain(0..<nTasks, activeLocs)
+                    else {0..<nTasks};
+  var Counts:[CountsDom] int;
+
   // compute the data position where each task should start
   // (this is not a distributed loop)
   forall (activeLocIdx, taskIdInLoc, chunk)
@@ -768,7 +782,12 @@ proc readFileData(path: string,
                   verbose = true) throws
 {
   if isFastaFile(path) {
-    readFastaFileSequence(path, data, region, verbose);
+    const activeLocs = computeActiveLocales(data.domain, region);
+    if activeLocs.size > 1 {
+      readFastaFileSequence(path, data, region, distributed=true);
+    } else {
+      readFastaFileSequence(path, data, region, distributed=false);
+    }
   } else {
     var r = IO.openReader(path);
     r.readAll(data[region]);
