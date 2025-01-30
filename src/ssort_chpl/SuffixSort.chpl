@@ -175,6 +175,7 @@ proc main(args: [] string) throws {
     return 1;
   }
 
+  var readTime = startTime(true);
   const allData; //: [] uint(8);
   const allPaths; //: [] string;
   const concisePaths; // : [] string
@@ -192,30 +193,24 @@ proc main(args: [] string) throws {
 
   writeln("Files are: ", concisePaths);
   writeln("FileStarts are: ", fileStarts);
-
-  var t: Time.stopwatch;
+  reportTime(readTime, "reading input", totalSize, 1);
 
   const n = min(TRUNCATE_INPUT_TO, totalSize);
 
   writeln("Computing suffix array");
-  t.reset();
   if totalSize == n {
-    t.start();
+    var saTime = startTime(true);
     var SA = computeSuffixArray(allData, n);
-    t.stop();
+    reportTime(saTime, "suffix array construction", n, 1);
   } else {
     writeln("Truncating input to ", n, " bytes");
     var TruncatedDom = makeBlockDomain(0..<n+INPUT_PADDING, Locales);
     var TruncatedInput:[TruncatedDom] uint(8);
     TruncatedInput[0..<n] = allData[0..<n];
-    t.start();
+    var saTime = startTime(true);
     var SA = computeSuffixArray(TruncatedInput, n);
-    t.stop();
+    reportTime(saTime, "suffix array construction", n, 1);
   }
-
-  writeln("suffix array construction of ", n, " bytes ",
-          "took ", t.elapsed(), " seconds");
-  writeln(n / 1000.0 / 1000.0 / t.elapsed(), " MB/s");
 
   return 0;
 }
