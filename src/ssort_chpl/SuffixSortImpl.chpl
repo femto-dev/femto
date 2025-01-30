@@ -2734,21 +2734,50 @@ proc ssortDcxSA(const cfg:ssortConfig(?),
     }
 
     // gather splitters and store them in saveSplitters
+    var gatherSplitters = startTime();
 
     const perSplitter = sampleN:real / nFinalSortBuckets;
-    var start = perSplitter:int;
+    const start = perSplitter:int;
 
-    // note: this does a bunch of GETs, is not distributed or aggregated
-    // compare with createSampleSplitters which is more distributed
-    forall i in 0..nFinalSortBuckets-2 {
-      var sampleIdx = start + (i*perSplitter):int;
-      sampleIdx = min(max(sampleIdx, 0), sampleN-1);
+    const SplittersDom = makeBlockDomain(0..<nFinalSortBuckets-1,
+                                         targetLocales=cfg.locales);
+    const SplittersDomRange = SplittersDom.dim(0);
 
-      // sampleIdx is an index into the subproblem suffix array, <sampleN.
-      // find the offset in the subproblem
-      var subOffset = offset(SubSA[sampleIdx]);
-      // find the index in the parent problem.
-      var off = subproblemOffsetToOffset(subOffset, cover, charsPerMod);
+    var SplitterPairs:[SplittersDom] (int, int);
+
+    // this divides SplittersDom evenly up among the locales
+    // & each locale should be accessing mostly local elements.
+    forall (activeLocIdx, taskIdInLoc, chunk)
+    in divideIntoTasks(SplittersDom, SplittersDomRange,
+                       cfg.nTasksPerLocale, cfg.locales)
+    with (var agg = new DstAggregator((int,int))) {
+      for i in chunk {
+        var sampleIdx = start + (i*perSplitter):int;
+        sampleIdx = min(max(sampleIdx, 0), sampleN-1);
+
+        // sampleIdx is an index into the subproblem suffix array, <sampleN.
+        // find the offset in the subproblem
+        var subOffset = offset(SubSA[sampleIdx]);
+        // find the index in the parent problem.
+        var off = subproblemOffsetToOffset(subOffset, cover, charsPerMod);
+        agg.copy(SplitterPairs[i], (off, i));
+      }
+    }
+
+    // sort splitterPairs by offset
+    {
+      const region = SplittersDomRange;
+      var locSplitterPairs:[region] (int, int);
+      locSplitterPairs[region] = SplitterPairs[region];
+      sort(locSplitterPairs);
+      SplitterPairs[region] = locSplitterPairs[region];
+    }
+
+    // create the prefixAndSampleRanks in offset order
+    // and store these back to saveSplitters
+    forall elt in SplitterPairs
+    with (var agg = new DstAggregator(saveSplitters.eltType)) {
+      const (off, i) = elt;
       var ret = makePrefixAndSampleRanks(cfg, off,
                                          PackedText, SampleText,
                                          n, nBits);
@@ -2756,7 +2785,8 @@ proc ssortDcxSA(const cfg:ssortConfig(?),
       // writeln("sampleCreator(", i, ") :: SA[i] = ", subOffset, " -> offset ", off, " -> ", ret);
 
       //writeln("Making splitter ", ret);
-      saveSplitters[i] = ret;
+      //saveSplitters[i] = ret;
+      agg.copy(saveSplitters[i], ret);
     }
     // duplicate the last element
     saveSplitters[nFinalSortBuckets-1] = saveSplitters[nFinalSortBuckets-2];
@@ -2797,6 +2827,8 @@ proc ssortDcxSA(const cfg:ssortConfig(?),
       assert(isSorted(saveSplitters[0..<nFinalSortBuckets-1], new sampleComparator()));
       //writeln("Splitters A are ", tmp);
     }
+
+    reportTime(gatherSplitters, "gather and sort splitters");
   }
 
   //// Step 2: Sort everything all together ////
