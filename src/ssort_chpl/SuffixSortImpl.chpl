@@ -1591,7 +1591,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
         sortByPrefixAndMark(cfg, PackedText, LocA, LocScratch,
                             LocBucketBoundaries, 0..<sz,
                             maxPrefix=cover.period,
-                            nTasksPerLocale=nTasksPerLocale,
+                            nTasksPerLocale=1,
                             useExistingBuckets=true);
 
         /*
@@ -1705,7 +1705,8 @@ proc linearSortRegionBySampleRanksSerial(
   }
 
   if region.size < finalSortSimpleSortLimit {
-    comparisonSortLocal(A, Scratch, new finalComparator3(), region);
+    comparisonSortLocal(A, Scratch, new finalComparator3(), region,
+                        nTasksPerLocale=1);
     return;
   }
 
@@ -1840,6 +1841,7 @@ proc linearSortRegionBySampleRanksSerial(
 /* Sort the offsetAndSampleRanks values in A
    Copy the resulting offsets back to SA[saStart..]
  */
+/*
 proc linearSortOffsetsInRegionBySampleRanks(
                             const cfg:ssortConfig(?),
                             ref A: [] offsetAndSampleRanks(?),
@@ -1930,7 +1932,7 @@ proc linearSortOffsetsInRegionBySampleRanks(
       }
     }
   }
-}
+}*/
 
 
 /* Sorts offsets in a region of 'SA' using a difference cover sample.
@@ -2014,7 +2016,7 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                              splitterType=radixSplitters(RADIX_BITS),
                              radixBits=RADIX_BITS,
                              logBuckets=RADIX_BITS,
-                             nTasksPerLocale=nTasksPerLocale,
+                             nTasksPerLocale=1,
                              endbit=bitsPerCached,
                              markAllEquals=true,
                              useExistingBuckets=true);
@@ -2105,7 +2107,8 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
         local {
           if bkt.size < finalSortSimpleSortLimit {
             comparisonSortLocal(LocSampleRanksA, LocSampleRanksScratch,
-                                new finalComparator1(), bkt);
+                                new finalComparator1(), bkt,
+                                nTasksPerLocale=1);
           } else {
             //writeln("comparison sorting bucket ", bkt, "CCC");
             linearSortRegionBySampleRanksSerial(cfg, LocSampleRanksA,
@@ -2675,7 +2678,7 @@ proc ssortDcxSA(const cfg:ssortConfig(?),
     //     (i == 0 mod 7)   (i == 1 mod 7)   (i == 3 mod 7)
     // and X, Y, Z are the end-of-string markers. We need
     // to arrange for Z < Y < X < Ns
-    for i in 0..<cover.sampleSize {
+    forall i in 0..<cover.sampleSize {
       var endOffset = i*charsPerMod + charsPerMod - 1;
       var name = (cover.sampleSize-i):offsetType;
       //writeln("Setting SampleText[", endOffset, "] = ", name);
