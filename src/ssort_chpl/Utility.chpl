@@ -20,7 +20,8 @@
 module Utility {
 
 
-import CTypes.{c_int};
+import CTypes.{c_int, c_sizeof, c_ptr, c_ptrConst};
+import OS.POSIX.memcpy;
 import FileSystem.{isFile, isDir, findFiles, getFileSize};
 import FileSystem;
 import IO;
@@ -35,6 +36,7 @@ import RangeChunk;
 import Version;
 import Time;
 import CopyAggregation;
+import Communication;
 
 import SuffixSort.{EXTRA_CHECKS, TIMING, TRACE, INPUT_PADDING,
                    DISTRIBUTE_EVEN_WITH_COMM_NONE};
@@ -182,7 +184,7 @@ proc reReplicate(x, ref Result: [] owned ReplicatedWrapper(x.type)?,
 
   if EXTRA_CHECKS {
     //writeln("HERE activeLocales is ", activeLocales);
-    for loc in activeLocales { 
+    for loc in activeLocales {
       //writeln("loc is ", loc, " : ", loc.type:string);
       const ref elt = Result[loc.id];
       //writeln("elt is ", elt, " : ", elt.type:string);
@@ -395,6 +397,162 @@ iter divideByLocales(param tag: iterKind,
 }
 
 
+/* Copy a region between a default (local) array and a Block array.
+   This code is optimized for the case that the region is relatively
+   small and most or all of it is local.
+   It assumes that the arrays are 1-D and the ranges are non-strided
+   and bounded.
+   It operates with just one task.
+ */
+proc bulkCopy(ref dst: [], dstRegion: range,
+              const ref src: [], srcRegion: range) {
+  if EXTRA_CHECKS { // or boundsChecking
+    assert(dst.domain.dim(0).contains(dstRegion));
+    assert(src.domain.dim(0).contains(srcRegion));
+    assert(dstRegion.size == srcRegion.size);
+  }
+
+  if dst.eltType != src.eltType {
+    compilerError("bulkCopy array element types need to match");
+  }
+
+  if isDistributedDomain(dst.domain) && isDistributedDomain(src.domain) {
+    compilerError("bulkCopy needs one array to be local");
+  }
+
+  if isDistributedDomain(dst.domain) &&
+     !isSubtype(dst.domain.distribution.type, blockDist) {
+    compilerError("bulkCopy only works for blockDist as non-local array");
+    // could work for anything with contiguous elements
+  }
+
+  if isDistributedDomain(src.domain) &&
+     !isSubtype(src.domain.distribution.type, blockDist) {
+    compilerError("bulkCopy only works for blockDist as non-local array");
+  }
+
+  const eltSize = c_sizeof(dst.eltType);
+
+  // TODO: these are workarounds to avoid
+  // error: references to remote data cannot be passed to external routines like 'c_pointer_return_const'
+  proc addrOf(const ref p): c_ptr(p.type) {
+    return __primitive("_wide_get_addr", p): c_ptr(p.type);
+  }
+  proc addrOfConst(const ref p): c_ptrConst(p.type) {
+    return __primitive("_wide_get_addr", p): c_ptrConst(void) : c_ptrConst(p.type);
+  }
+
+
+  // helper for PUTs
+  proc helpPut(dstStart: int, srcStart: int, size: int) {
+    if size <= 0 {
+      return;
+    }
+
+    const startLocale = dst[dstStart].locale.id;
+    const endLocale = dst[dstStart+size-1].locale.id;
+    if startLocale == endLocale {
+      const nBytes = size * eltSize;
+      if startLocale == here.id {
+        memcpy(addrOf(dst[dstStart]), addrOfConst(src[srcStart]), nBytes);
+      } else {
+        Communication.put(addrOf(dst[dstStart]),
+                          addrOfConst(src[srcStart]),
+                          startLocale,
+                          nBytes);
+      }
+    } else {
+      // do it with bulk transfer since many locales are involved
+      if TRACE {
+        writeln("warning: unopt bulk transfer");
+      }
+      dst[dstStart..#size] = src[srcStart..#size];
+    }
+  }
+
+  // helper for GETs
+  proc helpGet(dstStart: int, srcStart: int, size: int) {
+    if size <= 0 {
+      return;
+    }
+
+    const startLocale = src[srcStart].locale.id;
+    const endLocale = src[srcStart+size-1].locale.id;
+    if startLocale == endLocale {
+      const nBytes = size * eltSize;
+      if startLocale == here.id {
+        memcpy(addrOf(dst[dstStart]), addrOfConst(src[srcStart]), nBytes);
+      } else {
+        Communication.get(addrOf(dst[dstStart]),
+                          addrOfConst(src[srcStart]),
+                          startLocale,
+                          nBytes);
+      }
+    } else {
+      // do it with bulk transfer since many locales are involved
+      if TRACE {
+        writeln("warning: unopt bulk transfer");
+      }
+      dst[dstStart..#size] = src[srcStart..#size];
+    }
+  }
+
+  if !isDistributedDomain(dst.domain) && !isDistributedDomain(src.domain) {
+    // neither are distributed, so do a memcpy
+    helpPut(dstRegion.low, srcRegion.low, dstRegion.size);
+    return;
+  }
+
+  if isDistributedDomain(dst.domain) {
+    // dst is distributed, src is not
+    var middlePart = dst.localSubdomain().dim(0)[dstRegion];
+    if middlePart.size == 0 {
+      // just use the subdomain containing the first dst element
+      // not expecting this to come up much
+      middlePart =
+        dst.localSubdomain(dst[dstRegion.low].locale).dim(0)[dstRegion];
+    }
+    const nonLocalBefore = dstRegion.low..<middlePart.low;
+    const nonLocalAfter = middlePart.high+1..dstRegion.high;
+    // now there are 3 regions:
+    //  * nonLocalBefore is the dst region before the local part
+    //  * localDstPart is the region before the local part
+    //  * nonLocalAfter is the dst region after the local part
+
+    helpPut(nonLocalBefore.low,
+            srcRegion.low + (nonLocalBefore.low - dstRegion.low),
+            nonLocalBefore.size);
+
+    helpPut(middlePart.low,
+            srcRegion.low + (middlePart.low - dstRegion.low),
+            middlePart.size);
+
+    helpPut(nonLocalAfter.low,
+            srcRegion.low + (nonLocalAfter.low - dstRegion.low),
+            nonLocalAfter.size);
+  } else {
+    // src is distributed, dst is not
+    var middlePart = src.localSubdomain().dim(0)[srcRegion];
+    if middlePart.size == 0 {
+      middlePart =
+        src.localSubdomain(src[srcRegion.low].locale).dim(0)[srcRegion];
+    }
+    const nonLocalBefore = srcRegion.low..<middlePart.low;
+    const nonLocalAfter = middlePart.high+1..srcRegion.high;
+
+    helpGet(dstRegion.low + (nonLocalBefore.low - srcRegion.low),
+            nonLocalBefore.low,
+            nonLocalBefore.size);
+
+    helpGet(dstRegion.low + (middlePart.low - srcRegion.low),
+            middlePart.low,
+            middlePart.size);
+
+    helpGet(dstRegion.low + (nonLocalAfter.low - srcRegion.low),
+            nonLocalAfter.low,
+            nonLocalAfter.size);
+  }
+}
 
 /* This function gives the size of an array of triangular indices
    for use with flattenTriangular.

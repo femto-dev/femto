@@ -42,6 +42,66 @@ proc testIsDistributed() {
   assert(!isDistributedDomain(DefaultDomain));
 }
 
+proc testBulkCopy() {
+  writeln("testBulkCopy");
+
+  const Dom = BlockDist.blockDist.createDomain(0..<n);
+  const A:[Dom] int = Dom;
+  var LocA: [0..n+1] int = 0..n+1;
+
+  // test local dst block src
+  for size in [1, 10, 100, n] {
+    writeln("testing GETs with max size ", size);
+    for i in 0..<n {
+      LocA = -1;
+      // copy 'size' bytes starting from 'i'
+      var sz = size;
+      if i+sz >= n {
+        sz = n - i;
+      }
+      assert(A.domain.contains(i..#sz));
+      assert(LocA.domain.contains(1..#sz));
+      const srcRegion = i..#sz;
+      if srcRegion.size > 0 {
+        const dstRegion = 1..#srcRegion.size;
+        bulkCopy(LocA, dstRegion, A, srcRegion);
+        assert(LocA[0] == -1);
+        for j in 0..<srcRegion.size {
+          assert(LocA[1+j] == A[i+j]);
+        }
+        assert(LocA[dstRegion.high+1] == -1);
+      }
+    }
+  }
+
+  // test block dst local src
+  var B = BlockDist.blockDist.createArray(0..n, int);
+  const LocB:[0..n+1] int = 0..n+1;
+  for size in [1, 10, 100, n] {
+    writeln("testing PUTs with max size ", size);
+    for i in 1..<n {
+      B = -1;
+      // copy 'size' bytes starting from 'i'
+      var sz = size;
+      if i+sz >= n {
+        sz = n - i;
+      }
+      assert(B.domain.contains(1..#sz));
+      assert(LocB.domain.contains(i..#sz));
+      const dstRegion = i..#sz;
+      if dstRegion.size > 0 {
+        const srcRegion = 1..#dstRegion.size;
+        bulkCopy(B, dstRegion, LocB, srcRegion);
+        assert(B[0] == -1);
+        for j in 0..<dstRegion.size {
+          assert(B[i+j] == LocB[1+j]);
+        }
+        assert(B[dstRegion.high+1] == -1);
+      }
+    }
+  }
+}
+
 proc testTriangles() {
   writeln("testTriangles");
 
@@ -253,7 +313,7 @@ proc testReplicate() {
     var rep: [BlockDist.blockDist.createDomain(0..<numLocales)]
              owned ReplicatedWrapper(string)?;
     const activeLocales = [Locales[1], Locales[2]];
-    reReplicate(v, rep, activeLocales); 
+    reReplicate(v, rep, activeLocales);
     assert(rep[Locales[0].id] == nil); // didn't set Locale 0
     assert(rep[Locales[1].id] != nil); // did set Locale 1
     assert(rep[Locales[2].id] != nil); // did set Locale 2
@@ -496,6 +556,7 @@ proc testPackInput() {
 
 proc main() throws {
   testIsDistributed();
+  testBulkCopy();
   testTriangles();
   testBits();
   testBsearch();
