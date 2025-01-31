@@ -40,6 +40,7 @@ config param DISTRIBUTE_EVEN_WITH_COMM_NONE = false;
 param INPUT_PADDING = 8;
 
 config const TRUNCATE_INPUT_TO: int = max(int);
+config const VERBOSE_COMMS = false;
 
 /* TODO after https://github.com/chapel-lang/chapel/issues/25569 is fixed
 include public module DifferenceCovers;
@@ -56,6 +57,7 @@ private import IO;
 private import Time;
 private import List;
 private import Help;
+private import CommDiagnostics;
 
 proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
   if !(Input.domain.rank == 1 &&
@@ -198,6 +200,11 @@ proc main(args: [] string) throws {
   const n = min(TRUNCATE_INPUT_TO, totalSize);
 
   writeln("Computing suffix array");
+
+  if VERBOSE_COMMS {
+    CommDiagnostics.startVerboseComm();
+  }
+
   if totalSize == n {
     var saTime = startTime(true);
     var SA = computeSuffixArray(allData, n);
@@ -210,6 +217,10 @@ proc main(args: [] string) throws {
     var saTime = startTime(true);
     var SA = computeSuffixArray(TruncatedInput, n);
     reportTime(saTime, "suffix array construction", n, 1);
+  }
+
+  if VERBOSE_COMMS {
+    CommDiagnostics.stopVerboseComm();
   }
 
   return 0;

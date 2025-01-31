@@ -415,15 +415,17 @@ record splitters : writeSerializable {
   }
 
   proc ref setStorageFrom(const ref rhs: splitters(?)) {
-    for i in 0..<rhs.myNumBuckets {
-      if i < this.myNumBuckets {
-        this.storage[i] = rhs.storage[i];
-        this.sortedStorage[i] = rhs.sortedStorage[i];
-      } else {
-        var empty: eltType;
-        this.storage[i] = empty;
-        this.sortedStorage[i] = empty;
-      }
+    // try to use bulk comms to copy from a remote array
+    var arrayBounds = storage.domain.dim(0);
+    var region = arrayBounds[0..<rhs.myNumBuckets];
+    this.storage[region] = rhs.storage[region];
+    this.sortedStorage[region] = rhs.sortedStorage[region];
+
+    // clear any elements beyond the number of splitters
+    for i in region.high+1..arrayBounds.high {
+      var empty: eltType;
+      this.storage[i] = empty;
+      this.sortedStorage[i] = empty;
     }
   }
 
@@ -1179,14 +1181,18 @@ proc partition(const InputDomain: domain(?),
     const GlobCountsDom = blockDist.createDomain(0..<countsSize);
     var GlobCounts: [GlobCountsDom] int;
     const CountsDom = blockDist.createDomain(0..<nBuckets);
-    var Ends:[CountsDom] int;
+    var EndsDist:[CountsDom] int;
+    var RetDist:[CountsDom] bktCount;
     var Ret:[0..<nBuckets] bktCount;
 
     parStablePartition(InputDomain, inputRegion, Input,
                        OutputShift, Output,
                        split, comparator, filterBucket,
                        nTasksPerLocale, activeLocs,
-                       GlobCounts, Ends, Ret);
+                       GlobCounts, EndsDist, RetDist);
+
+    Ret[0..<nBuckets] = RetDist[0..<nBuckets];
+
     return Ret;
   }
 }
@@ -1856,7 +1862,8 @@ proc createSampleSplitters(const ref ADom,
                                  randNums.next(dstRangeDom, low, high)) {
       //writeln("SortSamplesSpace[", dstIdx, "] = A[", randIdx, "]");
       // store the value at randIdx (which should be local) to dstIdx
-      agg.copy(SortSamplesSpace[dstIdx], A[randIdx]);
+      const val = A[randIdx];
+      agg.copy(SortSamplesSpace[dstIdx], val); // TODO: array header comms
       //SortSamplesSpace[dstIdx] = A[randIdx];
     }
   }
