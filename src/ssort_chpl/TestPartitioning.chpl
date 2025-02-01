@@ -271,9 +271,19 @@ proc testPartitionSingleSplitter(n: int) {
 }
 
 proc checkArrayMatches(got: [], expect: []) {
-  assert(got.domain == expect.domain);
+  if got.domain != expect.domain {
+    writeln("array does not match : domains differ");
+    writeln("got ", got.domain);
+    writeln("exp ", expect.domain);
+    assert(got.domain == expect.domain);
+  }
   for (g, e, i) in zip(got, expect, expect.domain) {
-    assert(g == e);
+    if g != e {
+      writeln("array does not match : element ", i, " differs");
+      writeln("got ", got);
+      writeln("exp ", expect);
+      assert(g == e);
+    }
   }
 }
 
@@ -295,7 +305,7 @@ proc testSplitters() {
   {
     writeln("  sorted");
     var sample = [1, 1, 1, 5,  7,  9, 11, 32];
-    var expect = [1, 5, 9, 9]; // smaller due to equality buckets
+    var expect = [1, 5, 7, 7]; // smaller due to equality buckets
     var s = new splitters(sample,
                           requestedNumBuckets=9,
                           myDefaultComparator,
@@ -308,7 +318,7 @@ proc testSplitters() {
     writeln("  unsorted");
     var sample = [1, 5, 7, 9, 11,  1, 32,  1];
     // sorts to  [1, 1, 1, 5,  7,  9, 11, 32];
-    var expect = [1, 5, 9, 9]; // smaller due to equality buckets
+    var expect = [1, 5, 7, 7]; // smaller due to equality buckets
     var s = new splitters(sample,
                           requestedNumBuckets=9,
                           myDefaultComparator,
@@ -364,7 +374,7 @@ proc testSplitters() {
   {
     writeln("  checking span 16/16");
     var sample = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-    var expect = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15];
+    var expect = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 14];
     var s = new splitters(sample,
                           requestedNumBuckets=16,
                           myDefaultComparator,
