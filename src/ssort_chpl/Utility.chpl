@@ -405,7 +405,7 @@ iter divideByLocales(param tag: iterKind,
    It operates with just one task.
  */
 proc bulkCopy(ref dst: [], dstRegion: range,
-              const ref src: [], srcRegion: range) {
+              const ref src: [], srcRegion: range) : void {
   if EXTRA_CHECKS { // or boundsChecking
     assert(dst.domain.dim(0).contains(dstRegion));
     assert(src.domain.dim(0).contains(srcRegion));
@@ -414,10 +414,6 @@ proc bulkCopy(ref dst: [], dstRegion: range,
 
   if dst.eltType != src.eltType {
     compilerError("bulkCopy array element types need to match");
-  }
-
-  if isDistributedDomain(dst.domain) && isDistributedDomain(src.domain) {
-    compilerError("bulkCopy needs one array to be local");
   }
 
   if isDistributedDomain(dst.domain) &&
@@ -464,7 +460,7 @@ proc bulkCopy(ref dst: [], dstRegion: range,
     } else {
       // do it with bulk transfer since many locales are involved
       if TRACE {
-        writeln("warning: unopt bulk transfer");
+        writeln("warning: unopt bulkCopy PUT");
       }
       dst[dstStart..#size] = src[srcStart..#size];
     }
@@ -491,19 +487,24 @@ proc bulkCopy(ref dst: [], dstRegion: range,
     } else {
       // do it with bulk transfer since many locales are involved
       if TRACE {
-        writeln("warning: unopt bulk transfer");
+        writeln("warning: unopt bulkCopy GET");
       }
       dst[dstStart..#size] = src[srcStart..#size];
     }
   }
 
-  if !isDistributedDomain(dst.domain) && !isDistributedDomain(src.domain) {
+  const dstLocal = !isDistributedDomain(dst.domain) ||
+                   dst.localSubdomain().dim(0)[dstRegion] == dstRegion;
+  const srcLocal = !isDistributedDomain(src.domain) ||
+                   src.localSubdomain().dim(0)[srcRegion] == srcRegion;
+
+  if dstLocal && srcLocal {
     // neither are distributed, so do a memcpy
     helpPut(dstRegion.low, srcRegion.low, dstRegion.size);
     return;
   }
 
-  if isDistributedDomain(dst.domain) {
+  if !dstLocal && srcLocal {
     // dst is distributed, src is not
     var middlePart = dst.localSubdomain().dim(0)[dstRegion];
     if middlePart.size == 0 {
@@ -530,7 +531,10 @@ proc bulkCopy(ref dst: [], dstRegion: range,
     helpPut(nonLocalAfter.low,
             srcRegion.low + (nonLocalAfter.low - dstRegion.low),
             nonLocalAfter.size);
-  } else {
+    return;
+  }
+
+  if !srcLocal && dstLocal {
     // src is distributed, dst is not
     var middlePart = src.localSubdomain().dim(0)[srcRegion];
     if middlePart.size == 0 {
@@ -551,7 +555,17 @@ proc bulkCopy(ref dst: [], dstRegion: range,
     helpGet(dstRegion.low + (nonLocalAfter.low - srcRegion.low),
             nonLocalAfter.low,
             nonLocalAfter.size);
+    return;
   }
+
+  // Otherwise, they both have remote elements.
+  // Find an element on the source locale and use an 'on' statement
+  // to PUT back from there.
+  // Use bulk transfer
+  if TRACE {
+    writeln("warning: unopt bulkCopy (both remote)");
+  }
+  dst[dstRegion] = src[srcRegion];
 }
 
 /* This function gives the size of an array of triangular indices

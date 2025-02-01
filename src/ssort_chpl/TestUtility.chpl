@@ -100,6 +100,36 @@ proc testBulkCopy() {
       }
     }
   }
+
+  // test block dst block src
+  var Dst = BlockDist.blockDist.createArray(0..n+1, int);
+  var Src = BlockDist.blockDist.createArray(0..n+1, int);
+  Src = 0..n+1;
+  on Locales[numLocales - 1] {
+    for size in [1, 10, 100, n] {
+      writeln("testing GET-PUTs with max size ", size);
+      for i in 0..<n {
+        Dst = -1;
+        // copy 'size' bytes starting from 'i'
+        var sz = size;
+        if i+sz >= n {
+          sz = n - i;
+        }
+        assert(Src.domain.contains(i..#sz));
+        assert(Dst.domain.contains(1..#sz));
+        const srcRegion = i..#sz;
+        if srcRegion.size > 0 {
+          const dstRegion = 1..#srcRegion.size;
+          bulkCopy(Dst, dstRegion, Src, srcRegion);
+          assert(Dst[0] == -1);
+          for j in 0..<srcRegion.size {
+            assert(Dst[1+j] == Src[i+j]);
+          }
+          assert(Dst[dstRegion.high+1] == -1);
+        }
+      }
+    }
+  }
 }
 
 proc testTriangles() {
@@ -583,6 +613,8 @@ proc main() throws {
     testPackInput();
   }
   testPackInput();
+
+  writeln("OK");
 }
 
 
