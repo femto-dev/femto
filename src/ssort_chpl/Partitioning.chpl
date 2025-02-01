@@ -415,11 +415,11 @@ record splitters : writeSerializable {
   }
 
   proc ref setStorageFrom(const ref rhs: splitters(?)) {
-    // try to use bulk comms to copy from a remote array
+    // use bulk comms to copy from a remote array
     var arrayBounds = storage.domain.dim(0);
     var region = arrayBounds[0..<rhs.myNumBuckets];
-    this.storage[region] = rhs.storage[region];
-    this.sortedStorage[region] = rhs.sortedStorage[region];
+    bulkCopy(this.storage, region, rhs.storage, region);
+    bulkCopy(this.sortedStorage, region, rhs.sortedStorage, region);
 
     // clear any elements beyond the number of splitters
     for i in region.high+1..arrayBounds.high {
@@ -1191,6 +1191,9 @@ proc partition(const InputDomain: domain(?),
                        nTasksPerLocale, activeLocs,
                        GlobCounts, EndsDist, RetDist);
 
+    // This is a Local = Distributed assignment,
+    // written this way for AVE.
+    // Expect all locales to be involved.
     Ret[0..<nBuckets] = RetDist[0..<nBuckets];
 
     return Ret;
@@ -2029,12 +2032,12 @@ private proc partitionSortBaseCase(ref A: [], region: range, comparator) {
   } else {
     // copy it locally and sort it with a stable sort
     var LocA:[region] A.eltType;
-    LocA[region] = A[region];
+    bulkCopy(LocA, region, A, region);
     local {
       sort(LocA, comparator, region, stable=true);
     }
     // copy the sorted data back
-    A[region] = LocA[region];
+    bulkCopy(A, region, LocA, region);
   }
 }
 
@@ -2170,7 +2173,7 @@ proc partitioningSorter.sortStep(ref A: [],
     // copy it to A if it is not already there
     if !inputInA {
       local ifAllLocal {
-        A[region] = Scratch[region];
+        bulkCopy(A, region, Scratch, region);
         // update the bucket boundary
         if isBaseCaseBoundary(bktType) {
           BucketBoundaries[region.low] = boundaryTypeBaseCaseSortedBucketInA;
@@ -2191,7 +2194,7 @@ proc partitioningSorter.sortStep(ref A: [],
     local ifAllLocal {
       // copy it to A if it is not already there
       if !inputInA {
-        A[region] = Scratch[region];
+        bulkCopy(A, region, Scratch, region);
       }
       var agg = new DstAggregator(uint(8));
       baseCase(A, BucketBoundaries, region, comparator, agg);
