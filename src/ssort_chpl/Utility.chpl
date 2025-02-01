@@ -450,8 +450,20 @@ proc bulkCopy(ref dst: [], dstRegion: range,
     if startLocale == endLocale {
       const nBytes = size * eltSize;
       if startLocale == here.id {
+        if EXTRA_CHECKS {
+          for i in 0..<size {
+            assert(dst[dstStart+i].locale == here);
+            assert(src[srcStart+i].locale == here);
+          }
+        }
         memcpy(addrOf(dst[dstStart]), addrOfConst(src[srcStart]), nBytes);
       } else {
+        if EXTRA_CHECKS {
+          for i in 0..<size {
+            assert(dst[dstStart+i].locale.id == startLocale);
+            assert(src[srcStart+i].locale == here);
+          }
+        }
         Communication.put(addrOf(dst[dstStart]),
                           addrOfConst(src[srcStart]),
                           startLocale,
@@ -477,8 +489,20 @@ proc bulkCopy(ref dst: [], dstRegion: range,
     if startLocale == endLocale {
       const nBytes = size * eltSize;
       if startLocale == here.id {
+        if EXTRA_CHECKS {
+          for i in 0..<size {
+            assert(dst[dstStart+i].locale == here);
+            assert(src[srcStart+i].locale == here);
+          }
+        }
         memcpy(addrOf(dst[dstStart]), addrOfConst(src[srcStart]), nBytes);
       } else {
+        if EXTRA_CHECKS {
+          for i in 0..<size {
+            assert(dst[dstStart+i].locale == here);
+            assert(src[srcStart+i].locale.id == startLocale);
+          }
+        }
         Communication.get(addrOf(dst[dstStart]),
                           addrOfConst(src[srcStart]),
                           startLocale,
@@ -493,10 +517,8 @@ proc bulkCopy(ref dst: [], dstRegion: range,
     }
   }
 
-  const dstLocal = !isDistributedDomain(dst.domain) ||
-                   dst.localSubdomain().dim(0)[dstRegion] == dstRegion;
-  const srcLocal = !isDistributedDomain(src.domain) ||
-                   src.localSubdomain().dim(0)[srcRegion] == srcRegion;
+  const dstLocal = dst.localSubdomain().dim(0)[dstRegion] == dstRegion;
+  const srcLocal = src.localSubdomain().dim(0)[srcRegion] == srcRegion;
 
   if dstLocal && srcLocal {
     // neither are distributed, so do a memcpy
