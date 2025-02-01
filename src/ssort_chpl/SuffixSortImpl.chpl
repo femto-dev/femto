@@ -1567,10 +1567,10 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
         // Copy the bucket boundaries from BucketBoundaries
         // Main point of doing this is to get equality buckets from
         // the partitioning step.
-        LocBucketBoundaries[0..<sz] = BucketBoundaries[region];
+        bulkCopy(LocBucketBoundaries, 0..<sz, BucketBoundaries, region);
 
         // Copy the offsets from SubSA to LocOffsets
-        LocOffsets[0..<sz] = SubSA[region];
+        bulkCopy(LocOffsets, 0..<sz, SubSA, region);
 
         // and use those to set the offsets in LocA
         for (elt, offset) in zip(LocA, LocOffsets) {
@@ -1603,13 +1603,13 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
 
         // Copy the bucket boundaries back to BucketBoundaries
         // so they can be used in the naming portion
-        BucketBoundaries[region] = LocBucketBoundaries[0..<sz];
+        bulkCopy(BucketBoundaries, region, LocBucketBoundaries, 0..<sz);
 
         // Copy the offsets back to SubSA for the naming
         for (elt, offset) in zip(LocA, LocOffsets) {
           offset = elt.offset;
         }
-        SubSA[region] = LocOffsets[0..<sz];
+        bulkCopy(SubSA, region, LocOffsets, 0..<sz);
       }
     }
   }
@@ -1920,7 +1920,7 @@ proc linearSortOffsetsInRegionBySampleRanks(
       var LocA:[bkt] A.eltType;
       var LocScratch:[bkt] A.eltType;
       // copy to local temp
-      LocScratch[bkt] = Scratch[bkt];
+      bulkCopy(locScratch, bkt, Scratch, bkt);
       // sort it
       local {
         linearSortRegionBySampleRanksSerial(cfg, LocScratch, LocA, bkt);
@@ -1989,10 +1989,10 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   var sz = region.size;
 
   // Copy the bucket boundaries from BucketBoundaries to LocBucketBoundaries
-  LocBucketBoundaries[0..<sz] = BucketBoundaries[region];
+  bulkCopy(LocBucketBoundaries, 0..<sz, BucketBoundaries, region);
 
   // Copy the offsets from SA to LocOffsets
-  LocOffsets[0..<sz] = SA[region];
+  bulkCopy(LocOffsets, 0..<sz, SA, region);
 
   // and use those to set the offsets in LocA
   for (elt, offset) in zip(LocA, LocOffsets) {
@@ -2771,9 +2771,9 @@ proc ssortDcxSA(const cfg:ssortConfig(?),
     {
       const region = SplittersDomRange;
       var locSplitterPairs:[region] (int, int);
-      locSplitterPairs[region] = SplitterPairs[region];
+      locSplitterPairs[region] = SplitterPairs[region]; // all locales
       sort(locSplitterPairs);
-      SplitterPairs[region] = locSplitterPairs[region];
+      SplitterPairs[region] = locSplitterPairs[region]; // all locales
     }
 
     // create the prefixAndSampleRanks in offset order
