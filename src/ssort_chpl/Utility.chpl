@@ -579,6 +579,10 @@ proc bulkCopy(ref dst: [], dstRegion: range,
         forall dstPg in divideIntoPages(dstPtr..#nBytes, bulkCopyPageSz) {
           const dstPartPtr = dstPg.low:c_ptr(void);
           const srcPartPtr = (srcPtr + (dstPg.low - dstPtr)):c_ptr(void);
+          if EXTRA_CHECKS {
+            assert((dstPtr..#nBytes).contains(dstPartPtr:uint..#dstPg.size));
+            assert((srcPtr..#nBytes).contains(srcPartPtr:uint..#dstPg.size));
+          }
           memcpy(dstPartPtr, srcPartPtr, dstPg.size);
         }
       } else {
@@ -591,7 +595,11 @@ proc bulkCopy(ref dst: [], dstRegion: range,
         forall dstPg in divideIntoPages(dstPtr..#nBytes, bulkCopyPageSz) {
           const dstPartPtr = dstPg.low:c_ptr(void);
           const srcPartPtr = (srcPtr + (dstPg.low - dstPtr)):c_ptr(void);
-          Communication.put(dstPartPtr, srcPartPtr, startLocale, nBytes);
+          if EXTRA_CHECKS {
+            assert((dstPtr..#nBytes).contains(dstPartPtr:uint..#dstPg.size));
+            assert((srcPtr..#nBytes).contains(srcPartPtr:uint..#dstPg.size));
+          }
+          Communication.put(dstPartPtr, srcPartPtr, startLocale, dstPg.size);
         }
       }
     } else {
@@ -625,6 +633,10 @@ proc bulkCopy(ref dst: [], dstRegion: range,
         forall dstPg in divideIntoPages(dstPtr..#nBytes, bulkCopyPageSz) {
           const dstPartPtr = dstPg.low:c_ptr(void);
           const srcPartPtr = (srcPtr + (dstPg.low - dstPtr)):c_ptr(void);
+          if EXTRA_CHECKS {
+            assert((dstPtr..#nBytes).contains(dstPartPtr:uint..#dstPg.size));
+            assert((srcPtr..#nBytes).contains(srcPartPtr:uint..#dstPg.size));
+          }
           memcpy(dstPartPtr, srcPartPtr, dstPg.size);
         }
       } else {
@@ -637,7 +649,11 @@ proc bulkCopy(ref dst: [], dstRegion: range,
         forall dstPg in divideIntoPages(dstPtr..#nBytes, bulkCopyPageSz) {
           const dstPartPtr = dstPg.low:c_ptr(void);
           const srcPartPtr = (srcPtr + (dstPg.low - dstPtr)):c_ptr(void);
-          Communication.get(dstPartPtr, srcPartPtr, startLocale, nBytes);
+          if EXTRA_CHECKS {
+            assert((dstPtr..#nBytes).contains(dstPartPtr:uint..#dstPg.size));
+            assert((srcPtr..#nBytes).contains(srcPartPtr:uint..#dstPg.size));
+          }
+          Communication.get(dstPartPtr, srcPartPtr, startLocale, dstPg.size);
         }
       }
     } else {
