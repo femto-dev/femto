@@ -405,7 +405,7 @@ iter divideByLocales(param tag: iterKind,
 
    Parallel standalone or serial, but not distributed.
 
-   Yields ranges to be processed independently.
+   Yields non-empty ranges to be processed independently.
  */
 iter divideIntoPages(const region: range(?),
                      alignment: region.idxType,
@@ -417,7 +417,9 @@ iter divideIntoPages(const region: range(?),
     compilerError("divideIntoPages only supports non-strided ranges");
   }
 
-  yield region;
+  if region.size > 0 {
+    yield region;
+  }
 }
 iter divideIntoPages(param tag: iterKind,
                      const region: range(?),
@@ -437,14 +439,18 @@ iter divideIntoPages(param tag: iterKind,
   if lastPage - firstPage < nTasksPerLocale {
     // just yield the whole range (serially) if the range doesn't
     // have enough "pages" for nTasksPerLocale.
-    yield region;
+    if region.size > 0 {
+      yield region;
+    }
     return;
   } else {
     coforall pages in RangeChunk.chunks(firstPage..lastPage, nTasksPerLocale) {
       for whichPage in pages {
         const pageRange = whichPage*alignment..#alignment;
         const toYield = region[pageRange]; // intersect page with input
-        yield toYield;
+        if toYield.size > 0 {
+          yield toYield;
+        }
       }
     }
   }

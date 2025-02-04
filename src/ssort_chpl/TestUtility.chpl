@@ -560,6 +560,7 @@ proc testDivideIntoPages(lower: integral, size: integral, alignment: integral) {
 
   // check serial
   for pageRange in divideIntoPages(region, alignment) {
+    assert(pageRange.size > 0);
     // check alignment
     if pageRange.low % alignment != 0 {
       nUnaligned += 1;
@@ -584,6 +585,7 @@ proc testDivideIntoPages(lower: integral, size: integral, alignment: integral) {
   nUnaligned = 0;
   forall pageRange in divideIntoPages(region, alignment)
   with (+ reduce nUnaligned) {
+    assert(pageRange.size > 0);
     // check alignment
     if pageRange.low % alignment != 0 {
       nUnaligned += 1;
