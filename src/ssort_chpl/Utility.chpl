@@ -396,6 +396,102 @@ iter divideByLocales(param tag: iterKind,
   }
 }
 
+/* Divide up a range into "pages" -- that is, regions that
+   have start indices that are aligned (that is, startidx % alignment == 0).
+   The first region won't be aligned.
+
+   Parallel standalone or serial, but not distributed.
+
+   Yields ranges to be processed independently.
+ */
+iter divideIntoPages(const region: range,
+                     alignment: int,
+                     nTasksPerLocale: int = computeNumTasks()) {
+  yield region;
+}
+iter divideIntoPages(param tag: iterKind,
+                     const region: range,
+                     alignment: int,
+                     nTasksPerLocale: int = computeNumTasks())
+ where tag == iterKind.standalone {
+
+  const firstPage = region.low / alignment;
+  const lastPage = region.high / alignment;
+
+  if lastPage - firstPage < nTasksPerLocale {
+    // just yield the whole range (serially) if the range doesn't
+    // have enough "pages" for nTasksPerLocale.
+    yield region;
+    return;
+  } else {
+    coforall pages in RangeChunk.chunks(firstPage..lastPage, nTasksPerLocale) {
+      for whichPage in pages {
+        const pageRange = whichPage*alignment..#alignment;
+        const toYield = region[pageRange]; // intersect page with input
+        yield toYield;
+      }
+    }
+  }
+}
+
+
+/* Yields the elements in a range but rotated by 'shift',
+   that is, the elements yielded start at 'region.low+shift'
+   and then wrap around. */
+iter rotateRange(const region: range,
+                 shift: int,
+                 nTasksPerLocale: int = computeNumTasks()) {
+
+  if region.size == 0 {
+    return;
+  }
+
+  const modShift = mod(shift, region.size);
+  const split = region.low + modShift;
+  if EXTRA_CHECKS {
+    assert(region.contains(split));
+  }
+
+  // first do the region starting at 'split' (normally, region.low+shift)
+  for i in split..region.high {
+    yield i;
+  }
+
+  // then do the region ending before 'split'
+  for i in region.low..<split {
+    yield i;
+  }
+}
+iter rotateRange(param tag: iterKind,
+                 const region: range,
+                 shift: int,
+                 nTasksPerLocale: int = computeNumTasks())
+ where tag == iterKind.standalone {
+
+  if region.size == 0 {
+    return;
+  }
+
+  const modShift = mod(shift, region.size);
+  const split = region.low + modShift;
+  if EXTRA_CHECKS {
+    assert(region.contains(split));
+  }
+
+  // first do the region starting at 'split' (normally, region.low+shift)
+  coforall r in RangeChunk.chunks(split..region.high, nTasksPerLocale) {
+    for i in r {
+      yield i;
+    }
+  }
+
+  // then do the region ending before 'split'
+  coforall r in RangeChunk.chunks(region.low..<split, nTasksPerLocale) {
+    for i in r {
+      yield i;
+    }
+  }
+}
 
 /* Copy a region between a default (local) array and a Block array.
    This code is optimized for the case that the region is relatively

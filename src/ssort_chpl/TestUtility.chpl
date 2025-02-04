@@ -551,6 +551,104 @@ proc testDivideIntoTasks() {
   }
 }
 
+proc testDivideIntoPages() {
+  writeln("testDivideIntoPages");
+
+  for lower in [0, 100, 1000, 1024, 4096] {
+    for size in [0, 9, 21, 100, 543, 1024*1024] {
+      for alignment in [1, 16, 64, 1024] {
+        var region = lower..#size;
+        var ByTask: [region] atomic int;
+        var nUnaligned = 0;
+
+        // check serial
+        for pageRange in divideIntoPages(region, alignment) {
+          // check alignment
+          if pageRange.low % alignment != 0 {
+            nUnaligned += 1;
+          }
+          // count for checking elements are all visited once
+          for i in pageRange {
+            ByTask[i].add(1);
+          }
+        }
+
+        assert(nUnaligned <= 1);
+
+        // each position should be visited exactly once
+        for elt in ByTask {
+          assert(elt.read() == 1);
+        }
+
+        // check parallel
+        for i in region {
+          ByTask[i].write(0);
+        }
+        nUnaligned = 0;
+        forall pageRange in divideIntoPages(region, alignment)
+        with (+ reduce nUnaligned) {
+          // check alignment
+          if pageRange.low % alignment != 0 {
+            nUnaligned += 1;
+          }
+          // count for checking elements are all visited once
+          for i in pageRange {
+            ByTask[i].add(1);
+          }
+        }
+
+        assert(nUnaligned <= 1);
+
+        // each position should be visited exactly once
+        for elt in ByTask {
+          assert(elt.read() == 1);
+        }
+      }
+    }
+  }
+}
+
+proc testRotateRange() {
+  writeln("testRotateRange");
+
+  for lower in [0, 100, 1000, 1024, 4096] {
+    for size in [0, 9, 21, 100, 543, 1024*1024] {
+      for shift in [0, 1, 13, 16, 64, 1024] {
+        var region = lower..#size;
+        var ByTask: [region] atomic int;
+        var first = false;
+
+        // check serial
+        for i in rotateRange(region, shift) {
+          if first {
+            assert(i == region.low + (shift%size));
+          }
+          ByTask[i].add(1);
+        }
+        // each position should be visited exactly once
+        for elt in ByTask {
+          assert(elt.read() == 1);
+        }
+
+        // check parallel
+        for elt in ByTask {
+          elt.write(0);
+        }
+
+        forall i in rotateRange(region, shift) {
+          // count for checking elements are all visited once
+          ByTask[i].add(1);
+        }
+
+        // each position should be visited exactly once
+        for elt in ByTask {
+          assert(elt.read() == 1);
+        }
+      }
+    }
+  }
+}
+
 proc testPackInput() {
   writeln("testPackInput");
 
@@ -651,6 +749,24 @@ proc testPackInput() {
 
 proc main() throws {
   testIsDistributed();
+
+  serial {
+    testActiveLocales();
+  }
+  testActiveLocales();
+
+  serial {
+    testDivideIntoTasks();
+  }
+  testDivideIntoTasks();
+
+  serial {
+    testDivideIntoPages();
+    testRotateRange();
+  }
+  testDivideIntoPages();
+  testRotateRange();
+
   testBulkCopy();
   testTriangles();
   testBits();
@@ -663,16 +779,6 @@ proc main() throws {
   testAtomicMinMax();
 
   testReplicate();
-
-  serial {
-    testActiveLocales();
-  }
-  testActiveLocales();
-
-  serial {
-    testDivideIntoTasks();
-  }
-  testDivideIntoTasks();
 
   serial {
     testPackInput();
