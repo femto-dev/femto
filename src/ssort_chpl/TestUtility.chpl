@@ -551,61 +551,71 @@ proc testDivideIntoTasks() {
   }
 }
 
+proc testDivideIntoPages(lower: integral, size: integral, alignment: integral) {
+  //writeln("testDivideIntoPages(", lower, ",", size, ",", alignment, ")");
+
+  var region = lower..#size;
+  var ByTask: [region] atomic int;
+  var nUnaligned = 0;
+
+  // check serial
+  for pageRange in divideIntoPages(region, alignment) {
+    // check alignment
+    if pageRange.low % alignment != 0 {
+      nUnaligned += 1;
+    }
+    // count for checking elements are all visited once
+    for i in pageRange {
+      ByTask[i].add(1);
+    }
+  }
+
+  assert(nUnaligned <= 1);
+
+  // each position should be visited exactly once
+  for elt in ByTask {
+    assert(elt.read() == 1);
+  }
+
+  // check parallel
+  for i in region {
+    ByTask[i].write(0);
+  }
+  nUnaligned = 0;
+  forall pageRange in divideIntoPages(region, alignment)
+  with (+ reduce nUnaligned) {
+    // check alignment
+    if pageRange.low % alignment != 0 {
+      nUnaligned += 1;
+    }
+    // count for checking elements are all visited once
+    for i in pageRange {
+      ByTask[i].add(1);
+    }
+  }
+
+  assert(nUnaligned <= 1);
+
+  // each position should be visited exactly once
+  for elt in ByTask {
+    assert(elt.read() == 1);
+  }
+}
+
 proc testDivideIntoPages() {
   writeln("testDivideIntoPages");
 
   for lower in [0, 100, 1000, 1024, 4096] {
     for size in [0, 9, 21, 100, 543, 1024*1024] {
-      for alignment in [1, 16, 64, 1024] {
-        var region = lower..#size;
-        var ByTask: [region] atomic int;
-        var nUnaligned = 0;
-
-        // check serial
-        for pageRange in divideIntoPages(region, alignment) {
-          // check alignment
-          if pageRange.low % alignment != 0 {
-            nUnaligned += 1;
-          }
-          // count for checking elements are all visited once
-          for i in pageRange {
-            ByTask[i].add(1);
-          }
-        }
-
-        assert(nUnaligned <= 1);
-
-        // each position should be visited exactly once
-        for elt in ByTask {
-          assert(elt.read() == 1);
-        }
-
-        // check parallel
-        for i in region {
-          ByTask[i].write(0);
-        }
-        nUnaligned = 0;
-        forall pageRange in divideIntoPages(region, alignment)
-        with (+ reduce nUnaligned) {
-          // check alignment
-          if pageRange.low % alignment != 0 {
-            nUnaligned += 1;
-          }
-          // count for checking elements are all visited once
-          for i in pageRange {
-            ByTask[i].add(1);
-          }
-        }
-
-        assert(nUnaligned <= 1);
-
-        // each position should be visited exactly once
-        for elt in ByTask {
-          assert(elt.read() == 1);
-        }
+      for alignment in [1, 16, 21, 64, 1024] {
+        testDivideIntoPages(lower, size, alignment);
       }
     }
   }
+
+  // test also some cases with uints
+  testDivideIntoPages(max(int):uint, 10_000:uint, 1024:uint);
+  testDivideIntoPages(max(uint) - 10_000_000, 10_000:uint, 8000:uint);
 }
 
 proc testRotateRange() {

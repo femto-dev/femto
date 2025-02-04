@@ -20,7 +20,7 @@
 module Utility {
 
 
-import CTypes.{c_int, c_sizeof, c_ptr, c_ptrConst};
+import CTypes.{c_int, c_sizeof, c_uintptr, c_ptr, c_ptrConst};
 import OS.POSIX.memcpy;
 import FileSystem.{isFile, isDir, findFiles, getFileSize};
 import FileSystem;
@@ -43,6 +43,9 @@ import SuffixSort.{EXTRA_CHECKS, TIMING, TRACE, INPUT_PADDING,
 
 /* For FASTA files, when reading them, also read in the reverse complement */
 config const INCLUDE_REVERSE_COMPLEMENT=true;
+
+/* Bulk copy "page" size */
+config const bulkCopyPageSz:uint = 8*1024;
 
 /* Compute the number of tasks to be used for a data parallel operation */
 proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
@@ -404,16 +407,29 @@ iter divideByLocales(param tag: iterKind,
 
    Yields ranges to be processed independently.
  */
-iter divideIntoPages(const region: range,
-                     alignment: int,
-                     nTasksPerLocale: int = computeNumTasks()) {
+iter divideIntoPages(const region: range(?),
+                     alignment: region.idxType,
+                     nTasksPerLocale: region.idxType = computeNumTasks()) {
+  if region.bounds != boundKind.both {
+    compilerError("divideIntoPages only supports bounded ranges");
+  }
+  if region.strides != strideKind.one {
+    compilerError("divideIntoPages only supports non-strided ranges");
+  }
+
   yield region;
 }
 iter divideIntoPages(param tag: iterKind,
-                     const region: range,
-                     alignment: int,
-                     nTasksPerLocale: int = computeNumTasks())
+                     const region: range(?),
+                     alignment: region.idxType,
+                     nTasksPerLocale: region.idxType = computeNumTasks())
  where tag == iterKind.standalone {
+  if region.bounds != boundKind.both {
+    compilerError("divideIntoPages only supports bounded ranges");
+  }
+  if region.strides != strideKind.one {
+    compilerError("divideIntoPages only supports non-strided ranges");
+  }
 
   const firstPage = region.low / alignment;
   const lastPage = region.high / alignment;
@@ -498,7 +514,6 @@ iter rotateRange(param tag: iterKind,
    small and most or all of it is local.
    It assumes that the arrays are 1-D and the ranges are non-strided
    and bounded.
-   It operates with just one task.
  */
 proc bulkCopy(ref dst: [], dstRegion: range,
               const ref src: [], srcRegion: range) : void {
@@ -544,7 +559,9 @@ proc bulkCopy(ref dst: [], dstRegion: range,
     const startLocale = dst[dstStart].locale.id;
     const endLocale = dst[dstStart+size-1].locale.id;
     if startLocale == endLocale {
-      const nBytes = size * eltSize;
+      const nBytes = (size * eltSize):uint;
+      const dstPtr = addrOf(dst[dstStart]):c_uintptr:uint;
+      const srcPtr = addrOf(src[srcStart]):c_uintptr:uint;
       if startLocale == here.id {
         if EXTRA_CHECKS {
           for i in 0..<size {
@@ -552,7 +569,12 @@ proc bulkCopy(ref dst: [], dstRegion: range,
             assert(src[srcStart+i].locale == here);
           }
         }
-        memcpy(addrOf(dst[dstStart]), addrOfConst(src[srcStart]), nBytes);
+
+        forall dstPg in divideIntoPages(dstPtr..#nBytes, bulkCopyPageSz) {
+          const dstPartPtr = dstPg.low:c_ptr(void);
+          const srcPartPtr = (srcPtr + (dstPg.low - dstPtr)):c_ptr(void);
+          memcpy(dstPartPtr, srcPartPtr, dstPg.size);
+        }
       } else {
         if EXTRA_CHECKS {
           for i in 0..<size {
@@ -560,10 +582,11 @@ proc bulkCopy(ref dst: [], dstRegion: range,
             assert(src[srcStart+i].locale == here);
           }
         }
-        Communication.put(addrOf(dst[dstStart]),
-                          addrOfConst(src[srcStart]),
-                          startLocale,
-                          nBytes);
+        forall dstPg in divideIntoPages(dstPtr..#nBytes, bulkCopyPageSz) {
+          const dstPartPtr = dstPg.low:c_ptr(void);
+          const srcPartPtr = (srcPtr + (dstPg.low - dstPtr)):c_ptr(void);
+          Communication.put(dstPartPtr, srcPartPtr, startLocale, nBytes);
+        }
       }
     } else {
       // do it with bulk transfer since many locales are involved
@@ -583,7 +606,9 @@ proc bulkCopy(ref dst: [], dstRegion: range,
     const startLocale = src[srcStart].locale.id;
     const endLocale = src[srcStart+size-1].locale.id;
     if startLocale == endLocale {
-      const nBytes = size * eltSize;
+      const nBytes = (size * eltSize):uint;
+      const dstPtr = addrOf(dst[dstStart]):c_uintptr:uint;
+      const srcPtr = addrOf(src[srcStart]):c_uintptr:uint;
       if startLocale == here.id {
         if EXTRA_CHECKS {
           for i in 0..<size {
@@ -591,7 +616,11 @@ proc bulkCopy(ref dst: [], dstRegion: range,
             assert(src[srcStart+i].locale == here);
           }
         }
-        memcpy(addrOf(dst[dstStart]), addrOfConst(src[srcStart]), nBytes);
+        forall dstPg in divideIntoPages(dstPtr..#nBytes, bulkCopyPageSz) {
+          const dstPartPtr = dstPg.low:c_ptr(void);
+          const srcPartPtr = (srcPtr + (dstPg.low - dstPtr)):c_ptr(void);
+          memcpy(dstPartPtr, srcPartPtr, dstPg.size);
+        }
       } else {
         if EXTRA_CHECKS {
           for i in 0..<size {
@@ -599,10 +628,11 @@ proc bulkCopy(ref dst: [], dstRegion: range,
             assert(src[srcStart+i].locale.id == startLocale);
           }
         }
-        Communication.get(addrOf(dst[dstStart]),
-                          addrOfConst(src[srcStart]),
-                          startLocale,
-                          nBytes);
+        forall dstPg in divideIntoPages(dstPtr..#nBytes, bulkCopyPageSz) {
+          const dstPartPtr = dstPg.low:c_ptr(void);
+          const srcPartPtr = (srcPtr + (dstPg.low - dstPtr)):c_ptr(void);
+          Communication.get(dstPartPtr, srcPartPtr, startLocale, nBytes);
+        }
       }
     } else {
       // do it with bulk transfer since many locales are involved
