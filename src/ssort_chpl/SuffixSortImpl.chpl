@@ -22,7 +22,7 @@ module SuffixSortImpl {
 
 use DifferenceCovers;
 use Partitioning;
-import Utility.{computeNumTasks,makeBlockDomain,replicate,getLocalReplicand};
+use Utility;
 
 use BlockDist;
 use Math;
@@ -39,6 +39,7 @@ import CopyAggregation.{SrcAggregator,DstAggregator};
 import SuffixSort.DEFAULT_PERIOD;
 import SuffixSort.EXTRA_CHECKS;
 import SuffixSort.TRACE;
+import SuffixSort.TIMING;
 import SuffixSort.STATS;
 import SuffixSort.INPUT_PADDING;
 
@@ -104,6 +105,50 @@ record ssortConfig {
   const minBucketsSpace: int = MIN_BUCKETS_SPACE;
   const assumeNonLocal: bool = false;
 }
+
+record sortAndNameSubtimes {
+  param enabled = true;
+  var copyInTime: subtimer(enabled);
+  var loadWordsTime: subtimer(enabled);
+  var sortByPrefixTime: subtimer(enabled);
+  var copyOutTime: subtimer(enabled);
+};
+
+operator sortAndNameSubtimes.+(x: sortAndNameSubtimes(?),
+                               y: sortAndNameSubtimes(?)) {
+  var ret: sortAndNameSubtimes(enabled=(x.enabled || y.enabled));
+  if ret.enabled {
+    ret.copyInTime = x.copyInTime + y.copyInTime;
+    ret.loadWordsTime = x.loadWordsTime + y.loadWordsTime;
+    ret.sortByPrefixTime = x.sortByPrefixTime + y.sortByPrefixTime;
+    ret.copyOutTime = x.copyOutTime + y.copyOutTime;
+  }
+  return ret;
+}
+
+record sortAllOffsetsSubtimes {
+  param enabled = true;
+  var copyInTime: subtimer(enabled);
+  var loadWordsTime: subtimer(enabled);
+  var sortByPrefixTime: subtimer(enabled);
+  var loadSampleRanksTime: subtimer(enabled);
+  var sortBySampleRanksTime: subtimer(enabled);
+};
+
+operator sortAllOffsetsSubtimes.+(x: sortAllOffsetsSubtimes(?),
+                                  y: sortAllOffsetsSubtimes(?)) {
+  var ret: sortAllOffsetsSubtimes(enabled=(x.enabled || y.enabled));
+  if ret.enabled {
+    ret.copyInTime = x.copyInTime + y.copyInTime;
+    ret.loadWordsTime = x.loadWordsTime + y.loadWordsTime;
+    ret.sortByPrefixTime = x.sortByPrefixTime + y.sortByPrefixTime;
+    ret.loadSampleRanksTime = x.loadSampleRanksTime + y.loadSampleRanksTime;
+    ret.sortBySampleRanksTime = x.sortBySampleRanksTime +
+                                y.sortBySampleRanksTime;
+  }
+  return ret;
+}
+
 
 record statistics {
   var nRandomTextReads: int;
@@ -1427,7 +1472,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
   var nBuckets = 0;
 
   // partition from InputProducer into SubSA
-  proc sortInitial(param useRadixBits) {
+  proc doPartition(param useRadixBits) {
     var nextBit = 0;
     if useRadixBits == 0 {
       const comparator = new myPrefixComparator3();
@@ -1476,10 +1521,12 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     }
   }
 
+  var partitionTime = startTime();
+
   if initialSortRadix == false {
     // using a comparison sort for the start covers the case that
     // there's a lot of similar prefixes
-    sortInitial(0);
+    doPartition(0);
   } else {
     halt("uncomment this code for initialSortRadix=true");
     /* commented out to avoid compile time for unused code
@@ -1490,6 +1537,8 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
       sortInitial(RADIX_BITS);
     }*/
   }
+
+  reportTime(partitionTime, " partition", sampleN, numBytes(SubSA.eltType));
 
   // each task will sort regions of SA with chunks of this size
   var tmpSize = min(n, cfg.finalSortPerTaskBufferSize);
@@ -1516,6 +1565,8 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
   // sort it the rest of the way by the prefix
 
   if distributedReSort {
+    var distSort = startTime();
+
     // use Block-distributed temporary storage to do a distributed sort
     var A:[SubSA.domain] offsetAndCachedType;
     var Scratch:[SubSA.domain] offsetAndCachedType;
@@ -1542,12 +1593,18 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     forall (elt, offset) in zip(A, SubSA) {
       offset = elt.offset;
     }
+
+    reportTime(distSort, " distributed sort", sampleN);
+
   } else {
     // use local storage to sort the buckets
 
+    var sortingTime = startTime();
+    var subtimes: sortAndNameSubtimes(enabled=TIMING);
+
     forall (activeLocIdx, taskIdInLoc, taskRegion)
     in divideIntoTasks(SubSA.domain, 0..<sampleN, nTasksPerLocale, cfg.locales)
-    with (in cfg) {
+    with (in cfg, + reduce subtimes) {
       // allocate temporary per-task storage for sorting perTaskBufferSize elts
       const bufSz = perTaskBufferSize;
       var LocOffsets: [0..<bufSz] offsetType;
@@ -1561,9 +1618,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
 
         const sz = region.size;
 
-        // reset LocBucketBoundaries
-        //LocBucketBoundaries = 0;
-
+        var copyInTime = startTime();
         // Copy the bucket boundaries from BucketBoundaries
         // Main point of doing this is to get equality buckets from
         // the partitioning step.
@@ -1576,10 +1631,15 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
         for (elt, offset) in zip(LocA, LocOffsets) {
           elt.offset = offset;
         }
+        copyInTime.stop();
+        subtimes.copyInTime += copyInTime;
 
+        var loadWordsTime = startTime();
         // Load the first words into LocA.cached
         loadNextWords(cfg, PackedText, LocA, LocScratch, LocBucketBoundaries,
                       0..<sz, sortedByBits=0, nTasksPerLocale=1);
+        loadWordsTime.stop();
+        subtimes.loadWordsTime += loadWordsTime;
 
         /*for i in 0..<sz {
           writeln("loaded LocA[", region.low+i, "] = ", LocA[i],
@@ -1587,12 +1647,15 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
                   LocBucketBoundaries[i]);
         }*/
 
+        var sortByPrefixTime = startTime();
         // sort by the prefix and mark boundaries
         sortByPrefixAndMark(cfg, PackedText, LocA, LocScratch,
                             LocBucketBoundaries, 0..<sz,
                             maxPrefix=cover.period,
                             nTasksPerLocale=1,
                             useExistingBuckets=true);
+        sortByPrefixTime.stop();
+        subtimes.sortByPrefixTime += sortByPrefixTime;
 
         /*
         for i in 0..<sz {
@@ -1601,6 +1664,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
                   LocBucketBoundaries[i]);
         }*/
 
+        var copyOutTime = startTime();
         // Copy the bucket boundaries back to BucketBoundaries
         // so they can be used in the naming portion
         bulkCopy(BucketBoundaries, region, LocBucketBoundaries, 0..<sz);
@@ -1610,8 +1674,16 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
           offset = elt.offset;
         }
         bulkCopy(SubSA, region, LocOffsets, 0..<sz);
+        copyOutTime.stop();
+        subtimes.copyOutTime += copyOutTime;
       }
     }
+
+    reportTime(subtimes.copyInTime, "  copy in");
+    reportTime(subtimes.loadWordsTime, "  load words");
+    reportTime(subtimes.sortByPrefixTime, "  sort by prefix");
+    reportTime(subtimes.copyOutTime, "  copy out");
+    reportTime(sortingTime, " distributed sort total", sampleN);
   }
 
   /*writeln("after sorting sample by prefix");
@@ -1619,6 +1691,8 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     writeln("Sample[", i, "] = ", SubSA[i], " BucketBoundaries[", i, "] = ",
             BucketBoundaries[i]);
   }*/
+
+  var namingTime = startTime();
 
   // give each sample position a "name" that is just the offset
   // where its bucket starts
@@ -1667,6 +1741,8 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
       }
     }
   }
+
+  reportTime(namingTime, " setting names", sampleN);
 }
 
 /* Sort suffixes in a region by the sample ranks.
@@ -1956,7 +2032,8 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                             ref LocScratch: [] offsetAndCached(?),
                             ref LocSampleRanksA: [] offsetAndSampleRanks(?),
                             ref LocSampleRanksScratch: [] offsetAndSampleRanks(?),
-                            ref LocBucketBoundaries: [] uint(8)
+                            ref LocBucketBoundaries: [] uint(8),
+                            ref subtimes: sortAllOffsetsSubtimes
                             /*ref readAgg: SrcAggregator(cfg.loadWordType),
                             ref writeAgg: DstAggregator(cfg.offsetType),
                             ref stats: statistics*/) {
@@ -1988,6 +2065,8 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   const saStart = region.low;
   var sz = region.size;
 
+
+  var copyInTime = startTime();
   // Copy the bucket boundaries from BucketBoundaries to LocBucketBoundaries
   bulkCopy(LocBucketBoundaries, 0..<sz, BucketBoundaries, region);
 
@@ -1998,10 +2077,16 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   for (elt, offset) in zip(LocA, LocOffsets) {
     elt.offset = offset;
   }
+  copyInTime.stop();
+  subtimes.copyInTime += copyInTime;
 
+
+  var loadWordsTime = startTime();
   // Load the first words into LocA.cached
   loadNextWords(cfg, PackedText, LocA, LocScratch, LocBucketBoundaries,
                 0..<sz, sortedByBits=0, nTasksPerLocale=1);
+  loadWordsTime.stop();
+  subtimes.loadWordsTime += loadWordsTime;
 
   /*
   writeln("loaded words");
@@ -2009,7 +2094,9 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
     writeln("LocA[", i, "] = ", LocA[i]);
   }*/
 
-  // sort by these loaded words
+  // sort by prefix
+  var sortByPrefixTime = startTime();
+  // start by sorting by the loaded words
   {
     const sorter =
       new partitioningSorter(eltType=LocA.eltType,
@@ -2030,6 +2117,9 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                       0..<sz, maxPrefix=cover.period,
                       nTasksPerLocale=1);
 
+  sortByPrefixTime.stop();
+  subtimes.sortByPrefixTime += sortByPrefixTime;
+
   /*
   writeln("after finishSortByPrefix A[", region, "]");
   for i in region {
@@ -2042,6 +2132,7 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   //  * compute the number of buckets needing further sorting
   //  * copy any sorted buckets back to SA
   //  * gather the sample ranks for any elements in unsorted buckets
+  var loadSampleRanksTime = startTime();
   var nBucketsNeedingSort = 0;
   var nEltsNeedingSort = 0;
   {
@@ -2076,6 +2167,8 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
     }
     // aggregators finish their work here
   }
+  loadSampleRanksTime.stop();
+  subtimes.loadSampleRanksTime += loadSampleRanksTime;
 
   /*
   if TRACE {
@@ -2085,6 +2178,7 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   }*/
 
   // Sort any sample ranks regions by the sample ranks
+  var sortBySampleRanksTime = startTime();
   if nBucketsNeedingSort > 0 {
     var writeAgg = new DstAggregator(offsetType);
     var cur = 0;
@@ -2123,6 +2217,8 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
       }
     }
   }
+  sortBySampleRanksTime.stop();
+  subtimes.sortBySampleRanksTime += sortBySampleRanksTime;
 }
 
 /* Sorts all offsets using the ranks of the difference cover sample.
@@ -2196,7 +2292,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
 
   markBoundaries(BucketBoundaries, Splitters, Bkts, nowInA=true, nextbit=0);
 
-  reportTime(makeBuckets, "partition and mark", n, numBytes(offsetType));
+  reportTime(makeBuckets, " partition and mark", n, numBytes(offsetType));
 
   var minBktSize = n;
   var maxBktSize = 0;
@@ -2238,9 +2334,12 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   writeln("sorting buckets");
   */
 
+
+  var subtimes: sortAllOffsetsSubtimes(enabled=TIMING);
+
   forall (activeLocIdx, taskIdInLoc, taskRegion)
   in divideIntoTasks(SA.domain, 0..<n, nTasksPerLocale, cfg.locales)
-  with (in cfg) {
+  with (in cfg, + reduce subtimes) {
     // allocate temporary per-task storage for sorting perTaskBufferSize elts
     const bufSz = perTaskBufferSize;
     var LocOffsets: [0..<bufSz] offsetType;
@@ -2259,11 +2358,17 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
                              region,
                              LocOffsets, LocA, LocScratch,
                              LocSampleRanksA, LocSampleRanksScratch,
-                             LocBucketBoundaries);
+                             LocBucketBoundaries,
+                             subtimes);
     }
   }
 
-  reportTime(sortBuckets, "sort buckets total", n);
+  reportTime(subtimes.copyInTime, "  copy in");
+  reportTime(subtimes.loadWordsTime, "  load words");
+  reportTime(subtimes.sortByPrefixTime, "  sort by prefix");
+  reportTime(subtimes.loadSampleRanksTime, "  load sample ranks");
+  reportTime(subtimes.sortBySampleRanksTime, "  sort by sample ranks");
+  reportTime(sortBuckets, " sort buckets total", n);
   //writeln("done sorting serial buckets");
 
   return SA;
@@ -2712,7 +2817,7 @@ proc ssortDcxSA(const cfg:ssortConfig(?),
     {
       var update = startTime();
       defer {
-        reportTime(update, "update SampleText ranks");
+        reportTime(update, " update SampleText ranks");
       }
 
       // Replace the values in SampleText with
@@ -2831,7 +2936,7 @@ proc ssortDcxSA(const cfg:ssortConfig(?),
       //writeln("Splitters A are ", tmp);
     }
 
-    reportTime(gatherSplitters, "gather and sort splitters");
+    reportTime(gatherSplitters, " gather and sort splitters");
   }
 
   //// Step 2: Sort everything all together ////

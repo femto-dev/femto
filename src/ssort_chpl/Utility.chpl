@@ -1519,30 +1519,109 @@ inline proc loadWordWithWords(word0: ?wordType, word1: wordType,
   return ret;
 }
 
+
+/*
+   Help with timing regions of code within a parallel region.
+   To use this type:
+    * start timing with startTime (which returns this type)
+    * stop timing with stopTime
+    * accumulate with + reduce in parallel regions
+    * report it with reportTime
+ */
+record subtimer {
+  // skip computations / timer start/stop if disabled
+  param enabled = true;
+
+  var timer: Time.stopwatch;
+  var running: bool = false;
+
+  // the below represent data from combining times
+  var count: int; // aka how many tasks summarized here
+  var totalTime: real;
+  var minTime: real;
+  var maxTime: real;
+};
+proc ref subtimer.start() {
+  if enabled {
+    timer.reset();
+    running = true;
+    timer.start();
+  }
+}
+proc ref subtimer.stop() {
+  if enabled && running {
+    timer.stop();
+    running = false;
+    const t = timer.elapsed();
+    if count == 0 {
+      count = 1;
+      totalTime = t;
+      minTime = t;
+      maxTime = t;
+    } else {
+      count += 1;
+      totalTime += t;
+      minTime = min(minTime, t);
+      maxTime = max(maxTime, t);
+    }
+  }
+}
+
+operator subtimer.+(x: subtimer(?), y: subtimer(?)) {
+  var ret: subtimer(enabled=(x.enabled || y.enabled));
+  if ret.enabled {
+    if x.count == 0 && y.count == 0 {
+      // leave ret default initialized
+    } else if y.count == 0 {
+      // use only x
+      ret = x;
+    } else if x.count == 0 {
+      // use only y
+      ret = y;
+    } else {
+      // add them
+      ret.count = x.count + y.count;
+      ret.totalTime = x.totalTime + y.totalTime;
+      ret.minTime = min(x.minTime, y.minTime);
+      ret.maxTime = max(x.maxTime, y.maxTime);
+    }
+  }
+  return ret;
+}
+
 /* start timing if TIMING, returning something to be used by reportTime */
 proc startTime(param doTiming=TIMING) {
   if doTiming {
-    var ret: Time.stopwatch;
+    var ret: subtimer(enabled=true);
     ret.start();
     return ret;
   } else {
-    return none;
+    var ret: subtimer(enabled=false);
+    return ret;
   }
 }
 
 /* report time started by startTime */
-proc reportTime(ref x, desc:string, n: int = 0, bytesPer: int = 0) {
-  if x.type != nothing {
+proc reportTime(ref x:subtimer(?), desc:string, n: int = 0, bytesPer: int = 0) {
+  if x.enabled {
     x.stop();
-    if n == 0 {
-      writeln(desc ," in ", x.elapsed(), " s");
-    } else if bytesPer == 0 {
-      writeln(desc ," in ", x.elapsed(), " s for ",
-              n/x.elapsed()/1000.0/1000.0, " M elements/s");
+    const avgTime = x.totalTime / x.count;
+    if x.count <= 1 {
+      // in that case, avgTime == minTime == maxTime
+      if n == 0 {
+        writeln(desc ," in ", avgTime, " s");
+      } else if bytesPer == 0 {
+        writeln(desc ," in ", avgTime, " s for ",
+                n/avgTime/1000.0/1000.0, " M elements/s");
+      } else {
+        writeln(desc ," in ", avgTime, " s for ",
+                n/avgTime/1000.0/1000.0, " M elements/s and ",
+                bytesPer*n/avgTime/1024.0/1024.0, " MiB/s");
+      }
     } else {
-      writeln(desc ," in ", x.elapsed(), " s for ",
-              n/x.elapsed()/1000.0/1000.0, " M elements/s and ",
-              bytesPer*n/x.elapsed()/1024.0/1024.0, " MB/s");
+      writeln(desc, " in avg ", avgTime,
+                    " min ", x.minTime,
+                    " max ", x.maxTime, " s");
     }
   }
 }
