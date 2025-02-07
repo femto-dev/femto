@@ -1528,7 +1528,7 @@ inline proc loadWordWithWords(word0: ?wordType, word1: wordType,
     * accumulate with + reduce in parallel regions
     * report it with reportTime
  */
-record subtimer {
+record subtimer : writeSerializable {
   // skip computations / timer start/stop if disabled
   param enabled = true;
 
@@ -1543,7 +1543,6 @@ record subtimer {
 };
 proc ref subtimer.start() {
   if enabled {
-    timer.reset();
     running = true;
     timer.start();
   }
@@ -1567,6 +1566,26 @@ proc ref subtimer.stop() {
   }
 }
 
+// add times within a task
+proc ref subtimer.accumulate(ref x: subtimer) {
+  // accumulate the timing within a single task
+  // (vs + which adds across tasks)
+  if enabled {
+    x.stop();
+    if EXTRA_CHECKS {
+      assert(!x.running);
+      assert(x.count == 1);
+      assert(!running);
+      assert(count == 0 || count == 1);
+    }
+    count = 1;
+    totalTime += x.totalTime;
+    minTime += x.minTime;
+    maxTime += x.maxTime;
+  }
+}
+
+// add times from different tasks (for + reduce)
 operator subtimer.+(x: subtimer(?), y: subtimer(?)) {
   var ret: subtimer(enabled=(x.enabled || y.enabled));
   if ret.enabled {
@@ -1587,6 +1606,11 @@ operator subtimer.+(x: subtimer(?), y: subtimer(?)) {
     }
   }
   return ret;
+}
+
+proc subtimer.serialize(writer, ref serializer) throws {
+  writer.write("(count=", count, " totalTime=", totalTime,
+               " minTime=", minTime, " maxTime=", maxTime);
 }
 
 /* start timing if TIMING, returning something to be used by reportTime */
