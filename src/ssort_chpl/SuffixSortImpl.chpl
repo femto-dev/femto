@@ -107,7 +107,7 @@ record ssortConfig {
 }
 
 record sortAndNameSubtimes {
-  param enabled = true;
+  param enabled = TIMING;
   var allocateTime: subtimer(enabled);
   var nextBucketTimes: subtimer(enabled);
   var copyInTime: subtimer(enabled);
@@ -131,7 +131,7 @@ operator sortAndNameSubtimes.+(x: sortAndNameSubtimes(?),
 }
 
 record sortAllOffsetsSubtimes {
-  param enabled = true;
+  param enabled = TIMING;
   var allocateTime: subtimer(enabled);
   var nextBucketTimes: subtimer(enabled);
   var copyInTime: subtimer(enabled);
@@ -1639,10 +1639,10 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
       var LocA: [0..<bufSz] offsetAndCachedType;
       var LocScratch: [0..<bufSz] offsetAndCachedType;
       var LocBucketBoundaries: [0..<bufSz] uint(8);
-      subtimes.allocateTime.accumulate(allocateTime);
+      mysubtimes.allocateTime.accumulate(allocateTime);
 
       for region in bucketGroups(taskRegion, 0..<sampleN, bufSz,
-                                 BucketBoundaries, subtimes) {
+                                 BucketBoundaries, mysubtimes) {
         //writeln("task ", taskIdInLoc, " sorting region ", region);
 
         const sz = region.size;
@@ -1660,13 +1660,13 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
         for (elt, offset) in zip(LocA, LocOffsets) {
           elt.offset = offset;
         }
-        subtimes.copyInTime.accumulate(copyInTime);
+        mysubtimes.copyInTime.accumulate(copyInTime);
 
         var loadWordsTime = startTime();
         // Load the first words into LocA.cached
         loadNextWords(cfg, PackedText, LocA, LocScratch, LocBucketBoundaries,
                       0..<sz, sortedByBits=0, nTasksPerLocale=1);
-        subtimes.loadWordsTime.accumulate(loadWordsTime);
+        mysubtimes.loadWordsTime.accumulate(loadWordsTime);
 
         /*for i in 0..<sz {
           writeln("loaded LocA[", region.low+i, "] = ", LocA[i],
@@ -1681,7 +1681,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
                             maxPrefix=cover.period,
                             nTasksPerLocale=1,
                             useExistingBuckets=true);
-        subtimes.sortByPrefixTime.accumulate(sortByPrefixTime);
+        mysubtimes.sortByPrefixTime.accumulate(sortByPrefixTime);
 
         /*
         for i in 0..<sz {
@@ -1700,7 +1700,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
           offset = elt.offset;
         }
         bulkCopy(SubSA, region, LocOffsets, 0..<sz);
-        subtimes.copyOutTime.accumulate(copyOutTime);
+        mysubtimes.copyOutTime.accumulate(copyOutTime);
       }
 
       subtimes += mysubtimes;

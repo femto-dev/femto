@@ -1567,21 +1567,23 @@ proc ref subtimer.stop() {
 }
 
 // add times within a task
-proc ref subtimer.accumulate(ref x: subtimer) {
+proc ref subtimer.accumulate(ref x: subtimer(?)) {
   // accumulate the timing within a single task
   // (vs + which adds across tasks)
   if enabled {
     x.stop();
     if EXTRA_CHECKS {
       assert(!x.running);
-      assert(x.count == 1);
+      assert(x.count == 0 || x.count == 1);
       assert(!running);
       assert(count == 0 || count == 1);
     }
-    count = 1;
-    totalTime += x.totalTime;
-    minTime += x.minTime;
-    maxTime += x.maxTime;
+    if x.count == 1 {
+      count = 1;
+      totalTime += x.totalTime;
+      minTime += x.minTime;
+      maxTime += x.maxTime;
+    }
   }
 }
 
