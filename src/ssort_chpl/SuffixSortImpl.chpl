@@ -858,6 +858,16 @@ proc comparisonSortLocal(ref A: [], ref Scratch: [], comparator, region: range,
   }
 }
 
+proc computeShift(taskId: int, numTasks: int) {
+  var randNums;
+  if SEED == 0 {
+    randNums = new Random.randomStream(int);
+  } else {
+    randNums = new Random.randomStream(int, seed=SEED*taskId);
+  }
+  return randNums.next();
+}
+
 /**
  Loads the next word(s) into A.cached for anything in an equal or unsorted
  bucket.
@@ -915,12 +925,9 @@ proc loadNextWords(const cfg:ssortConfig(?),
 
     var nUnsortedBucketsThisTask = 0;
 
-    const myTaskForShift = activeLocIdx*nTasksPerLocale + taskIdInLoc;
-    const nTasksForShift = activeLocs.size*nTasksPerLocale;
-    const taskChunkForShift = region.size / nTasksForShift;
-    const shift = myTaskForShift * taskChunkForShift;
-
-    for i in rotateRange(taskRegion, shift) {
+    const taskShift = computeShift(activeLocIdx*nTasksPerLocale + taskIdInLoc,
+                                   activeLocs.size*nTasksPerLocale);
+    for i in rotateRange(taskRegion, taskShift, nTasksPerLocale=1) {
       const bktType = BucketBoundaries[i];
       if !isBaseCaseBoundary(bktType) {
         nUnsortedBucketsThisTask += 1;
@@ -984,7 +991,7 @@ proc loadNextWords(const cfg:ssortConfig(?),
       readAgg.flush(); // since we use the results below
 
       // combine the two words as needed
-      for i in rotateRange(taskRegion, shift) {
+      for i in rotateRange(taskRegion, taskShift, nTasksPerLocale=1) {
         const bktType = BucketBoundaries[i];
         if !isBaseCaseBoundary(bktType) {
 
@@ -2056,7 +2063,7 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                             ref SA: [],
                             const BucketBoundaries: [] uint(8),
                             region: range,
-                            shift: int, // only optimization impact
+                            taskShift: int, // only optimization impact
                             ref LocOffsets: [] cfg.offsetType,
                             ref LocA: [] offsetAndCached(?),
                             ref LocScratch: [] offsetAndCached(?),
@@ -2166,7 +2173,7 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
     var readAgg = new SrcAggregator(rankType);
     var writeAgg = new DstAggregator(offsetType);
 
-    for i in rotateRange(0..<sz, shift, nTasksPerLocale=1) {
+    for i in rotateRange(0..<sz, taskShift, nTasksPerLocale=1) {
       const bktType = LocBucketBoundaries[i];
       if isBaseCaseBoundary(bktType) {
         // copy anything sorted by the prefix back to SA
@@ -2379,10 +2386,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     var LocSampleRanksScratch: [0..<bufSz] offsetAndSampleRanksType;
     mysubtimes.allocateTime.accumulate(allocateTime);
 
-    const myTaskForShift = activeLocIdx*nTasksPerLocale + taskIdInLoc;
-    const nTasksForShift = activeLocs.size*nTasksPerLocale;
-    const taskChunkForShift = n / nTasksForShift;
-    const shift = myTaskForShift * taskChunkForShift;
+    const taskShift = computeShift(activeLocIdx*nTasksPerLocale + taskIdInLoc,
+                                   activeLocs.size*nTasksPerLocale);
 
     // loop over groups of buckets with total size <= bufSz
     for region in bucketGroups(taskRegion, 0..<n, bufSz,
@@ -2392,7 +2397,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
       sortAllOffsetsInRegion(cfg, PackedText, SampleRanks,
                              SA, BucketBoundaries,
                              region,
-                             shift,
+                             taskShift,
                              LocOffsets, LocA, LocScratch,
                              LocSampleRanksA, LocSampleRanksScratch,
                              LocBucketBoundaries,
