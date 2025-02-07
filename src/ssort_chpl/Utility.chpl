@@ -1551,8 +1551,10 @@ proc ref subtimer.stop() {
   if enabled && running {
     timer.stop();
     running = false;
+  }
+  if enabled {
     const t = timer.elapsed();
-    if count == 0 {
+    if count <= 1 {
       count = 1;
       totalTime = t;
       minTime = t;
@@ -1572,13 +1574,13 @@ proc ref subtimer.accumulate(ref x: subtimer(?)) {
   // (vs + which adds across tasks)
   if enabled {
     x.stop();
-    if EXTRA_CHECKS {
+    if EXTRA_CHECKS && x.enabled {
       assert(!x.running);
       assert(x.count == 0 || x.count == 1);
       assert(!running);
       assert(count == 0 || count == 1);
     }
-    if x.count == 1 {
+    if x.enabled && x.count == 1 {
       count = 1;
       totalTime += x.totalTime;
       minTime += x.minTime;
