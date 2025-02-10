@@ -1530,7 +1530,7 @@ inline proc loadWordWithWords(word0: ?wordType, word1: wordType,
  */
 record subtimer : writeSerializable {
   // skip computations / timer start/stop if disabled
-  param enabled = true;
+  param enabled: bool;
 
   var timer: Time.stopwatch;
   var running: bool = false;
@@ -1544,6 +1544,7 @@ record subtimer : writeSerializable {
 proc ref subtimer.start() {
   if enabled {
     running = true;
+    timer.reset();
     timer.start();
   }
 }
@@ -1551,19 +1552,22 @@ proc ref subtimer.stop() {
   if enabled && running {
     timer.stop();
     running = false;
-  }
-  if enabled {
+
     const t = timer.elapsed();
-    if count <= 1 {
+    if EXTRA_CHECKS {
+      assert(!running);
+      assert(count == 0 || count == 1);
+    }
+    if count == 0 {
       count = 1;
       totalTime = t;
       minTime = t;
       maxTime = t;
     } else {
-      count += 1;
+      count = 1;
       totalTime += t;
-      minTime = min(minTime, t);
-      maxTime = max(maxTime, t);
+      minTime += t;
+      maxTime += t;
     }
   }
 }
@@ -1614,7 +1618,7 @@ operator subtimer.+(x: subtimer(?), y: subtimer(?)) {
 
 proc subtimer.serialize(writer, ref serializer) throws {
   writer.write("(count=", count, " totalTime=", totalTime,
-               " minTime=", minTime, " maxTime=", maxTime);
+               " minTime=", minTime, " maxTime=", maxTime, ")");
 }
 
 /* start timing if TIMING, returning something to be used by reportTime */
@@ -1653,6 +1657,79 @@ proc reportTime(ref x:subtimer(?), desc:string, n: int = 0, bytesPer: int = 0) {
     }
   }
 }
+
+/* Similar to subtimer; counts something per-task and summarizes
+   the min/max/average number per task */
+record substat : writeSerializable {
+  // skip computations / timer start/stop if disabled
+  param enabled: bool;
+  type statType;
+
+  // the below represent data from combining times
+  var count: int; // aka how many tasks summarized here
+  var total: statType;
+  var min_: statType;
+  var max_: statType;
+};
+
+// add stats within a task
+proc ref substat.accumulate(v: statType) {
+  // accumulate the timing within a single task
+  // (vs + which adds across tasks)
+  if enabled {
+    if EXTRA_CHECKS {
+      assert(count == 0 || count == 1);
+    }
+    count = 1;
+    total += v;
+    min_ += v;
+    max_ += v;
+  }
+}
+
+// add stats from different tasks (for + reduce)
+operator substat.+(x: substat(?), y: substat(?))
+where x.statType == y.statType {
+  var ret: substat(enabled=(x.enabled || y.enabled), x.statType);
+  if ret.enabled {
+    if x.count == 0 && y.count == 0 {
+      // leave ret default initialized
+    } else if y.count == 0 {
+      // use only x
+      ret = x;
+    } else if x.count == 0 {
+      // use only y
+      ret = y;
+    } else {
+      // add them
+      ret.count = x.count + y.count;
+      ret.total = x.total + y.total;
+      ret.min_ = min(x.min_, y.min_);
+      ret.max_ = max(x.max_, y.max_);
+    }
+  }
+  return ret;
+}
+
+proc substat.serialize(writer, ref serializer) throws {
+  writer.write("(count=", count, " total=", total,
+               " min=", min_, " max=", max_, ")");
+}
+
+proc reportStat(const ref x:substat(?), desc:string) {
+  if x.enabled {
+    const avg = x.total: real / x.count;
+    if x.count <= 1 {
+      // in that case, avgTime == minTime == maxTime
+      writeln(desc ," : ", avg);
+    } else {
+      writeln(desc, " : avg ", avg,
+                    " min ", x.min_,
+                    " max ", x.max_);
+    }
+  }
+}
+
 
 
 }
