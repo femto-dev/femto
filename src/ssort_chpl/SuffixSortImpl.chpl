@@ -141,6 +141,7 @@ record sortAllOffsetsSubtimes {
   var sortByPrefixTime: subtimer(enabled);
   var loadSampleRanksTime: subtimer(enabled);
   var sortBySampleRanksTime: subtimer(enabled);
+  var flushTime: subtimer(enabled);
   var eltsProcessed: substat(enabled, int);
 };
 
@@ -156,6 +157,7 @@ operator sortAllOffsetsSubtimes.+(x: sortAllOffsetsSubtimes(?),
     ret.loadSampleRanksTime = x.loadSampleRanksTime + y.loadSampleRanksTime;
     ret.sortBySampleRanksTime = x.sortBySampleRanksTime +
                                 y.sortBySampleRanksTime;
+    ret.flushTime = x.flushTime + y.flushTime;
     ret.eltsProcessed = x.eltsProcessed + y.eltsProcessed;
   }
   return ret;
@@ -884,6 +886,11 @@ proc computeShift(taskId: int, numTasks: int) {
 
  Returns the number of equal / unsorted buckets encountered.
 
+ 'outerReadAgg' and 'outerBktAgg' can be 'none' or they can be aggregators
+ to use. If they are not 'none', 'nTasksPerLocale' must be 1 and the
+ region in A and Scratch. If these aggregators are used, they will
+ be flushed by this function.
+
  Runs distributed parallel.
  */
 proc loadNextWords(const cfg:ssortConfig(?),
@@ -893,7 +900,9 @@ proc loadNextWords(const cfg:ssortConfig(?),
                    ref BucketBoundaries:[] uint(8),
                    const region: range,
                    const sortedByBits: int,
-                   const nTasksPerLocale: int) {
+                   const nTasksPerLocale: int,
+                   ref outerReadAgg,
+                   ref outerBktAgg) {
 
   if A.eltType.offsetType != cfg.offsetType ||
      A.eltType.wordType != cfg.loadWordType {
@@ -923,11 +932,30 @@ proc loadNextWords(const cfg:ssortConfig(?),
   // change equal buckets to be unsorted buckets
   var nUnsortedBuckets = 0;
   const activeLocs = computeActiveLocales(A.domain, region);
+
+  if outerReadAgg.type != nothing || outerBktAgg.type != nothing {
+    assert(activeLocs.size == 1);
+    assert(nTasksPerLocale == 1);
+  }
+
   forall (activeLocIdx, taskIdInLoc, taskRegion)
   in divideIntoTasks(A.domain, region, nTasksPerLocale, activeLocs)
-  with (var readAgg = new SrcAggregator(wordType),
-        var bktAgg = new DstAggregator(uint(8)),
-        + reduce nUnsortedBuckets) {
+  with (+ reduce nUnsortedBuckets) {
+    // 'mySrcAgg' is a workaround for const checking errors
+    // see https://github.com/chapel-lang/chapel/issues/26685
+    var myReadAgg = if outerReadAgg.type != nothing
+                    then none
+                    else new SrcAggregator(wordType);
+    ref readAgg = if outerReadAgg.type != nothing
+                  then outerReadAgg
+                  else myReadAgg;
+
+    var myBktAgg = if outerBktAgg.type != nothing
+                   then none
+                   else new DstAggregator(uint(8));
+    ref bktAgg = if outerBktAgg.type != nothing
+                 then outerBktAgg
+                 else myBktAgg;
 
     var nUnsortedBucketsThisTask = 0;
 
@@ -994,7 +1022,11 @@ proc loadNextWords(const cfg:ssortConfig(?),
     if nUnsortedBucketsThisTask > 0 {
       nUnsortedBuckets += nUnsortedBucketsThisTask;
 
-      readAgg.flush(); // since we use the results below
+      // flush the read aggregator so we can use the results below,
+      // and free the buffers if not using an outer aggregator,
+      // since this will be the last use of it.
+      const freeBufs = outerReadAgg.type == nothing;
+      readAgg.flush(freeBuffers=freeBufs);
 
       // combine the two words as needed
       for i in rotateRange(taskRegion, taskShift, nTasksPerLocale=1) {
@@ -1039,6 +1071,11 @@ proc loadNextWords(const cfg:ssortConfig(?),
     }
   }
 
+  // flush any bucket boundaries written
+  if outerBktAgg.type != nothing {
+    outerBktAgg.flush(freeBuffers=false);
+  }
+
   /*
   writeln("after loadNextWords");
   for i in region {
@@ -1060,6 +1097,8 @@ proc loadNextWords(const cfg:ssortConfig(?),
   Leaves partially sorted suffixes in A and stores the bucket boundaries
   in BucketBoundaries.
 
+  See loadNextWords for the description of outerReadAgg and outerBktAgg.
+
   This is a distributed, parallel operation.
  */
 proc finishSortByPrefix(const cfg:ssortConfig(?),
@@ -1069,7 +1108,9 @@ proc finishSortByPrefix(const cfg:ssortConfig(?),
                         ref BucketBoundaries:[] uint(8),
                         region: range,
                         maxPrefix: cfg.idxType, // in characters
-                        nTasksPerLocale:int
+                        nTasksPerLocale:int,
+                        ref outerReadAgg,
+                        ref outerBktAgg
                         /*ref readAgg: SrcAggregator(cfg.loadWordType),*/
                         /*ref stats: statistics*/) {
 
@@ -1106,7 +1147,8 @@ proc finishSortByPrefix(const cfg:ssortConfig(?),
     var nUnsortedBuckets = loadNextWords(cfg, PackedText, A, Scratch,
                                          BucketBoundaries, region,
                                          sortedByBits=sortedByBits,
-                                         nTasksPerLocale=nTasksPerLocale);
+                                         nTasksPerLocale=nTasksPerLocale,
+                                         outerReadAgg, outerBktAgg);
 
     // stop if there were no unsorted regions
     if nUnsortedBuckets == 0 {
@@ -1145,6 +1187,8 @@ proc finishSortByPrefix(const cfg:ssortConfig(?),
   Leaves partially sorted suffixes in A and stores the bucket boundaries
   in BucketBoundaries.
 
+  See loadNextWords for the description of outerReadAgg and outerBktAgg.
+
   This is a distributed, parallel operation.
 */
 proc sortByPrefixAndMark(const cfg:ssortConfig(?),
@@ -1155,7 +1199,9 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
                          region: range,
                          maxPrefix: cfg.idxType, // in characters
                          nTasksPerLocale:int,
-                         useExistingBuckets = false
+                         useExistingBuckets:bool,
+                         ref outerReadAgg,
+                         ref outerBktAgg
                         /*ref readAgg: SrcAggregator(cfg.loadWordType),*/
                         /*ref stats: statistics*/) {
 
@@ -1179,7 +1225,8 @@ proc sortByPrefixAndMark(const cfg:ssortConfig(?),
 
   // sort it the rest of the way
   finishSortByPrefix(cfg, PackedText, A, Scratch, BucketBoundaries, region,
-                     maxPrefix=maxPrefix, nTasksPerLocale=nTasksPerLocale);
+                     maxPrefix=maxPrefix, nTasksPerLocale=nTasksPerLocale,
+                     outerReadAgg, outerBktAgg);
 }
 
 
@@ -1618,14 +1665,20 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     BucketBoundaries = 0;
 
     // Load the first words into LocA.cached
+    var myNone = none;
     loadNextWords(cfg, PackedText, A, Scratch, BucketBoundaries,
                   0..<sampleN, sortedByBits=0,
-                  nTasksPerLocale=nTasksPerLocale);
+                  nTasksPerLocale=nTasksPerLocale,
+                  outerReadAgg=myNone,
+                  outerBktAgg=myNone);
 
     // Sort by the prefix
     sortByPrefixAndMark(cfg, PackedText, A, Scratch, BucketBoundaries,
                         0..<sampleN, maxPrefix=cover.period,
-                        nTasksPerLocale=nTasksPerLocale);
+                        nTasksPerLocale=nTasksPerLocale,
+                        useExistingBuckets=false,
+                        outerReadAgg=myNone,
+                        outerBktAgg=myNone);
 
     // copy back to SubSA to do the naming
     forall (elt, offset) in zip(A, SubSA) {
@@ -1652,6 +1705,8 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
       var LocA: [0..<bufSz] offsetAndCachedType;
       var LocScratch: [0..<bufSz] offsetAndCachedType;
       var LocBucketBoundaries: [0..<bufSz] uint(8);
+      var readAgg = new SrcAggregator(wordType);
+      var bktAgg = new DstAggregator(uint(8));
       mysubtimes.allocateTime.accumulate(allocateTime);
 
       for region in bucketGroups(taskRegion, 0..<sampleN, bufSz,
@@ -1680,7 +1735,8 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
         var loadWordsTime = startTime();
         // Load the first words into LocA.cached
         loadNextWords(cfg, PackedText, LocA, LocScratch, LocBucketBoundaries,
-                      0..<sz, sortedByBits=0, nTasksPerLocale=1);
+                      0..<sz, sortedByBits=0, nTasksPerLocale=1,
+                      readAgg, bktAgg);
         mysubtimes.loadWordsTime.accumulate(loadWordsTime);
 
         /*for i in 0..<sz {
@@ -1695,7 +1751,9 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
                             LocBucketBoundaries, 0..<sz,
                             maxPrefix=cover.period,
                             nTasksPerLocale=1,
-                            useExistingBuckets=true);
+                            useExistingBuckets=true,
+                            readAgg,
+                            bktAgg);
         mysubtimes.sortByPrefixTime.accumulate(sortByPrefixTime);
 
         /*
@@ -2064,6 +2122,9 @@ proc linearSortOffsetsInRegionBySampleRanks(
 
    This is a serial operation (to be called per-task).
 
+   Aggregators readAgg, bktAgg, and rankReadAgg will be flushed
+   by this function. outputAgg will not be.
+
    Updates the suffix array SA with the result.
  */
 proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
@@ -2079,6 +2140,11 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                             ref LocSampleRanksA: [] offsetAndSampleRanks(?),
                             ref LocSampleRanksScratch: [] offsetAndSampleRanks(?),
                             ref LocBucketBoundaries: [] uint(8),
+                            ref readAgg: SrcAggregator(cfg.loadWordType),
+                            ref bktAgg: DstAggregator(uint(8)),
+                            ref rankReadAgg:
+                              SrcAggregator(cfg.unsignedOffsetType),
+                            ref outputAgg: DstAggregator(cfg.offsetType),
                             ref subtimes: sortAllOffsetsSubtimes
                             /*ref readAgg: SrcAggregator(cfg.loadWordType),
                             ref writeAgg: DstAggregator(cfg.offsetType),
@@ -2129,7 +2195,8 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   var loadWordsTime = startTime();
   // Load the first words into LocA.cached
   loadNextWords(cfg, PackedText, LocA, LocScratch, LocBucketBoundaries,
-                0..<sz, sortedByBits=0, nTasksPerLocale=1);
+                0..<sz, sortedByBits=0, nTasksPerLocale=1,
+                readAgg, bktAgg);
   subtimes.loadWordsTime.accumulate(loadWordsTime);
 
   /*
@@ -2159,7 +2226,8 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   finishSortByPrefix(cfg, PackedText,
                       LocA, LocScratch, LocBucketBoundaries,
                       0..<sz, maxPrefix=cover.period,
-                      nTasksPerLocale=1);
+                      nTasksPerLocale=1,
+                      readAgg, bktAgg);
 
   subtimes.sortByPrefixTime.accumulate(sortByPrefixTime);
 
@@ -2179,15 +2247,12 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   var nBucketsNeedingSort = 0;
   var nEltsNeedingSort = 0;
   {
-    var readAgg = new SrcAggregator(rankType);
-    var writeAgg = new DstAggregator(offsetType);
-
     for i in rotateRange(0..<sz, taskShift, nTasksPerLocale=1) {
       const bktType = LocBucketBoundaries[i];
       if isBaseCaseBoundary(bktType) {
         // copy anything sorted by the prefix back to SA
         const off = LocA[i].offset;
-        writeAgg.copy(SA[saStart+i], off);
+        outputAgg.copy(SA[saStart+i], off);
       } else {
         // it represents an equality bucket start or value
         if isBucketBoundary(bktType) {
@@ -2203,12 +2268,13 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
         LocSampleRanksA[i].offset = off;
         const start = offsetToSampleRanksOffset(off, cfg.cover);
         for j in 0..<sampleRanksType.nRanks {
-          readAgg.copy(LocSampleRanksA[i].r.ranks[j],
-                       SampleRanks[start+j]);
+          rankReadAgg.copy(LocSampleRanksA[i].r.ranks[j],
+                           SampleRanks[start+j]);
         }
       }
     }
-    // aggregators finish their work here
+    // flush the read aggregator so we can use its results in the next phase
+    rankReadAgg.flush(freeBuffers=false);
   }
   subtimes.loadSampleRanksTime.accumulate(loadSampleRanksTime);
 
@@ -2222,7 +2288,6 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
   // Sort any sample ranks regions by the sample ranks
   var sortBySampleRanksTime = startTime();
   if nBucketsNeedingSort > 0 {
-    var writeAgg = new DstAggregator(offsetType);
     var cur = 0;
     var end = sz;
     while cur < end {
@@ -2254,7 +2319,7 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
         // copy sorted values back to SA
         for i in bkt {
           const off = LocSampleRanksA[i].offset;
-          writeAgg.copy(SA[saStart+i], off);
+          outputAgg.copy(SA[saStart+i], off);
         }
       }
     }
@@ -2284,6 +2349,8 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     offsetAndCached(offsetType, wordType, wordsPerCached);
   type offsetAndSampleRanksType =
     makeOffsetAndSampleRanks(cfg, 0, SampleRanks).type;
+  type sampleRanksType = makeSampleRanks(cfg, 0, SampleRanks).type;
+  type rankType = sampleRanksType.rankType;
 
   record offsetProducer2 {
     //proc eltType type do return offsetAndCached(offsetType, wordType);
@@ -2393,6 +2460,11 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     var LocBucketBoundaries: [0..<bufSz] uint(8);
     var LocSampleRanksA: [0..<bufSz] offsetAndSampleRanksType;
     var LocSampleRanksScratch: [0..<bufSz] offsetAndSampleRanksType;
+
+    var readAgg = new SrcAggregator(wordType);
+    var bktAgg = new DstAggregator(uint(8));
+    var rankReadAgg = new SrcAggregator(rankType);
+    var outputAgg = new DstAggregator(offsetType);
     mysubtimes.allocateTime.accumulate(allocateTime);
 
     const taskShift = computeShift(activeLocIdx*nTasksPerLocale + taskIdInLoc,
@@ -2414,8 +2486,13 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
                              LocOffsets, LocA, LocScratch,
                              LocSampleRanksA, LocSampleRanksScratch,
                              LocBucketBoundaries,
+                             readAgg, bktAgg, rankReadAgg, outputAgg,
                              mysubtimes);
     }
+
+    var flushTime = startTime();
+    outputAgg.flush(freeBuffers=true);
+    mysubtimes.flushTime.accumulate(flushTime);
 
     subtimes += mysubtimes;
   }
@@ -2427,6 +2504,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   reportTime(subtimes.sortByPrefixTime, "  sort by prefix");
   reportTime(subtimes.loadSampleRanksTime, "  load sample ranks");
   reportTime(subtimes.sortBySampleRanksTime, "  sort by sample ranks");
+  reportTime(subtimes.flushTime, "  flush output aggregator");
   reportStat(subtimes.eltsProcessed, "  elts processed per task");
   reportTime(sortBuckets, " sort buckets total", n);
   //writeln("done sorting serial buckets");

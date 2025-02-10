@@ -755,8 +755,11 @@ proc testSorts(param wordsPerCached) {
   //var stats: statistics;
   writeln("Sorting by first word");
 
+  var myNone = none;
   sortByPrefixAndMark(cfg, Packed, B, Scratch, Boundaries, 0..<n,
-                      maxPrefix=1, nTasksPerLocale=cfg.nTasksPerLocale);
+                      maxPrefix=1, nTasksPerLocale=cfg.nTasksPerLocale,
+                      useExistingBuckets=false,
+                      outerReadAgg=myNone, outerBktAgg=myNone);
 
   /*for i in 0..<n {
     writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
@@ -803,7 +806,9 @@ proc testSorts(param wordsPerCached) {
   Boundaries = EmptyBoundaries;
 
   sortByPrefixAndMark(cfg, Packed, B, Scratch, Boundaries, 0..<n,
-                      maxPrefix=16, nTasksPerLocale=cfg.nTasksPerLocale);
+                      maxPrefix=16, nTasksPerLocale=cfg.nTasksPerLocale,
+                      useExistingBuckets=false,
+                      outerReadAgg=myNone, outerBktAgg=myNone);
 
   /*for i in 0..<n {
     writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
@@ -823,7 +828,9 @@ proc testSorts(param wordsPerCached) {
 
   sortByPrefixAndMark(cfg, Packed,
                       B, Scratch, Boundaries, 0..<n,
-                      maxPrefix=24, nTasksPerLocale=cfg.nTasksPerLocale);
+                      maxPrefix=24, nTasksPerLocale=cfg.nTasksPerLocale,
+                      useExistingBuckets=false,
+                      outerReadAgg=myNone, outerBktAgg=myNone);
 
   /*for i in 0..<n {
     writeln("B[", i, "] = ", B[i], " Boundaries[", i, "] = ", Boundaries[i]);
