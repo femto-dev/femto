@@ -114,6 +114,7 @@ record sortAndNameSubtimes {
   var loadWordsTime: subtimer(enabled);
   var sortByPrefixTime: subtimer(enabled);
   var copyOutTime: subtimer(enabled);
+  var eltsProcessed: substat(enabled, int);
 };
 
 operator sortAndNameSubtimes.+(x: sortAndNameSubtimes(?),
@@ -126,6 +127,7 @@ operator sortAndNameSubtimes.+(x: sortAndNameSubtimes(?),
     ret.loadWordsTime = x.loadWordsTime + y.loadWordsTime;
     ret.sortByPrefixTime = x.sortByPrefixTime + y.sortByPrefixTime;
     ret.copyOutTime = x.copyOutTime + y.copyOutTime;
+    ret.eltsProcessed = x.eltsProcessed + y.eltsProcessed;
   }
   return ret;
 }
@@ -139,6 +141,7 @@ record sortAllOffsetsSubtimes {
   var sortByPrefixTime: subtimer(enabled);
   var loadSampleRanksTime: subtimer(enabled);
   var sortBySampleRanksTime: subtimer(enabled);
+  var eltsProcessed: substat(enabled, int);
 };
 
 operator sortAllOffsetsSubtimes.+(x: sortAllOffsetsSubtimes(?),
@@ -153,6 +156,7 @@ operator sortAllOffsetsSubtimes.+(x: sortAllOffsetsSubtimes(?),
     ret.loadSampleRanksTime = x.loadSampleRanksTime + y.loadSampleRanksTime;
     ret.sortBySampleRanksTime = x.sortBySampleRanksTime +
                                 y.sortBySampleRanksTime;
+    ret.eltsProcessed = x.eltsProcessed + y.eltsProcessed;
   }
   return ret;
 }
@@ -859,13 +863,15 @@ proc comparisonSortLocal(ref A: [], ref Scratch: [], comparator, region: range,
 }
 
 proc computeShift(taskId: int, numTasks: int) {
+  return 0;
+  /* didn't see any benefit to this
   var randNums;
   if SEED == 0 {
     randNums = new Random.randomStream(int);
   } else {
     randNums = new Random.randomStream(int, seed=SEED*taskId);
   }
-  return randNums.next();
+  return randNums.next();*/
 }
 
 /**
@@ -1654,6 +1660,8 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
 
         const sz = region.size;
 
+        mysubtimes.eltsProcessed.accumulate(sz);
+
         var copyInTime = startTime();
         // Copy the bucket boundaries from BucketBoundaries
         // Main point of doing this is to get equality buckets from
@@ -1719,6 +1727,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     reportTime(subtimes.loadWordsTime, "  load words");
     reportTime(subtimes.sortByPrefixTime, "  sort by prefix");
     reportTime(subtimes.copyOutTime, "  copy out");
+    reportStat(subtimes.eltsProcessed, "  elts processed per task");
     reportTime(sortingTime, " distributed sort total", sampleN);
   }
 
@@ -2392,7 +2401,11 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     // loop over groups of buckets with total size <= bufSz
     for region in bucketGroups(taskRegion, 0..<n, bufSz,
                                BucketBoundaries, subtimes) {
-      // sort the data in 'groupRegion', respecting existing bucket boundaries
+
+      // count up the number of elements processed per task
+      mysubtimes.eltsProcessed.accumulate(region.size);
+
+      // sort the data in 'region', respecting existing bucket boundaries
       // by copying locally and then storing back to SA
       sortAllOffsetsInRegion(cfg, PackedText, SampleRanks,
                              SA, BucketBoundaries,
@@ -2414,6 +2427,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
   reportTime(subtimes.sortByPrefixTime, "  sort by prefix");
   reportTime(subtimes.loadSampleRanksTime, "  load sample ranks");
   reportTime(subtimes.sortBySampleRanksTime, "  sort by sample ranks");
+  reportStat(subtimes.eltsProcessed, "  elts processed per task");
   reportTime(sortBuckets, " sort buckets total", n);
   //writeln("done sorting serial buckets");
 
