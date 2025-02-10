@@ -43,7 +43,7 @@ import SuffixSort.TIMING;
 import SuffixSort.STATS;
 import SuffixSort.INPUT_PADDING;
 
-config const minBucketsPerTask = 8;
+config const minBucketsPerTask = 16;
 config const minBucketsSpace = 2_000_000; // a size in bytes
 config const simpleSortLimit = 1000; // for sizes >= this,
                                      // use radix sort + multi-way merge
