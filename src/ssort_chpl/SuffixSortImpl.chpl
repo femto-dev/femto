@@ -1638,7 +1638,9 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
     writeln("in sortAndNameSampleOffsets with ", nBuckets, " buckets",
             " size statistics: min/max/average ",
             100.0*minBktSize/n, "/", 100.0*maxBktSize/n, "/",
-            100.0*avgBktSize/n, "%)");
+            100.0*avgBktSize/n, "%");
+    writeln("min/max/average ", minBktSize, "/", maxBktSize, "/", avgBktSize);
+
     writeln("using perTaskBufferSize of ", perTaskBufferSize,
             " (vs max bucket size ", maxBktSize, ")",
             " elements for ", cfg.locales.size*nTasksPerLocale, " tasks");
@@ -2423,6 +2425,7 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
             " size statistics: min/max/average ",
             100.0*minBktSize/n, "/", 100.0*maxBktSize/n, "/",
             100.0*avgBktSize/n, "%)");
+    writeln("min/max/average ", minBktSize, "/", maxBktSize, "/", avgBktSize);
     writeln("using perTaskBufferSize of ", perTaskBufferSize,
             " (vs max bucket size ", maxBktSize, ")",
             " elements for ", cfg.locales.size*cfg.nTasksPerLocale, " tasks");
