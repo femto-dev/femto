@@ -60,6 +60,19 @@ proc testCover(param period) {
     assert(dc.coverIndex(i) == found);
   }
 
+  // check nextCoverIndex
+  for i in 0..<period {
+    if dc.containedInCover(i) {
+      assert(dc.nextCoverIndex(i) == 0);
+    }
+    for j in 0..<period {
+      if dc.containedInCover((i+j)%period) {
+        assert(dc.nextCoverIndex(i) == j);
+        break;
+      }
+    }
+  }
+
   // check findInCover
   var maxSampleRanksPassed = -1;
   forall i in 0..<period with (max reduce maxSampleRanksPassed) {
