@@ -57,7 +57,7 @@ const SIMPLE_SORT_LIMIT = simpleSortLimit;
 const INITIAL_SORT_RADIX = initialSortRadix;
 const FINAL_SORT_PER_TASK_BUFFER_SIZE = finalSortPerTaskBufferSize;
 
-config param WORDS_PER_CACHED = 2;
+config param WORDS_PER_CACHED = 4;
 config param RADIX_BITS = 8;
 config param INITIAL_RADIX_BITS = 16;
 
