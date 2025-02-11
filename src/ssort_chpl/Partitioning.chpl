@@ -2466,9 +2466,13 @@ proc nextUnsortedBucket(ref BucketBoundaries: [] uint(8),
                         out bktStartBit: int) {
   const end = taskRegion.high+1;
 
+  // help to yield periodically
+  var yh: yieldHelper;
+
   // move 'cur' forward until it finds a bucket boundary
   while cur < end && !isBucketBoundary(BucketBoundaries[cur]) {
     cur += 1;
+    yh.maybeYield();
   }
   if cur >= end {
     // return since it's in a different task's region
@@ -2495,6 +2499,7 @@ proc nextUnsortedBucket(ref BucketBoundaries: [] uint(8),
       return cur..#foundSize;
     }
     cur += foundSize;
+    yh.maybeYield();
   }
 
   // return empty since we found no unsorted buckets starting in the task region
@@ -2817,6 +2822,7 @@ proc partitioningSorter.psort(ref A: [],
         ref localScratch = Scratch.localSlice(locRegion),
         ref localBuckets = BucketBoundaries.localSlice(locRegion)) {
     //writeln("working on task for ", taskRegion);
+    var yh: yieldHelper;
     var cur = taskRegion.low;
     var end = taskRegion.high+1;
     while cur < end {
@@ -2844,6 +2850,8 @@ proc partitioningSorter.psort(ref A: [],
                    bkt, comparator,
                    startbit=bktStartBit, bktType=bktType,
                    sequential=true, ifAllLocal=true);
+
+        yh.maybeYield(bkt.size);
       }
     }
   }

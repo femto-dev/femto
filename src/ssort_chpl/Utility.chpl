@@ -47,6 +47,11 @@ config const INCLUDE_REVERSE_COMPLEMENT=true;
 /* Bulk copy "page" size */
 config const bulkCopyPageSz:uint = 8*1024;
 
+/* Yield after this many iterations */
+config const yieldPeriod = 2048;
+const YIELD_PERIOD = yieldPeriod;
+
+
 /* Compute the number of tasks to be used for a data parallel operation */
 proc computeNumTasks(ignoreRunning: bool = dataParIgnoreRunningTasks) {
   if __primitive("task_get_serial") {
@@ -1730,6 +1735,15 @@ proc reportStat(const ref x:substat(?), desc:string) {
   }
 }
 
-
+record yieldHelper {
+  var itersSinceLastYield: int;
+}
+proc ref yieldHelper.maybeYield(iters: int = 1) {
+  itersSinceLastYield += iters;
+  if itersSinceLastYield >= YIELD_PERIOD {
+    itersSinceLastYield = 0;
+    currentTask.yieldExecution();
+  }
+}
 
 }

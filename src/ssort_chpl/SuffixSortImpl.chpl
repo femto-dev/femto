@@ -957,6 +957,9 @@ proc loadNextWords(const cfg:ssortConfig(?),
                  then outerBktAgg
                  else myBktAgg;
 
+
+    var yh: yieldHelper;
+
     var nUnsortedBucketsThisTask = 0;
 
     const taskShift = computeShift(activeLocIdx*nTasksPerLocale + taskIdInLoc,
@@ -1017,6 +1020,8 @@ proc loadNextWords(const cfg:ssortConfig(?),
           }
         }
       }
+
+      yh.maybeYield();
     }
 
     if nUnsortedBucketsThisTask > 0 {
@@ -1067,6 +1072,8 @@ proc loadNextWords(const cfg:ssortConfig(?),
             A[i].cached[j] = (-1):wordType; // to ease debugging
           }
         }
+
+        yh.maybeYield();
       }
     }
   }
