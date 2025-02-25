@@ -364,7 +364,7 @@ proc testFastaFile(contents:string, seq:string, revcomp:string) throws {
 proc testFastaFiles() throws {
   writeln("testFastaFiles()");
 
-  testFastaFile("> test \t seq\nA\n\rC\tG  TTA\nGGT\n\n\nA\n> seq 2\nCCG",
+  testFastaFile("> test \t seq\nA\n\rC\tG  TtA\ngGT\n\n\nA\n> seq 2\nCCG",
                 ">ACGTTAGGTA>CCG",
                 ">CGG>TACCTAACGT");
   testFastaFile(">\n>\n>\nACAT\n>\n>\n", ">>>ACAT>>", ">>>ATGT>>");

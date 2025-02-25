@@ -36,7 +36,11 @@ import RangeChunk;
 import Version;
 import Time;
 import CopyAggregation;
+import CopyAggregation.DstAggregator;
 import Communication;
+import OS.FileNotFoundError;
+
+use SHA256Implementation;
 
 import SuffixSort.{EXTRA_CHECKS, TIMING, TRACE, INPUT_PADDING,
                    DISTRIBUTE_EVEN_WITH_COMM_NONE};
@@ -841,11 +845,12 @@ proc bsearch(const arr: [] int, target: int) {
 proc gatherFiles(ref files: list(string), path: string) throws {
   if isFile(path) {
     files.pushBack(path);
-  }
-  if isDir(path) {
+  } else if isDir(path) {
     for found in findFiles(path, recursive=true) {
       files.pushBack(found);
     }
+  } else {
+    throw new FileNotFoundError(path);
   }
 }
 
@@ -919,6 +924,7 @@ proc isFastaFile(path: string): bool throws {
    and optionally stores it into data[dstRegion] (if 'data' is not 'none').
    Stores the offsets of > characters in sequencesStarts,
    if it is not 'none'.
+   'agg' should be a DstAggregator(uint(8)) or 'none'.
    Returns the count of number of characters read.
  */
 proc readFastaSequencesStartingInRegion(path: string,
@@ -926,10 +932,9 @@ proc readFastaSequencesStartingInRegion(path: string,
                                         allFileRegion: range,
                                         ref data,
                                         dstRegion: range,
+                                        ref agg,
                                         ref sequenceStarts=none) throws {
   extern proc isspace(c: c_int): c_int;
-
-  var agg = new CopyAggregation.DstAggregator(uint(8));
 
   // skip to > within the task's chunk
   var r = IO.openReader(path, region=taskFileRegion.low..allFileRegion.high);
@@ -977,6 +982,8 @@ proc readFastaSequencesStartingInRegion(path: string,
       } else if isspace(byte) == 0 {
         // store non-space sequence data
         if data.type != nothing && count < dataSize {
+          extern proc toupper(c: c_int): c_int;
+          byte = toupper(byte: c_int):uint(8);
           agg.copy(data[dataStart + count], byte);
         }
         count += 1;
@@ -1001,9 +1008,9 @@ proc computeFastaFileSize(path: string) throws {
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(Dom, 0..<size, nTasksPerLocale)
   with (+ reduce totalCount) {
-    var unusedData = none;
+    var noneVar = none;
     var c = readFastaSequencesStartingInRegion(path, chunk, 0..<size,
-                                               unusedData, 1..0);
+                                               noneVar, 1..0, noneVar);
     totalCount += c;
   }
 
@@ -1059,9 +1066,9 @@ proc readFastaFileSequence(path: string,
   in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs)
   with (+ reduce totalCount) {
     const taskId = activeLocIdx*nTasksPerLocale + taskIdInLoc;
-    var unusedData = none;
+    var noneVar = none;
     var c = readFastaSequencesStartingInRegion(path, chunk, 0..<size,
-                                               unusedData, 1..0);
+                                               noneVar, 1..0, noneVar);
     Counts[taskId] = c;
     totalCount += c;
   }
@@ -1081,7 +1088,8 @@ proc readFastaFileSequence(path: string,
 
   // read in the data for each task
   forall (activeLocIdx, taskIdInLoc, chunk)
-  in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs) {
+  in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs)
+  with (var agg = new DstAggregator(uint(8))) {
     const taskId = activeLocIdx*nTasksPerLocale + taskIdInLoc;
     const end = Ends[taskId];
     const count = Counts[taskId];
@@ -1091,7 +1099,7 @@ proc readFastaFileSequence(path: string,
 
     // now read in sequences in the task's region
     var c = readFastaSequencesStartingInRegion(path, chunk, 0..<size,
-                                               data, dataStart..#count);
+                                               data, dataStart..#count, agg);
 
     assert(c == Counts[taskId]);
   }
@@ -1107,6 +1115,49 @@ proc readFastaFileSequence(path: string,
                             // because it would end up at the end
     reverseComplement(data, dataStart+1..#cLessOne,
                       data, dataStart+1+c..#cLessOne);
+  }
+}
+
+/* similar to file.readAll but it can work in parallel distributed.
+
+   * path is the path of the file to read
+   * data is the destination array
+   * region is the region in the 'data' array to read into,
+     and its size should match the file size
+   * distributed indicates if the I/O should be distributed
+ */
+proc parReadAll(path: string,
+                ref data: [] uint(8),
+                region: range,
+                param distributed: bool = false) throws
+{
+  const size = IO.open(path, IO.ioMode.r).size;
+
+  if region.size != size {
+    // region does not match the file
+    throw new Error("size mismatch in parReadAll");
+  }
+
+  const activeLocs = if distributed
+                     then computeActiveLocales(data.domain, region)
+                     else [here];
+  const Dom = if distributed
+              then makeBlockDomain(0..<size, activeLocs)
+              else {0..<size};
+  const nTasksPerLocale = computeNumTasks(ignoreRunning=distributed);
+  const nTasks = activeLocs.size * nTasksPerLocale;
+  const start = region.low;
+
+  // read in parallel
+  forall (activeLocIdx, taskIdInLoc, chunk)
+  in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs)
+  with (var agg = new DstAggregator(uint(8))) {
+    var r = IO.openReader(path, locking=false, region=chunk);
+    for fileOffset in chunk {
+      var byte: uint(8);
+      r.readByte(byte);
+      agg.copy(data[start+fileOffset], byte);
+    }
   }
 }
 
@@ -1136,8 +1187,12 @@ proc readFileData(path: string,
       readFastaFileSequence(path, data, region, distributed=false);
     }
   } else {
-    var r = IO.openReader(path);
-    r.readAll(data[region]);
+    const activeLocs = computeActiveLocales(data.domain, region);
+    if activeLocs.size > 1 {
+      parReadAll(path, data, region, distributed=true);
+    } else {
+      parReadAll(path, data, region, distributed=false);
+    }
   }
 }
 
@@ -1240,6 +1295,111 @@ proc readAllFiles(const ref files: list(string),
 
   if TRACE {
     writeln("readAllFiles complete");
+  }
+}
+
+/* Given a Block-distributed array, return a local copy of that array.
+ */
+proc localCopyOfBlockArr(const A: []) {
+  if A.domain.rank != 1 {
+    compilerError("localCopyOfBlock only supports 1-D");
+  }
+  const region = A.domain.dim(0);
+  var LocA:[region] A.eltType;
+  bulkCopy(LocA, region, A, region);
+  return LocA;
+}
+
+/* Compute a SHA-256 checksum for every file, storing the
+   checksums in allChecksums */
+proc hashAllFiles(const allData: [] uint(8),
+                  const allPaths: [] string,
+                  const fileStarts: [] int,
+                  const totalSize: int,
+                  out allChecksums: [allPaths.domain] 8*uint(32)) {
+
+  const activeLocs = allData.targetLocales();
+  const nTasksPerLocale = computeNumTasks(ignoreRunning=true);
+  const nTasks = activeLocs.size * nTasksPerLocale;
+  const nFiles = allPaths.size;
+
+  // each task considers files starting within its block
+  forall (activeLocIdx, taskIdInLoc, chunk)
+  in divideIntoTasks(allData.domain, 0..<totalSize, nTasksPerLocale, activeLocs)
+  with (const locFileStarts = localCopyOfBlockArr(fileStarts),
+        var agg = new DstAggregator(8*uint(32))) {
+    // compute the first file starting within the chunk
+    var firstFile: int;
+    var firstFileStart: int;
+    {
+      var cur = chunk.low;
+      while cur <= chunk.high {
+        firstFile = offsetToFileIdx(locFileStarts, cur);
+        firstFileStart = locFileStarts[firstFile];
+        if chunk.contains(firstFileStart) then break;
+        // move on to the next file
+        var firstFileEnd = if locFileStarts.domain.contains(firstFile+1)
+                           then locFileStarts[firstFile+1]
+                           else totalSize;
+        cur = firstFileEnd;
+      }
+    }
+    // loop over file starts while the file start is in the chunk
+    var curFile = firstFile;
+    var curFileStart = firstFileStart;
+    while chunk.contains(curFileStart) && curFile < nFiles {
+      // compute the file region for curFile
+      var curFileEnd = if locFileStarts.domain.contains(curFile+1)
+                       then locFileStarts[curFile+1]
+                       else totalSize;
+      var curFileHashEnd = curFileEnd - 1; // do not count the trailing 0 byte
+      // process that file
+      var cur = curFileStart;
+      var s: SHA256State;
+
+      // process the full blocks
+      while cur + 16*4 < curFileHashEnd {
+        // store the full block
+        var block: 16*uint(32);
+        for param i in 0..<16 {
+          var x:uint(32);
+          // read 4 bytes into x
+          for param j in 0..<4 {
+            x <<= 8;
+            x |= allData[cur + i*4 + j];
+          }
+          // store it into the block
+          block[i] = x;
+        }
+        s.fullblock(block);
+        cur += 16*4;
+      }
+
+      // process the final block
+      {
+        var nBitsInBlock = 0;
+        var block: 16*uint(32);
+        for i in 0..<16 {
+          var x:uint(32);
+          for j in 0..<4 {
+            x <<= 8;
+            if cur < curFileHashEnd {
+              x |= allData[cur];
+              nBitsInBlock += 8;
+            }
+            cur += 1;
+          }
+          // store it into the block
+          block[i] = x;
+        }
+        const chksum = s.lastblock(block, nBitsInBlock);
+        agg.copy(allChecksums[curFile], chksum);
+      }
+
+      // move on to the next file
+      curFile += 1;
+      curFileStart = curFileEnd;
+    }
   }
 }
 

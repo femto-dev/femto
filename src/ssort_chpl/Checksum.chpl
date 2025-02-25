@@ -1,0 +1,93 @@
+/*
+  2025 Michael Ferguson <michaelferguson@acm.org>
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU Lesser General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General Public License
+  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+  femto/src/ssort_chpl/Checksum.chpl
+*/
+
+module Checksum {
+
+private import List;
+private import Help;
+
+private use Utility;
+
+proc usage(args: [] string) {
+  writeln("usage: ", args[0], " <files-and-directories>");
+  writeln("this program reads in files and computes a checksum");
+  Help.printUsage();
+}
+
+proc main(args: [] string) throws {
+  var inputFilesList: List.list(string);
+
+  for arg in args[1..] {
+    if arg == "--help" || arg == "-h" {
+      usage(args);
+      return 0;
+    }
+    if arg.startsWith("-") {
+      writeln("argument not handled ", arg);
+      usage(args);
+      return 1;
+    }
+    gatherFiles(inputFilesList, arg);
+  }
+
+  if inputFilesList.size == 0 {
+    writeln("please specify input files and directories");
+    usage(args);
+    return 1;
+  }
+
+  var readTime = startTime(true);
+  const allData; //: [] uint(8);
+  const allPaths; //: [] string;
+  const concisePaths; // : [] string
+  const fileSizes; //: [] int;
+  const fileStarts; //: [] int;
+  const totalSize: int;
+  readAllFiles(inputFilesList,
+               Locales,
+               allData=allData,
+               allPaths=allPaths,
+               concisePaths=concisePaths,
+               fileSizes=fileSizes,
+               fileStarts=fileStarts,
+               totalSize=totalSize);
+
+  writeln("Files are: ", concisePaths);
+  writeln("FileStarts are: ", fileStarts);
+  reportTime(readTime, "reading input", totalSize, 1);
+
+  var chksumTime = startTime(true);
+  const allChecksums;
+  hashAllFiles(allData, allPaths, fileStarts, totalSize, allChecksums);
+  reportTime(chksumTime, "checksum", totalSize, 1);
+
+  for (f, chksum) in zip(allPaths, allChecksums) {
+    for i in 0..<chksum.size {
+      writef("%08xu", chksum[i]);
+    }
+    write("  ");
+    write(f);
+    writeln();
+  }
+
+  return 0;
+}
+
+
+}
