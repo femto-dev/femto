@@ -355,6 +355,7 @@ proc testFastaFile(contents:string, seq:string, revcomp:string) throws {
     var SeqDesc: [0..nseq+1] string;
     var A: [0..n+1] uint(8);
     readFastaFileSequence(filename, A, 1..n, distributed=false,
+                          skipDescriptions=false,
                           1, SeqDesc, SeqStart);
     assert(A[0] == 0);
     assert(A[n+1] == 0);
@@ -373,7 +374,8 @@ proc testFastaFile(contents:string, seq:string, revcomp:string) throws {
     SeqStart = 0;
     SeqDesc = "";
     A = 0;
-    readFileData(filename, A, 1..n, 1, SeqDesc, SeqStart);
+    readFileData(filename, A, 1..n, 1, skipDescriptions=false,
+                 SeqDesc, SeqStart);
     assert(A[0] == 0);
     assert(A[n+1] == 0);
     var str2 = arrToString(A[1..n]);
