@@ -332,8 +332,20 @@ iter divideIntoTasks(const Dom: domain(?),
   if Dom.rank != 1 then compilerError("divideIntoTasks only supports 1-D");
   if Dom.dim(0).strides != strideKind.one then
     compilerError("divideIntoTasks only supports non-strided domains");
-  yield (0, 0, Dom.dim(0));
-  halt("serial divideIntoTasks should not be called");
+
+  compilerWarning("serial divideIntoTasks called");
+
+  for (loc, activeLocIdx) in zip(activeLocales, 0..) {
+    on loc {
+      const ref locDom = Dom.localSubdomain();
+      const locRegion = locDom.dim(0)[region];
+      for (chunk, taskIdInLoc) in
+           zip(RangeChunk.chunks(locRegion, nTasksPerLocale), 0..) {
+        //yield (nTasksPerLocale*locId + taskId, chunk);
+        yield (activeLocIdx, taskIdInLoc, chunk);
+      }
+    }
+  }
 }
 iter divideIntoTasks(param tag: iterKind,
                      const Dom: domain(?),
@@ -1428,6 +1440,36 @@ proc readAllFiles(const ref files: list(string),
     writeln("readAllFiles complete");
   }
 }
+
+/* Write a Block-distributed array to a file */
+proc writeBlockArray(const in path: string, const A: [], region: range) throws {
+  if A.domain.rank != 1 {
+    compilerError("writeBlockArray only supports 1-D");
+  }
+
+  // create the file and write a single byte to get it to the right size
+  {
+    var f = IO.open(path, IO.ioMode.cw);
+    var w = f.writer(region=region.last..region.last);
+    w.writeByte(0);
+    w.close();
+    f.fsync();
+    f.close();
+  }
+
+  const activeLocs = computeActiveLocales(A.domain, region);
+  const nTasksPerLocale = computeNumTasks(ignoreRunning=activeLocs.size>1);
+
+  forall (activeLocIdx, taskIdInLoc, chunk)
+  in divideIntoTasks(A.domain, region, nTasksPerLocale, activeLocs) {
+    var f = IO.open(path, IO.ioMode.rw);
+    var w = f.writer(region=chunk);
+    w.writeBinary(A.localSlice(chunk));
+    w.close();
+    f.close();
+  }
+}
+
 
 /* Given a Block-distributed array, return a local copy of that array.
  */
