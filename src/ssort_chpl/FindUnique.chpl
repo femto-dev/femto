@@ -573,7 +573,7 @@ proc main(args: [] string) throws {
       }
     }
 
-    Sort.sort(MaximumNearDuplicateScore, new Sort.ReverseComparator());
+    Sort.sort(MaximumNearDuplicateScore, new Sort.reverseComparator());
 
     var half = nNearDuplicates/2;
     half = max(1, half);
