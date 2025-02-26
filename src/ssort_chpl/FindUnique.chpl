@@ -81,8 +81,9 @@ inline proc adjustForFileBoundaries(count, offset: int, doc: int,
 }
 
 /* Find substrings that are unique to a document.
-   Returns a 'record hits' which needs to be sorted
-   to remove unnecessary hits.
+   Returns an array MinUnique of size 'n' where
+   MinUnique[i] = x means that at offset i there is
+   an x-character long unique sequence.
 
    If IgnoreDocs[doc] is true, entries from that file will be ignored.
  */
@@ -472,20 +473,22 @@ proc main(args: [] string) throws {
   const allData; //: [] uint(8);
   const allPaths; //: [] string;
   const concisePaths; // : [] string
-  const fileSizes; //: [] int;
   const fileStarts; //: [] int;
   const totalSize: int;
+  const sequenceDescriptions; //: [] string;
+  const sequenceStarts; //: [] int;
   readAllFiles(inputFilesList,
                Locales,
                allData=allData,
                allPaths=allPaths,
                concisePaths=concisePaths,
-               fileSizes=fileSizes,
                fileStarts=fileStarts,
-               totalSize=totalSize);
+               totalSize=totalSize,
+               sequenceDescriptions=sequenceDescriptions,
+               sequenceStarts=sequenceStarts);
 
-  writeln("Files are: ", concisePaths);
-  writeln("FileStarts are: ", fileStarts);
+  /*writeln("Files are: ", concisePaths);
+  writeln("FileStarts are: ", fileStarts);*/
 
   var t: Time.stopwatch;
 

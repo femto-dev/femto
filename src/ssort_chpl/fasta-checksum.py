@@ -13,37 +13,44 @@ import hashlib
 from Bio import SeqIO
 from Bio import Seq
 
-def handle_file(path):
+def hash_file(path):
     filehash = hashlib.sha256()
-    recs = [ ] 
+    recs = [ ]
     for rec in SeqIO.parse(path, "fasta"):
         recs.append(rec)
 
     # process the input
     # hash the forward sequences
     for rec in recs:
-        #print("rec.id", rec.id)
-        #print("rec.description", rec.description)
         filehash.update(b">")
         filehash.update(bytes(rec.seq.upper()))
 
     # hash the reverse complement sequences
     for rec in reversed(recs):
-        #print("rev rec.id", rec.id)
-        #print("rev rec.description", rec.description)
         filehash.update(b">")
         filehash.update(bytes(rec.seq.upper().reverse_complement()))
 
-    print(filehash.hexdigest(), " ", path)
+    print(filehash.hexdigest(), " " + path)
 
-def handle_path(path):
-    if os.path.isfile(path):
-        handle_file(path)
+def hash_sequences(path):
+    recs = [ ]
+    for rec in SeqIO.parse(path, "fasta"):
+        recs.append(rec)
 
-    if os.path.isdir(path):
-        for root, subdirs, files in os.walk(path):
-            for filename in files:
-                handle_file(os.path.join(root, filename))
+    # process the input
+    # hash the forward sequences
+    for rec in recs:
+        seqhash = hashlib.sha256()
+        seqhash.update(b">")
+        seqhash.update(bytes(rec.seq.upper()))
+        print(seqhash.hexdigest(), " >" + rec.description)
+
+    # hash the reverse complement sequences
+    for rec in reversed(recs):
+        seqhash = hashlib.sha256()
+        seqhash.update(b">")
+        seqhash.update(bytes(rec.seq.upper().reverse_complement()))
+        print(seqhash.hexdigest(), " >" + rec.description + " [revcomp]")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -63,4 +70,7 @@ if __name__ == "__main__":
     file_paths.sort()
 
     for path in file_paths:
-        handle_file(path)
+        hash_file(path)
+
+    for path in file_paths:
+        hash_sequences(path)

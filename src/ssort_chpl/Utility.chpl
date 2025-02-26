@@ -922,8 +922,12 @@ proc isFastaFile(path: string): bool throws {
 
 /* Reads sequence data that starts within 'taskFileRegion'
    and optionally stores it into data[dstRegion] (if 'data' is not 'none').
-   Stores the offsets of > characters in sequencesStarts,
+
+   Appends the offsets in dstRegion of > characters to the 'sequencesStarts'
+   list (which can be disabled if sequenceStarts=none).
+   and similarly the sequence description is stored in the list sequenceDescs
    if it is not 'none'.
+
    'agg' should be a DstAggregator(uint(8)) or 'none'.
    Returns the count of number of characters read.
  */
@@ -933,7 +937,8 @@ proc readFastaSequencesStartingInRegion(path: string,
                                         ref data,
                                         dstRegion: range,
                                         ref agg,
-                                        ref sequenceStarts=none) throws {
+                                        ref sequenceStarts,
+                                        ref sequenceDescs) throws {
   extern proc isspace(c: c_int): c_int;
 
   // skip to > within the task's chunk
@@ -950,6 +955,7 @@ proc readFastaSequencesStartingInRegion(path: string,
   var dataSize = dstRegion.size;
   var count = 0;
   var descOffset = r.offset();
+  var lastDescCount = 0;
   var inDescLine = false;
   var desc = "";
   // find any sequences that start in this task's chunk
@@ -959,20 +965,25 @@ proc readFastaSequencesStartingInRegion(path: string,
       var byte = r.readByte();
       if byte == ">".toByte() {
         inDescLine = true;
+        desc = "";
         descOffset = r.offset() - 1; // the position of the >
         if !taskFileRegion.contains(descOffset) {
           break; // don't read sequences starting outside of task's region
-        }
-        if sequenceStarts.type != nothing {
-          sequenceStarts.append(descOffset);
         }
         // store > characters to divide sequences
         if data.type != nothing && count < dataSize {
           agg.copy(data[dataStart + count], byte);
         }
+        lastDescCount = count;
         count += 1;
       } else if byte == "\n".toByte() && inDescLine {
         inDescLine = false;
+        if sequenceStarts.type != nothing {
+          sequenceStarts.pushBack(dataStart + lastDescCount);
+        }
+        if sequenceDescs.type != nothing {
+          sequenceDescs.pushBack(desc);
+        }
         /*if TRACE {
           writeln("Reading sequence ", desc);
         }*/
@@ -997,31 +1008,46 @@ proc readFastaSequencesStartingInRegion(path: string,
 }
 
 /* Computes the size of the nucleotide data that will
-   be read by readFastaFileSequence */
+   be read by readFastaFileSequence as well as the
+   number of sequences.
+
+   This is a single-locale operation.
+   TODO: should it be distributed?
+
+   Returns a tuple consisting of:
+    * the number of bytes of FASTA sequence data
+    * the number of FASTA sequences
+ */
 proc computeFastaFileSize(path: string) throws {
   // compute the file size without > lines or whitespace
   const size = IO.open(path, IO.ioMode.r).size;
   const Dom = {0..<size};
   const nTasksPerLocale = computeNumTasks();
   var totalCount = 0;
+  var totalSequences = 0;
 
+  // (this is not a distributed loop)
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(Dom, 0..<size, nTasksPerLocale)
-  with (+ reduce totalCount) {
+  with (+ reduce totalCount, + reduce totalSequences) {
     var noneVar = none;
+    var mySequenceStarts: list(int);
     var c = readFastaSequencesStartingInRegion(path, chunk, 0..<size,
-                                               noneVar, 1..0, noneVar);
+                                               noneVar, 1..0, noneVar,
+                                               mySequenceStarts, noneVar);
     totalCount += c;
+    totalSequences += mySequenceStarts.size;
   }
 
   if INCLUDE_REVERSE_COMPLEMENT {
     totalCount = 2*totalCount;
+    totalSequences = 2*totalSequences;
   }
 
   /*writeln("computeFastaFileSize ", path,
           " INCLUDE_REVERSE_COMPLEMENT=", INCLUDE_REVERSE_COMPLEMENT,
           " totalCount=", totalCount);*/
-  return totalCount;
+  return (totalCount, totalSequences);
 }
 
 /* Reads a the sequence portion of a fasta file into a region of an array.
@@ -1032,7 +1058,12 @@ proc computeFastaFileSize(path: string) throws {
 proc readFastaFileSequence(path: string,
                            ref data: [] uint(8),
                            region: range,
-                           param distributed: bool = false) throws
+                           param distributed: bool,
+                           seqStartIdx: int, // start position in below arrays
+                                             // for this file
+                           ref seqDescriptions: [] string,
+                           // seqStarts has indices into data
+                           ref seqStarts: [] int) throws
 {
   const size = IO.open(path, IO.ioMode.r).size;
   //writeln("readFastaFileSequence ", path, " region=", region, " file size=", size);
@@ -1055,22 +1086,28 @@ proc readFastaFileSequence(path: string,
   const nTasks = activeLocs.size * nTasksPerLocale;
 
   var totalCount = 0;
+  var totalSequences = 0;
   const CountsDom = if distributed
                     then makeBlockDomain(0..<nTasks, activeLocs)
                     else {0..<nTasks};
   var Counts:[CountsDom] int;
+  var SeqCounts:[CountsDom] int;
 
+  // divide the file size evenly among tasks
   // compute the data position where each task should start
-  // (this is not a distributed loop)
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs)
-  with (+ reduce totalCount) {
+  with (+ reduce totalCount, + reduce totalSequences) {
     const taskId = activeLocIdx*nTasksPerLocale + taskIdInLoc;
     var noneVar = none;
+    var mySequenceStarts: list(int);
     var c = readFastaSequencesStartingInRegion(path, chunk, 0..<size,
-                                               noneVar, 1..0, noneVar);
+                                               noneVar, 1..0, noneVar,
+                                               mySequenceStarts, noneVar);
     Counts[taskId] = c;
+    SeqCounts[taskId] = mySequenceStarts.size;
     totalCount += c;
+    totalSequences += mySequenceStarts.size;
   }
 
   var checkCount = totalCount;
@@ -1084,8 +1121,10 @@ proc readFastaFileSequence(path: string,
   }
 
   // Scan to get the end of each task's region
-  var Ends = + scan Counts;
+  const Ends = + scan Counts;
+  const SeqEnds = + scan SeqCounts;
 
+  // divide the file size evenly among tasks
   // read in the data for each task
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs)
@@ -1097,11 +1136,31 @@ proc readFastaFileSequence(path: string,
 
     var dataStart = region.low + start;
 
+    var mySequenceStarts: list(int);
+    var mySequenceDescs: list(string);
+
     // now read in sequences in the task's region
     var c = readFastaSequencesStartingInRegion(path, chunk, 0..<size,
-                                               data, dataStart..#count, agg);
-
+                                               data, dataStart..#count, agg,
+                                               mySequenceStarts, mySequenceDescs);
     assert(c == Counts[taskId]);
+    /*writeln("Got mySequenceStarts in ", dataStart..#count,
+              " mySequenceStarts ", mySequenceStarts);*/
+
+    const seqEnd = SeqEnds[taskId];
+    const seqCount = SeqCounts[taskId];
+    const seqStart = seqEnd - seqCount;
+    assert(mySequenceStarts.size == mySequenceDescs.size);
+    assert(mySequenceStarts.size == seqCount);
+
+    // store into seqDescriptions / seqStarts
+    for seqIdx in 0..<seqCount {
+      const globalSeqIdx = seqStartIdx + seqStart + seqIdx;
+      /*writeln("fwd seq ", globalSeqIdx, " starts ", mySequenceStarts[seqIdx] +
+          region.low, " desc ", mySequenceDescs[seqIdx]);*/
+      seqDescriptions[globalSeqIdx] = mySequenceDescs[seqIdx];
+      seqStarts[globalSeqIdx] = mySequenceStarts[seqIdx];
+    }
   }
 
   if INCLUDE_REVERSE_COMPLEMENT && totalCount > 0 {
@@ -1109,12 +1168,52 @@ proc readFastaFileSequence(path: string,
     // store the reverse complement just after the original sequence;
     // except the initial > would be a trailing >,
     // so emit a separator and don't revcomp the initial >
-    var c = totalCount;
+    const c = totalCount;
     data[dataStart + c] = ">".toByte();
     const cLessOne = c - 1; // don't revcomp the initial separator,
                             // because it would end up at the end
     reverseComplement(data, dataStart+1..#cLessOne,
                       data, dataStart+1+c..#cLessOne);
+
+    // update seqDescriptions / seqStarts for the revcomps
+    // from this file
+
+    // first, compute the reverse sequence sizes, so we can scan
+    var ReversedSeqSizes:[0..<totalSequences] int;
+    forall thisFileSeqIdx in 0..<totalSequences {
+      const globalIndex = seqStartIdx + thisFileSeqIdx;
+      const nextStart = if thisFileSeqIdx+1 < totalSequences
+                        then seqStarts[globalIndex+1]
+                        else c + region.low;
+      /*writeln("thisFileSeqIdx ", thisFileSeqIdx,
+              " globalIndex ", globalIndex,
+              " myStart ", seqStarts[globalIndex],
+              " nextStart ", nextStart,
+              " c ", c);*/
+      const seqSize = nextStart - seqStarts[globalIndex];
+      ReversedSeqSizes[totalSequences-1-thisFileSeqIdx] = seqSize;
+    }
+
+    var ReversedSeqStarts = + scan ReversedSeqSizes;
+    /*writeln("ReversedSeqSizes ", ReversedSeqSizes);
+    writeln("ReversedSeqStarts ", ReversedSeqStarts);*/
+
+    forall thisFileSeqIdx in 0..<totalSequences {
+      const revSeqEnd = ReversedSeqStarts[thisFileSeqIdx];
+      const revSeqCount = ReversedSeqSizes[thisFileSeqIdx];
+      const revSeqStart = revSeqEnd - revSeqCount;
+
+      const globalRevIndex = seqStartIdx + totalSequences + thisFileSeqIdx;
+      const globalFwdIndex = seqStartIdx + totalSequences - 1 - thisFileSeqIdx;
+      /*writeln("globalRevIndex ", globalRevIndex, " globalFwdIndex ", globalFwdIndex,
+              " region.low ", region.low,
+              " c ", c,
+              " revSeqStart ", revSeqStart,
+              " dststart ", revSeqStart + c + region.low);*/
+      var desc = seqDescriptions[globalFwdIndex] + " [revcomp]";
+      seqDescriptions[globalRevIndex] = desc;
+      seqStarts[globalRevIndex] = revSeqStart + c + region.low;
+    }
   }
 }
 
@@ -1150,8 +1249,8 @@ proc parReadAll(path: string,
 
   // read in parallel
   forall (activeLocIdx, taskIdInLoc, chunk)
-  in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs)
-  with (var agg = new DstAggregator(uint(8))) {
+  in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs) {
+    var agg = new DstAggregator(uint(8));
     var r = IO.openReader(path, locking=false, region=chunk);
     for fileOffset in chunk {
       var byte: uint(8);
@@ -1161,30 +1260,37 @@ proc parReadAll(path: string,
   }
 }
 
-/* Computes the size of a file. Handles fasta files specially to compute the
-   size of the nucleotide data only. */
+/* Computes the size of a file and the number of sequences in the file.
+   Handles fasta files specially to compute the size of the nucleotide data only.
+   returns a tuple (nBytes, nSequences)
+ */
 proc computeFileSize(path: string) throws {
   if isFastaFile(path) {
     return computeFastaFileSize(path);
   } else {
-    return getFileSize(path);
+    return (getFileSize(path), 1); // non-fasta files always have 1 sequence
   }
 }
 
-/* Read the data in a file into a portion of an array. Handles fasta
+/* Read all of the data in a file into a portion of an array. Handles fasta
    files specially to read only the nucleotide data.
    The region should match the file size. */
 proc readFileData(path: string,
                   ref data: [] uint(8),
                   region: range,
+                  seqStartIdx: int,
+                  ref seqDescriptions: [] string,
+                  ref seqStarts: [] int,
                   verbose = true) throws
 {
   if isFastaFile(path) {
     const activeLocs = computeActiveLocales(data.domain, region);
     if activeLocs.size > 1 {
-      readFastaFileSequence(path, data, region, distributed=true);
+      readFastaFileSequence(path, data, region, distributed=true,
+                            seqStartIdx, seqDescriptions, seqStarts);
     } else {
-      readFastaFileSequence(path, data, region, distributed=false);
+      readFastaFileSequence(path, data, region, distributed=false,
+                            seqStartIdx, seqDescriptions, seqStarts);
     }
   } else {
     const activeLocs = computeActiveLocales(data.domain, region);
@@ -1193,6 +1299,9 @@ proc readFileData(path: string,
     } else {
       parReadAll(path, data, region, distributed=false);
     }
+    // update the sequence starts. non-fasta files only have one sequence.
+    seqDescriptions[seqStartIdx] = path;
+    seqStarts[seqStartIdx] = region.low;
   }
 }
 
@@ -1214,10 +1323,12 @@ proc trimPaths(ref paths:[] string) {
  Given a list of files, read in all files into a single array
  and produce several related data items:
    * the array containing all of the data
-   * a sorted list of paths
-   * a corresponding array of file sizes
-   * a corresponding list of offsets where each file starts,
+   * a sorted array of paths
+   * a corresponding array of offsets where each file starts,
      which, contains an extra entry for the total size
+   * an array of sequences descriptions
+   * a corresponding array of sequence start positions
+     within allData
 
  The resulting arrays will be Block distributed among 'locales'.
  */
@@ -1226,9 +1337,10 @@ proc readAllFiles(const ref files: list(string),
                   out allData: [] uint(8),
                   out allPaths: [] string,
                   out concisePaths: [] string,
-                  out fileSizes: [] int,
                   out fileStarts: [] int,
-                  out totalSize: int) throws {
+                  out totalSize: int,
+                  out sequenceDescriptions: [] string,
+                  out sequenceStarts: [] int) throws {
   if TRACE {
     writeln("in readAllFiles, reading ", files.size, " files");
   }
@@ -1253,27 +1365,44 @@ proc readAllFiles(const ref files: list(string),
 
   // compute the size for the concatenated input
   var sizes: [paths.domain] int;
-  forall (path, sz) in zip(paths, sizes) {
-    sz = computeFileSize(path);
-    sz += 1; // add a null byte to separate files
+  var sequencesPerFile: [paths.domain] int;
+  forall (path, sz, nSq) in zip(paths, sizes, sequencesPerFile) {
+    var (nBytes, nSequences) = computeFileSize(path);
+    sz = nBytes + 1; // add a null byte to separate the files
+    assert(nBytes >= 0);
+    assert(nSequences > 0);
+    nSq = nSequences;
   }
 
+  const sequencesPerFileEnds = + scan sequencesPerFile;
+  const nSequences = sequencesPerFileEnds.last;
   const fileEnds = + scan sizes;
   const total = fileEnds.last;
 
   const TextDom = makeBlockDomain(0..<total+INPUT_PADDING, locales);
   var thetext:[TextDom] uint(8);
 
+  const SequencesDom = makeBlockDomain(0..<nSequences, locales);
+  var theSequenceDescriptions: [SequencesDom] string;
+
+  // and one that includes an extra element at the end
+  const SequencesDomInclusive = makeBlockDomain(0..nSequences, locales);
+  var theSequenceStarts: [SequencesDomInclusive] int;
+
   if TRACE {
     writeln("in readAllFiles, reading file contents");
   }
 
   // read each file
-  forall (path, sz, end) in zip(paths, sizes, fileEnds) {
+  forall (path, sz, end, fileSqCount, fileSqEnd)
+  in zip(paths, sizes, fileEnds, sequencesPerFile, sequencesPerFileEnds) {
     const start = end - sz;
     const count = sz - 1; // we added a null byte above
-    readFileData(path, thetext, start..#count);
+    const sequenceStartIdx = fileSqEnd - fileSqCount;
+    readFileData(path, thetext, start..#count,
+                 sequenceStartIdx, theSequenceDescriptions, theSequenceStarts);
   }
+  theSequenceStarts[nSequences] = total;
 
   // compute fileStarts
   const StartsDom = makeBlockDomain(0..nFiles, locales);
@@ -1289,9 +1418,11 @@ proc readAllFiles(const ref files: list(string),
   allData = thetext;
   allPaths = paths;
   concisePaths = tPaths;
-  fileSizes = sizes;
   fileStarts = starts;
   totalSize = total;
+
+  sequenceDescriptions = theSequenceDescriptions;
+  sequenceStarts = theSequenceStarts;
 
   if TRACE {
     writeln("readAllFiles complete");
@@ -1313,15 +1444,14 @@ proc localCopyOfBlockArr(const A: []) {
 /* Compute a SHA-256 checksum for every file, storing the
    checksums in allChecksums */
 proc hashAllFiles(const allData: [] uint(8),
-                  const allPaths: [] string,
                   const fileStarts: [] int,
                   const totalSize: int,
-                  out allChecksums: [allPaths.domain] 8*uint(32)) {
+                  out allChecksums: [fileStarts.domain] 8*uint(32)) {
 
   const activeLocs = allData.targetLocales();
   const nTasksPerLocale = computeNumTasks(ignoreRunning=true);
   const nTasks = activeLocs.size * nTasksPerLocale;
-  const nFiles = allPaths.size;
+  const nFiles = fileStarts.size;
 
   // each task considers files starting within its block
   forall (activeLocIdx, taskIdInLoc, chunk)
@@ -1353,6 +1483,12 @@ proc hashAllFiles(const allData: [] uint(8),
                        then locFileStarts[curFile+1]
                        else totalSize;
       var curFileHashEnd = curFileEnd - 1; // do not count the trailing 0 byte
+      if allData[curFileHashEnd] != 0 {
+        // workaround to enable this function to work on sequences of FASTA
+        // data which never end with a null byte
+        curFileHashEnd += 1;
+      }
+
       // process that file
       var cur = curFileStart;
       var s: SHA256State;

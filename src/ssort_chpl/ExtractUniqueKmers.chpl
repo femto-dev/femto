@@ -51,9 +51,13 @@ proc main() throws {
   }
 
   const isFasta = isFastaFile(INPUT);
-  const n = computeFileSize(INPUT);
+  var (n, nSequences) = computeFileSize(INPUT);
+  var SeqDescriptions:[0..<nSequences] string;
+  var SeqStarts:[0..nSequences] int;
   var Text:[0..n] uint(8);
-  readFileData(INPUT, Text, 0..<n, verbose=false);
+  readFileData(INPUT, Text, 0..<n,
+               seqStartIdx=0, SeqDescriptions, SeqStarts,
+               verbose=false);
 
   var uniqueF = IO.open(UNIQUE, IO.ioMode.r);
   const n2 = uniqueF.size;

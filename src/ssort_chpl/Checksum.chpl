@@ -56,33 +56,68 @@ proc main(args: [] string) throws {
   const allData; //: [] uint(8);
   const allPaths; //: [] string;
   const concisePaths; // : [] string
-  const fileSizes; //: [] int;
   const fileStarts; //: [] int;
   const totalSize: int;
+  const sequenceDescriptions; //: [] string;
+  const sequenceStarts; //: [] int;
   readAllFiles(inputFilesList,
                Locales,
                allData=allData,
                allPaths=allPaths,
                concisePaths=concisePaths,
-               fileSizes=fileSizes,
                fileStarts=fileStarts,
-               totalSize=totalSize);
+               totalSize=totalSize,
+               sequenceDescriptions=sequenceDescriptions,
+               sequenceStarts=sequenceStarts);
 
-  writeln("Files are: ", concisePaths);
+  /*writeln("Files are:");
+  for p in concisePaths {
+    writeln(" ", p);
+  }
   writeln("FileStarts are: ", fileStarts);
+  writeln("Sequences are:");
+  for (d,i) in zip(sequenceDescriptions, 0..) {
+    writeln(" ", i, " ", d);
+  }
+  writeln("SequenceStarts are: ", sequenceStarts);*/
+
   reportTime(readTime, "reading input", totalSize, 1);
 
   var chksumTime = startTime(true);
-  const allChecksums;
-  hashAllFiles(allData, allPaths, fileStarts, totalSize, allChecksums);
-  reportTime(chksumTime, "checksum", totalSize, 1);
+  const allFileChecksums;
+  hashAllFiles(allData, fileStarts, totalSize, allFileChecksums);
+  const allSeqChecksums;
+  hashAllFiles(allData, sequenceStarts, totalSize, allSeqChecksums);
+  reportTime(chksumTime, "checksum", 2*totalSize, 1);
 
-  for (f, chksum) in zip(allPaths, allChecksums) {
+  for idx in 0..<allPaths.size {
+    const f = allPaths[idx];
+    const chksum = allFileChecksums[idx];
+
     for i in 0..<chksum.size {
       writef("%08xu", chksum[i]);
     }
     write("  ");
     write(f);
+    writeln();
+  }
+
+  for idx in 0..<sequenceDescriptions.size {
+    const d = sequenceDescriptions[idx];
+    const chksum = allSeqChecksums[idx];
+
+    /*var dataregion = sequenceStarts[idx]..<sequenceStarts[idx+1];
+    writeln("data in ", dataregion, " for ", d, ":");
+    for j in dataregion {
+      writef("%c", allData[j]);
+    }
+    writeln();*/
+
+    for i in 0..<chksum.size {
+      writef("%08xu", chksum[i]);
+    }
+    write("  ");
+    write(d);
     writeln();
   }
 

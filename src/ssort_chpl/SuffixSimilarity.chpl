@@ -955,20 +955,22 @@ proc main(args: [] string) throws {
   const allData; //: [] uint(8);
   const allPaths; //: [] string;
   const concisePaths; //: [] string;
-  const fileSizes; //: [] int;
   const fileStarts; //: [] int;
   const totalSize: int;
+  const sequenceDescriptions; //: [] string;
+  const sequenceStarts; //: [] int;
   readAllFiles(inputFilesList,
                Locales,
                allData=allData,
                allPaths=allPaths,
                concisePaths=concisePaths,
-               fileSizes=fileSizes,
                fileStarts=fileStarts,
-               totalSize=totalSize);
+               totalSize=totalSize,
+               sequenceDescriptions=sequenceDescriptions,
+               sequenceStarts=sequenceStarts);
 
-  writeln("Files are: ", concisePaths);
-  writeln("FileStarts are: ", fileStarts);
+  /*writeln("Files are: ", concisePaths);
+  writeln("FileStarts are: ", fileStarts);*/
 
   var t: Time.stopwatch;
 
