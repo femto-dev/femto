@@ -102,6 +102,12 @@ proc makeBlockDomain(rng: range(?), targetLocales) {
   return makeBlockDomain({rng}, targetLocales);
 }
 
+proc makeBlockArray(region: range(?), targetLocales, type eltType) {
+  const Dom = makeBlockDomain(region, targetLocales);
+  var Ret: [Dom] eltType;
+  return Ret;
+}
+
 /* Helper for replicate() */
 class ReplicatedWrapper {
   type eltType;
@@ -333,7 +339,7 @@ iter divideIntoTasks(const Dom: domain(?),
   if Dom.dim(0).strides != strideKind.one then
     compilerError("divideIntoTasks only supports non-strided domains");
 
-  compilerWarning("serial divideIntoTasks called");
+  warning("serial divideIntoTasks called");
 
   for (loc, activeLocIdx) in zip(activeLocales, 0..) {
     on loc {
@@ -1073,6 +1079,7 @@ proc readFastaFileSequence(path: string,
                            param distributed: bool,
                            seqStartIdx: int, // start position in below arrays
                                              // for this file
+                           param skipDescriptions: bool,
                            ref seqDescriptions: [] string,
                            // seqStarts has indices into data
                            ref seqStarts: [] int) throws
@@ -1170,7 +1177,9 @@ proc readFastaFileSequence(path: string,
       const globalSeqIdx = seqStartIdx + seqStart + seqIdx;
       /*writeln("fwd seq ", globalSeqIdx, " starts ", mySequenceStarts[seqIdx] +
           region.low, " desc ", mySequenceDescs[seqIdx]);*/
-      seqDescriptions[globalSeqIdx] = mySequenceDescs[seqIdx];
+      if !skipDescriptions {
+        seqDescriptions[globalSeqIdx] = mySequenceDescs[seqIdx];
+      }
       seqStarts[globalSeqIdx] = mySequenceStarts[seqIdx];
     }
   }
@@ -1222,8 +1231,10 @@ proc readFastaFileSequence(path: string,
               " c ", c,
               " revSeqStart ", revSeqStart,
               " dststart ", revSeqStart + c + region.low);*/
-      var desc = seqDescriptions[globalFwdIndex] + " [revcomp]";
-      seqDescriptions[globalRevIndex] = desc;
+      if !skipDescriptions {
+        var desc = seqDescriptions[globalFwdIndex] + " [revcomp]";
+        seqDescriptions[globalRevIndex] = desc;
+      }
       seqStarts[globalRevIndex] = revSeqStart + c + region.low;
     }
   }
@@ -1291,6 +1302,7 @@ proc readFileData(path: string,
                   ref data: [] uint(8),
                   region: range,
                   seqStartIdx: int,
+                  param skipDescriptions: bool,
                   ref seqDescriptions: [] string,
                   ref seqStarts: [] int,
                   verbose = true) throws
@@ -1299,10 +1311,12 @@ proc readFileData(path: string,
     const activeLocs = computeActiveLocales(data.domain, region);
     if activeLocs.size > 1 {
       readFastaFileSequence(path, data, region, distributed=true,
-                            seqStartIdx, seqDescriptions, seqStarts);
+                            seqStartIdx, skipDescriptions,
+                            seqDescriptions, seqStarts);
     } else {
       readFastaFileSequence(path, data, region, distributed=false,
-                            seqStartIdx, seqDescriptions, seqStarts);
+                            seqStartIdx, skipDescriptions,
+                            seqDescriptions, seqStarts);
     }
   } else {
     const activeLocs = computeActiveLocales(data.domain, region);
@@ -1312,7 +1326,9 @@ proc readFileData(path: string,
       parReadAll(path, data, region, distributed=false);
     }
     // update the sequence starts. non-fasta files only have one sequence.
-    seqDescriptions[seqStartIdx] = path;
+    if !skipDescriptions {
+      seqDescriptions[seqStartIdx] = path;
+    }
     seqStarts[seqStartIdx] = region.low;
   }
 }
@@ -1352,7 +1368,8 @@ proc readAllFiles(const ref files: list(string),
                   out fileStarts: [] int,
                   out totalSize: int,
                   out sequenceDescriptions: [] string,
-                  out sequenceStarts: [] int) throws {
+                  out sequenceStarts: [] int,
+                  param skipDescriptions=true) throws {
   if TRACE {
     writeln("in readAllFiles, reading ", files.size, " files");
   }
@@ -1394,8 +1411,10 @@ proc readAllFiles(const ref files: list(string),
   const TextDom = makeBlockDomain(0..<total+INPUT_PADDING, locales);
   var thetext:[TextDom] uint(8);
 
-  const SequencesDom = makeBlockDomain(0..<nSequences, locales);
-  var theSequenceDescriptions: [SequencesDom] string;
+  var theSequenceDescriptions =
+    if skipDescriptions
+    then makeBlockArray(0..<locales.size, locales, string) // dummy array
+    else makeBlockArray(0..<nSequences, locales, string);
 
   // and one that includes an extra element at the end
   const SequencesDomInclusive = makeBlockDomain(0..nSequences, locales);
@@ -1407,12 +1426,14 @@ proc readAllFiles(const ref files: list(string),
 
   // read each file
   forall (path, sz, end, fileSqCount, fileSqEnd)
-  in zip(paths, sizes, fileEnds, sequencesPerFile, sequencesPerFileEnds) {
+  in zip(paths, sizes, fileEnds, sequencesPerFile, sequencesPerFileEnds)
+  with (ref theSequenceDescriptions) {
     const start = end - sz;
     const count = sz - 1; // we added a null byte above
     const sequenceStartIdx = fileSqEnd - fileSqCount;
     readFileData(path, thetext, start..#count,
-                 sequenceStartIdx, theSequenceDescriptions, theSequenceStarts);
+                 sequenceStartIdx,
+                 skipDescriptions, theSequenceDescriptions, theSequenceStarts);
   }
   theSequenceStarts[nSequences] = total;
 

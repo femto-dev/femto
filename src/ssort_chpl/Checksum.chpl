@@ -68,7 +68,8 @@ proc main(args: [] string) throws {
                fileStarts=fileStarts,
                totalSize=totalSize,
                sequenceDescriptions=sequenceDescriptions,
-               sequenceStarts=sequenceStarts);
+               sequenceStarts=sequenceStarts,
+               skipDescriptions=false);
 
   /*writeln("Files are:");
   for p in concisePaths {
