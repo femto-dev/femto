@@ -52,7 +52,7 @@ proc main(args: [] string) throws {
     return 1;
   }
 
-  var readTime = startTime(true);
+  var readTime = startTime();
   const allData; //: [] uint(8);
   const allPaths; //: [] string;
   const concisePaths; // : [] string
@@ -84,7 +84,7 @@ proc main(args: [] string) throws {
 
   reportTime(readTime, "reading input", totalSize, 1);
 
-  var chksumTime = startTime(true);
+  var chksumTime = startTime();
   const allFileChecksums;
   hashAllFiles(allData, fileStarts, totalSize, allFileChecksums);
   const allSeqChecksums;
