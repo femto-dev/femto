@@ -40,7 +40,7 @@ import CopyAggregation.DstAggregator;
 import Communication;
 import OS.FileNotFoundError;
 
-use SHA256Implementation;
+import SHA256Implementation.SHA256State;
 
 import SuffixSort.{EXTRA_CHECKS, TIMING, TRACE, INPUT_PADDING,
                    DISTRIBUTE_EVEN_WITH_COMM_NONE};

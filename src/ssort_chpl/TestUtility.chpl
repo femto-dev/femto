@@ -21,6 +21,8 @@ module TestUtility {
 
 
 use Utility;
+import SHA256Implementation;
+
 import IO;
 import FileSystem;
 import BlockDist;
@@ -786,6 +788,9 @@ proc testPackInput() {
 
 proc main() throws {
   testIsDistributed();
+
+  writeln("SHA256Implementation.unittest");
+  SHA256Implementation.unittest();
 
   serial {
     testActiveLocales();
