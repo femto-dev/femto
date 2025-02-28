@@ -87,10 +87,11 @@ proc main() throws {
   uniqueF.reader().readAll(MinUnique);
   uniqueF.close();
 
-  const n = totalSize - 1; // ignore trailing null byte
+  var n = totalSize;
 
   if n != n2 {
-    halt("File sizes do not match" +
+    halt("File sizes do not match (",
+         totalSize, " vs ", n2, ") ",
          "-- does the input file correspond to the unique file?");
   }
 

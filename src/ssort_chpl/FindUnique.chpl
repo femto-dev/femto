@@ -439,7 +439,7 @@ proc writeOutput(MinUnique: [], IgnoreDocs: [], FileStats: [],
       var w = IO.openWriter(upath);
       if isFastaFile(fullPath) {
         assert(MinUnique.eltType == uint(8)); // otherwise, update below code
-        for i in docStart..<docEnd-1 { // don't write the trailing null byte
+        for i in docStart..<docEnd {
           // write > according to the input to help keep
           // the file aligned with the genome data
           if allData[i] == ">".toByte() {

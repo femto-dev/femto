@@ -11,3 +11,5 @@ chpl --fast SuffixSimilarity.chpl
 chpl --fast SuffixSort.chpl
 chpl --fast FindUnique.chpl
 chpl --fast ExtractUniqueKmers.chpl
+chpl --fast Checksum.chpl
+chpl --fast CopyData.chpl

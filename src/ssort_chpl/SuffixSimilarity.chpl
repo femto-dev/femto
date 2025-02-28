@@ -57,6 +57,7 @@ import SuffixSortImpl.offsetAndCached;
 
 import Utility.computeNumTasks;
 
+import Help;
 import FileSystem;
 import IO;
 import List;
@@ -937,18 +938,35 @@ proc computeSimilarity(SA: [], SparsePLCP: [], thetext: [],
   return Similarity;
 }
 
+proc usage(args: [] string) {
+  writeln("usage: ", args[0], " <files-and-directories>");
+  writeln("this program computes a similarity score between different files");
+  writeln("by default, only the similarity scores for the ",
+          NSIMILAR_TO_OUTPUT, " most similar pairs of documents are output");
+  writeln("this can be adjusted with --nSimilarToOutput=100");
+  writeln("--minCommon and --maxOccurences are also available");
+  Help.printUsage();
+}
+
 proc main(args: [] string) throws {
   var inputFilesList: List.list(string);
 
   for arg in args[1..] {
+    if arg == "--help" || arg == "-h" {
+      usage(args);
+      return 0;
+    }
     if arg.startsWith("-") {
-      halt("argument not handled ", arg);
+      writeln("argument not handled ", arg);
+      usage(args);
+      return 1;
     }
     gatherFiles(inputFilesList, arg);
   }
 
   if inputFilesList.size == 0 {
     writeln("please specify input files and directories");
+    usage(args);
     return 1;
   }
 
