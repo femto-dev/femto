@@ -36,8 +36,16 @@ const K = k;
 use Utility;
 
 import IO;
+import List;
 import OS.EofError;
 import Path;
+
+proc normalizeDesc(in desc: string) {
+  desc = desc.strip(">", leading=true, trailing=false);
+  desc = desc.replace(" ", "_");
+  desc = desc.replace("\t", "_");
+  return desc;
+}
 
 proc main() throws {
   if INPUT == "" {
@@ -51,9 +59,27 @@ proc main() throws {
   }
 
   const isFasta = isFastaFile(INPUT);
-  const n = computeFileSize(INPUT);
-  var Text:[0..n] uint(8);
-  readFileData(INPUT, Text, 0..<n, verbose=false);
+
+  var inputFilesList: List.list(string);
+  inputFilesList.pushBack(INPUT);
+
+  const allData; //: [] uint(8);
+  const allPaths; //: [] string;
+  const concisePaths; // : [] string
+  const fileStarts; //: [] int;
+  const totalSize: int;
+  const sequenceDescriptions; //: [] string;
+  const sequenceStarts; //: [] int;
+  readAllFiles(inputFilesList,
+               Locales,
+               allData=allData,
+               allPaths=allPaths,
+               concisePaths=concisePaths,
+               fileStarts=fileStarts,
+               totalSize=totalSize,
+               sequenceDescriptions=sequenceDescriptions,
+               sequenceStarts=sequenceStarts,
+               skipDescriptions=false);
 
   var uniqueF = IO.open(UNIQUE, IO.ioMode.r);
   const n2 = uniqueF.size;
@@ -61,62 +87,21 @@ proc main() throws {
   uniqueF.reader().readAll(MinUnique);
   uniqueF.close();
 
+  const n = totalSize - 1; // ignore trailing null byte
+
   if n != n2 {
     halt("File sizes do not match" +
          "-- does the input file correspond to the unique file?");
   }
+
 
   var useFilename = Path.basename(INPUT);
   if !REPLACE_FILENAME.isEmpty() {
     useFilename = REPLACE_FILENAME;
   }
 
-  var desc = "-";
-  if isFasta {
-    var r = IO.openReader(INPUT);
-    // read the description
-    // ASSUMPTION: other sections of the file are the same organism
-
-    // process the input file, Text, and MinUnique together
-    // use the input file just to get the descriptions
-    var textOffset: int = 0;
-
-    // read until next description
-    try {
-      r.advanceTo(">");
-      r.readLine(desc, stripNewline=true);
-      // verify that Text[textOffset] is a >
-      if Text[textOffset] != ">".toByte() {
-        halt("Contig misalignment");
-      }
-      textOffset += 1;
-    } catch e: EofError {
-      desc = "eof";
-    }
-    // check that the first line matches
-    var check: bytes;
-    r.mark();
-    // read until we get a non-empty line
-    while r.readLine(check, stripNewline=true) &&
-          !check.isEmpty() {
-    }
-    r.revert();
-
-    desc = desc.strip(">", leading=true, trailing=false);
-    desc = desc.replace(" ", "_");
-    desc = desc.replace("\t", "_");
-
-    // verify that 'check' matches Text[textOffset..]
-    if !check.isEmpty() {
-      var len = min(n - textOffset, check.size);
-      for i in 0..len {
-        if Text[textOffset+i] != check[i] {
-          halt("Nucleotide did not match");
-        }
-      }
-    }
-  }
-
+  var curDesc: string = "-";
+  var curSequence = -1;
   for i in 0..<n {
     const len = MinUnique[i]: int;
     if len > 0 && (K == 0 || len <= K) {
@@ -129,18 +114,24 @@ proc main() throws {
         var ignoreDueToSequenceBoundary = false;
         if isFasta {
           for j in 0..<useK {
-            if Text[startOffset+j] == ">".toByte() {
+            if allData[startOffset+j] == ">".toByte() {
               ignoreDueToSequenceBoundary = true;
             }
           }
         }
 
         if !ignoreDueToSequenceBoundary {
+          var seqIdx = offsetToFileIdx(sequenceStarts, i);
+          if curSequence != seqIdx {
+            curSequence = seqIdx;
+            curDesc = sequenceDescriptions[curSequence];
+            curDesc = normalizeDesc(curDesc);
+          }
           for j in 0..<useK {
-            writef("%c", Text[startOffset + j]);
+            writef("%c", allData[startOffset + j]);
           }
 
-          write(" 0 ", useFilename, " 1 ", desc, " ", i);
+          write(" 0 ", useFilename, " 1 ", curDesc, " ", i);
           writeln();
         }
       }

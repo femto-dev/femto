@@ -21,11 +21,14 @@ module TestUtility {
 
 
 use Utility;
+import SHA256Implementation;
+
 import IO;
 import FileSystem;
 import BlockDist;
 import Random;
 import Math;
+import List;
 
 // problem size for various tests
 config const nAtomicTest = 100_000;
@@ -333,29 +336,53 @@ proc testFastaFile(contents:string, seq:string, revcomp:string) throws {
     expect += revcomp;
   }
   var n = expect.size;
+  var expectSeqStarts: List.list(int);
+  var nseq = 0;
+  for (cp, idx) in zip(expect.codepoints(), 0..) {
+    if cp == ">".toCodepoint() {
+      expectSeqStarts.pushBack(idx+1);
+    }
+  }
+  nseq = expectSeqStarts.size;
   var filename = "tmp-testFastaFiles-test.fna";
   {
     var w = IO.openWriter(filename);
     w.write(contents);
   }
   {
-    assert(computeFastaFileSize(filename) == n);
-    assert(computeFileSize(filename) == n);
+    const (gotNumBytes, gotNumSeq) = computeFastaFileSize(filename);
+    assert(gotNumBytes == n);
+    assert(gotNumSeq == nseq);
+    var SeqStart: [0..nseq+1] int;
+    var SeqDesc: [0..nseq+1] string;
     var A: [0..n+1] uint(8);
-    readFastaFileSequence(filename, A, 1..n);
+    readFastaFileSequence(filename, A, 1..n, distributed=false,
+                          skipDescriptions=false,
+                          1, SeqDesc, SeqStart);
     assert(A[0] == 0);
     assert(A[n+1] == 0);
+    assert(SeqStart[0] == 0);
+    assert(SeqStart[nseq+1] == 0);
+
     var str = arrToString(A[1..n]);
     writeln("Got ", str);
     writeln("Exp ", expect);
     assert(str == expect);
 
+    writeln("Got SeqStart ", SeqStart[1..#nseq]);
+    writeln("Exp SeqStart ", expectSeqStarts.toArray());
+    assert(SeqStart[1..#nseq].equals(expectSeqStarts.toArray()));
+
+    SeqStart = 0;
+    SeqDesc = "";
     A = 0;
-    readFileData(filename, A, 1..n);
+    readFileData(filename, A, 1..n, 1, skipDescriptions=false,
+                 SeqDesc, SeqStart);
     assert(A[0] == 0);
     assert(A[n+1] == 0);
     var str2 = arrToString(A[1..n]);
     assert(str2 == expect);
+    assert(SeqStart[1..#nseq].equals(expectSeqStarts.toArray()));
   }
 
   FileSystem.remove(filename);
@@ -364,7 +391,7 @@ proc testFastaFile(contents:string, seq:string, revcomp:string) throws {
 proc testFastaFiles() throws {
   writeln("testFastaFiles()");
 
-  testFastaFile("> test \t seq\nA\n\rC\tG  TTA\nGGT\n\n\nA\n> seq 2\nCCG",
+  testFastaFile("> test \t seq\nA\n\rC\tG  TtA\ngGT\n\n\nA\n> seq 2\nCCG",
                 ">ACGTTAGGTA>CCG",
                 ">CGG>TACCTAACGT");
   testFastaFile(">\n>\n>\nACAT\n>\n>\n", ">>>ACAT>>", ">>>ATGT>>");
@@ -761,6 +788,9 @@ proc testPackInput() {
 
 proc main() throws {
   testIsDistributed();
+
+  writeln("SHA256Implementation.unittest");
+  SHA256Implementation.unittest();
 
   serial {
     testActiveLocales();
