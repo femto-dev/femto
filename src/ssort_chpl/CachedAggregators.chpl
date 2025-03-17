@@ -93,10 +93,12 @@ record SrcUnorderedAggregator {
 }
 
 record CachedDstAggregator {
+  type elemType;
   var agg: borrowed CachedDstAggregatorClass;
-  proc init() {
+  proc init(type elemType) {
     var cls = PThreadSupport.getPerPthreadClass(CachedDstAggregatorClass);
     assert(cls != nil);
+    this.elemType = elemType;
     this.agg = cls;
   }
   proc ref deinit() {
@@ -104,7 +106,7 @@ record CachedDstAggregator {
     // the aggregator is per-pthread
     flush();
   }
-  inline proc ref copy(ref dst: ?t, const ref src: t) {
+  inline proc ref copy(ref dst: elemType, const ref src: elemType) {
     this.agg.copy(dst, src);
   }
   inline proc ref flush() {
@@ -113,10 +115,12 @@ record CachedDstAggregator {
 }
 
 record CachedSrcAggregator {
+  type elemType;
   var agg: borrowed CachedSrcAggregatorClass;
-  proc init() {
+  proc init(type elemType) {
     var cls = PThreadSupport.getPerPthreadClass(CachedSrcAggregatorClass);
     assert(cls != nil);
+    this.elemType = elemType;
     this.agg = cls;
   }
   proc ref deinit() {
@@ -124,7 +128,7 @@ record CachedSrcAggregator {
     // the aggregator is per-pthread
     flush();
   }
-  inline proc ref copy(ref dst: ?t, const ref src: t) {
+  inline proc ref copy(ref dst: elemType, const ref src: elemType) {
     this.agg.copy(dst, src);
   }
   inline proc ref flush() {
@@ -171,11 +175,11 @@ private var PerPthreadAggs = blockDist.createArray(0..<numLocales,
   }
 
   // get the DstAggregators going (allocate remote buffers)
-  forall idx in TestArr1.domain with (var agg = new CachedDstAggregator()) {
+  forall idx in TestArr1.domain with (var agg = new CachedDstAggregator(int)) {
     agg.copy(TestArr1[idx], 0);
   }
   // get the SrcAggregators going (allocate remote buffers)
-  forall idx in TestArr2.domain with (var agg = new CachedSrcAggregator()) {
+  forall idx in TestArr2.domain with (var agg = new CachedSrcAggregator(int)) {
     agg.copy(TestArr2[idx], TestArr1[TestIdxs[idx]]);
   }
 
@@ -238,6 +242,7 @@ class CachedDstAggregatorClass {
 
   proc flush(freeBuffers=false) {
     // TODO: try randomized flush
+    // TODO: use unordered copy if too few elements to flush
     for offsetLoc in myLocaleSpace + lastLocale {
       const loc = offsetLoc % numLocales;
       flushBuffer(loc, bufferIdxs[loc], freeData=freeBuffers);
@@ -403,6 +408,7 @@ class CachedSrcAggregatorClass {
 
   proc flush(freeBuffers=false) {
     // TODO: try randomized flush
+    // TODO: use unordered copy if too few elements to flush
     for offsetLoc in myLocaleSpace + lastLocale {
       const loc = offsetLoc % numLocales;
       flushBuffer(loc, bufferIdxs[loc], freeData=freeBuffers);

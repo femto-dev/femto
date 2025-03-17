@@ -42,7 +42,7 @@ proc testCachedDstAggregator() {
 
   // Set B to the elements of Rev reordered by value
   B = 0;
-  forall elt in A with (var agg = new CachedDstAggregator()) {
+  forall elt in A with (var agg = new CachedDstAggregator(int)) {
     agg.copy(B[elt], elt);
   }
   assert(B.equals(Fwd));
@@ -50,7 +50,7 @@ proc testCachedDstAggregator() {
   // test a simple flush scenario
   {
     A = Rev;
-    var agg = new CachedDstAggregator();
+    var agg = new CachedDstAggregator(int);
     agg.copy(A[n-1], 42);
     agg.flush();
     assert(A[n-1] == 42);
@@ -76,7 +76,7 @@ proc testCachedSrcAggregator() {
   B = 0;
   // Set B to the elements of A reordered by value
   forall (elt, i) in zip(B, B.domain)
-  with (var agg = new CachedSrcAggregator()) {
+  with (var agg = new CachedSrcAggregator(int)) {
     agg.copy(elt, A[n-1-i]);
   }
   assert(B.equals(Fwd));
@@ -85,7 +85,7 @@ proc testCachedSrcAggregator() {
   {
     A = Rev;
     A[n-1] = 42;
-    var agg = new CachedSrcAggregator();
+    var agg = new CachedSrcAggregator(int);
     var x = 0;
     agg.copy(x, A[n-1]);
     agg.flush();
