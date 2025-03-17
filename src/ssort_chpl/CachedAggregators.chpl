@@ -243,6 +243,7 @@ class CachedDstAggregatorClass {
   proc flush(freeBuffers=false) {
     // TODO: try randomized flush
     // TODO: use unordered copy if too few elements to flush
+    // TODO: try double buffering
     for offsetLoc in myLocaleSpace + lastLocale {
       const loc = offsetLoc % numLocales;
       flushBuffer(loc, bufferIdxs[loc], freeData=freeBuffers);
@@ -409,6 +410,7 @@ class CachedSrcAggregatorClass {
   proc flush(freeBuffers=false) {
     // TODO: try randomized flush
     // TODO: use unordered copy if too few elements to flush
+    // TODO: try double buffering
     for offsetLoc in myLocaleSpace + lastLocale {
       const loc = offsetLoc % numLocales;
       flushBuffer(loc, bufferIdxs[loc], freeData=freeBuffers);
