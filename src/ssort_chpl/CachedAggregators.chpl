@@ -25,6 +25,9 @@ use ChplConfig;
 use CTypes;
 use OS.POSIX;
 use Set;
+use BlockDist;
+
+private param TRACE_INIT_DEINIT = false;
 
 private param defaultBuffSize =
   if CHPL_TARGET_PLATFORM == "hpe-cray-ex" then 1024
@@ -97,6 +100,8 @@ record CachedDstAggregator {
     this.agg = cls;
   }
   proc ref deinit() {
+    // flush but don't attempt to free anything since
+    // the aggregator is per-pthread
     flush();
   }
   inline proc ref copy(ref dst: ?t, const ref src: t) {
@@ -107,20 +112,85 @@ record CachedDstAggregator {
   }
 }
 
-// create and destroy the per-pthread CachedDstAggregatorClass
-var perPthreadAggregators: set(eltType=unmanaged CachedDstAggregatorClass,
-                               parSafe=true);
-writeln("creating aggregators");
-coforall tid in 0..<4*here.maxTaskPar with (ref perPthreadAggregators) {
-  var cls = PThreadSupport.getPerPthreadClass(CachedDstAggregatorClass);
-  perPthreadAggregators.add(cls:unmanaged);
+record CachedSrcAggregator {
+  var agg: borrowed CachedSrcAggregatorClass;
+  proc init() {
+    var cls = PThreadSupport.getPerPthreadClass(CachedSrcAggregatorClass);
+    assert(cls != nil);
+    this.agg = cls;
+  }
+  proc ref deinit() {
+    // flush but don't attempt to free anything since
+    // the aggregator is per-pthread
+    flush();
+  }
+  inline proc ref copy(ref dst: ?t, const ref src: t) {
+    this.agg.copy(dst, src);
+  }
+  inline proc ref flush() {
+    this.agg.flush(freeBuffers=false);
+  }
 }
-writeln("done creating aggregators");
+
+
+// create and destroy the per-pthread CachedDstAggregatorClass
+type PerPthreadAggsEltType = set(eltType=unmanaged RootClass,
+                                 parSafe=true);
+private var PerPthreadAggs = blockDist.createArray(0..<numLocales,
+                                                   PerPthreadAggsEltType);
+{
+  const testTasksPerLoc = 4*here.maxTaskPar;
+  const testN = numLocales*testTasksPerLoc;
+  var TestArr1 = blockDist.createArray(0..<testN, int);
+  TestArr1 = 0..<testN by -1;
+  var TestArr2 = blockDist.createArray(0..<testN, int);
+  TestArr2 = 0..<testN by -1;
+  var TestIdxs = blockDist.createArray(0..<testN, int);
+  TestIdxs = 0..<testN by -1;
+  if TRACE_INIT_DEINIT then writeln("creating aggregators");
+  coforall (loc, locId) in zip(Locales, 0..) {
+    on loc {
+      coforall tid in 0..<4*here.maxTaskPar {
+        var dsta = PThreadSupport.getPerPthreadClass(CachedDstAggregatorClass);
+
+        if TRACE_INIT_DEINIT {
+          extern proc gettid(): c_int;
+          extern proc pthread_self(): c_ptr(void);
+
+          writeln("got CachedDstAggregatorClass ",
+                  c_ptrTo(dsta),
+                  " on thread id ", gettid(), " pthread ", pthread_self());
+        }
+
+        PerPthreadAggs[locId].add(dsta:unmanaged);
+
+        var srca = PThreadSupport.getPerPthreadClass(CachedSrcAggregatorClass);
+        PerPthreadAggs[locId].add(srca:unmanaged);
+      }
+    }
+  }
+
+  // get the DstAggregators going (allocate remote buffers)
+  forall idx in TestArr1.domain with (var agg = new CachedDstAggregator()) {
+    agg.copy(TestArr1[idx], 0);
+  }
+  // get the SrcAggregators going (allocate remote buffers)
+  forall idx in TestArr2.domain with (var agg = new CachedSrcAggregator()) {
+    agg.copy(TestArr2[idx], TestArr1[TestIdxs[idx]]);
+  }
+
+  if TRACE_INIT_DEINIT then writeln("done creating aggregators");
+}
+
 proc deinit() {
-  writeln("destroying aggregators");
-  for elt in perPthreadAggregators {
-    writeln("destroying ", c_ptrTo(elt));
-    delete elt;
+  if TRACE_INIT_DEINIT then writeln("destroying aggregators");
+  coforall (loc, locId) in zip(Locales, 0..) {
+    on loc {
+      for elt in PerPthreadAggs[locId] {
+        if TRACE_INIT_DEINIT then writeln("destroying ", c_ptrTo(elt));
+        delete elt;
+      }
+    }
   }
 }
 
@@ -140,7 +210,10 @@ class CachedDstAggregatorClass {
 
   proc init() {
     init this;
-    writeln("Creating CachedDstAggregatorClass ", c_ptrTo(this));
+
+    /*extern proc gettid(): c_int;
+    writeln("Creating CachedDstAggregatorClass ", c_ptrTo(this),
+            " on thread id ", gettid());*/
   }
 
   proc postinit() {
@@ -154,13 +227,13 @@ class CachedDstAggregatorClass {
   }
 
   proc deinit() {
-    writeln("Destroying CachedDstAggregatorClass ", c_ptrTo(this));
+    //writeln("Destroying CachedDstAggregatorClass ", c_ptrTo(this));
     flush(freeBuffers=true);
     for loc in myLocaleSpace {
       deallocate(lBuffers[loc]);
     }
-    deallocate(lBuffers);
     deallocate(bufferIdxs);
+    deallocate(lBuffers);
   }
 
   proc flush(freeBuffers=false) {
@@ -178,8 +251,8 @@ class CachedDstAggregatorClass {
 
     const loc = dst.locale.id;
     const addr_size = c_sizeof(c_ptr(void));
-    const size_size = c_sizeof(addr_size.type);
     const data_size = c_sizeof(t);
+    const size_size = c_sizeof(data_size.type);
     const serialize_bytes = addr_size + size_size + data_size;
 
     // Just do direct assignment if dst is local or src size is large
@@ -189,7 +262,6 @@ class CachedDstAggregatorClass {
     }
 
     lastLocale = loc;
-
     var dstAddr = getAddr(dst);
 
     // Get our current index into the buffer for dst's locale
@@ -204,7 +276,7 @@ class CachedDstAggregatorClass {
 
     const buf = lBuffers[loc];
 
-    // Buffer the address
+    // Buffer the dst address
     memcpy(c_ptrTo(buf[bufferIdx]),
            c_ptrTo(dstAddr),
            addr_size);
@@ -251,7 +323,7 @@ class CachedDstAggregatorClass {
 
     const myBufferIdx = bufferIdx;
 
-    // Allocate a remote buffer
+    // Get or allocate a remote buffer
     ref rBuffer = rBuffers[loc];
     const remBufferPtr = rBuffer.cachedAlloc();
 
@@ -293,6 +365,258 @@ class CachedDstAggregatorClass {
   }
 }
 
+class CachedSrcAggregatorClass {
+  // request: room for 2 pointers and a size
+  // reply: room for 1 pointer, a size, and a data item (assume int size)
+  const reqBufferSize = (srcBuffSize * 3*c_sizeof(c_ptr(void))):int;
+  const replBufferSize = (srcBuffSize * 3*c_sizeof(c_ptr(void))):int;
+  const bufferSize = (srcBuffSize * 4*c_sizeof(c_ptr(void))):int;
+  const myLocaleSpace = 0..<numLocales;
+  var lastLocale: int;
+  var opsUntilYield = yieldFrequency;
+  var lReqBuffers: c_ptr(c_ptr(uint(8)));
+  var lReplBuffers: [myLocaleSpace][0..#replBufferSize] uint(8);
+  var rReqBuffers: [myLocaleSpace] remoteBuffer(uint(8));
+  var rReplBuffers: [myLocaleSpace] remoteBuffer(uint(8));
+  var bufferIdxs: c_ptr(int);
+  var currentlyFlushing = false;
+
+  proc postinit() {
+    lReqBuffers = allocate(c_ptr(uint(8)), numLocales);
+    bufferIdxs = bufferIdxAlloc();
+    for loc in myLocaleSpace {
+      lReqBuffers[loc] = allocate(uint(8), reqBufferSize);
+      bufferIdxs[loc] = 0;
+      rReqBuffers[loc] = new remoteBuffer(uint(8), reqBufferSize, loc);
+      rReplBuffers[loc] = new remoteBuffer(uint(8), replBufferSize, loc);
+    }
+  }
+
+  proc deinit() {
+    flush(freeBuffers=true);
+    for loc in myLocaleSpace {
+      deallocate(lReqBuffers[loc]);
+    }
+    deallocate(bufferIdxs);
+    deallocate(lReqBuffers);
+  }
+
+  proc flush(freeBuffers=false) {
+    // TODO: try randomized flush
+    for offsetLoc in myLocaleSpace + lastLocale {
+      const loc = offsetLoc % numLocales;
+      flushBuffer(loc, bufferIdxs[loc], freeData=freeBuffers);
+    }
+  }
+
+  inline proc copy(ref dst: ?t, const ref src: t) {
+    if boundsChecking {
+      assert(dst.locale.id == here.id);
+    }
+
+    const loc = src.locale.id;
+    const addr_size = c_sizeof(c_ptr(void));
+    const data_size = c_sizeof(t);
+    const size_size = c_sizeof(data_size.type);
+    const req_serialize_bytes = 2*addr_size + size_size;
+    const repl_serialize_bytes = addr_size + size_size + data_size;
+
+    // Just do direct assignment if dst is local or src size is large
+    if loc == here.id ||
+       req_serialize_bytes > (reqBufferSize >> 2) ||
+       repl_serialize_bytes > (replBufferSize >> 2) {
+      dst = src;
+      return;
+    }
+
+    lastLocale = loc;
+    const dstAddr = getAddr(dst);
+    const srcAddr = getAddr(src);
+
+    // Get our current index into the buffer for dst's locale
+    ref bufferIdx = bufferIdxs[loc];
+
+    // Flush our buffer if this entry will exceed capacity
+    if bufferIdx + req_serialize_bytes > reqBufferSize {
+      // note: it can yield inside flushBuffer.
+      flushBuffer(loc, bufferIdx, freeData=false);
+      opsUntilYield = yieldFrequency;
+    }
+
+    const buf = lReqBuffers[loc];
+
+    // Buffer the dst address
+    memcpy(c_ptrTo(buf[bufferIdx]),
+           c_ptrToConst(dstAddr):c_ptr(dstAddr.type),
+           addr_size);
+    bufferIdx += addr_size:int;
+    // Buffer the src address
+    memcpy(c_ptrTo(buf[bufferIdx]),
+           c_ptrToConst(srcAddr):c_ptr(srcAddr.type),
+           addr_size);
+    bufferIdx += addr_size:int;
+    // Buffer the size
+    memcpy(c_ptrTo(buf[bufferIdx]),
+           c_ptrToConst(data_size):c_ptr(data_size.type),
+           size_size);
+    bufferIdx += size_size:int;
+
+    // If it's been a while since we've let other tasks run, yield so that
+    // we're not blocking remote tasks from flushing their buffers.
+    if opsUntilYield == 0 {
+      currentTask.yieldExecution();
+      opsUntilYield = yieldFrequency;
+    } else {
+      opsUntilYield -= 1;
+    }
+  }
+
+  proc flushBuffer(loc: int, ref bufferIdx, freeData) {
+    // note: freeData is ignored in this routine at present
+    // remote buffers will be freed on deinit.
+
+    // return early if there's no data to flush
+    if bufferIdx == 0 then return;
+
+    // wait for some other task if it's currently doing a flush
+    while currentlyFlushing {
+      currentTask.yieldExecution();
+    }
+
+    // return early again if there's no data to flush
+    if bufferIdx == 0 then return;
+
+    // now we're the one running and currentlyFlushing was false,
+    // so it's up to us to flush! But mark that we're flushing
+    // so that if we yield, another task won't also flush.
+    currentlyFlushing = true;
+    // clear currentlyFlushing on exit from this block
+    defer { currentlyFlushing = false; }
+
+    const myBufferIdx = bufferIdx;
+
+    ref myRReqBuf = rReqBuffers[loc];
+    ref myRReplBuf = rReplBuffers[loc];
+
+    // Get or allocate remote buffers
+    const rReqBufPtr = myRReqBuf.cachedAlloc();
+    const rReplBufPtr = myRReplBuf.cachedAlloc();
+
+    // Copy request (dst addr, src addr, size) to the remote buffer
+    myRReqBuf.PUT(lReqBuffers[loc], myBufferIdx);
+
+    var bytesValsWritten: 2*int; // reply buffer idx, request buffer idx
+    var addrBufferIdx = 0;
+
+    while bytesValsWritten(1) < myBufferIdx {
+      // Process remote buffer, copying the value of our addresses into a
+      // remote buffer
+      const cbytesValsWritten = bytesValsWritten;
+      const myReplBufferSize = replBufferSize;
+      on Locales[loc] {
+        const mycbytesValsWritten = cbytesValsWritten;
+        var (replyBufferIdx, reqBufferIdx) = mycbytesValsWritten;
+        replyBufferIdx = 0;
+
+        while replyBufferIdx < myReplBufferSize && reqBufferIdx < myBufferIdx {
+          const addr_size = c_sizeof(c_ptr(void));
+          const size_size = c_sizeof(addr_size.type);
+          var dstAddr: c_ptr(void);
+          var srcAddr: c_ptr(void);
+          var dataSize: addr_size.type;
+
+          var myReqBufferIdx = reqBufferIdx;
+          // Read the dst addr from the request
+          memcpy(c_ptrTo(dstAddr),
+                 c_ptrTo(rReqBufPtr[myReqBufferIdx]),
+                 addr_size);
+          myReqBufferIdx += addr_size:int;
+          // Read the src addr from the request
+          memcpy(c_ptrTo(srcAddr),
+                 c_ptrTo(rReqBufPtr[myReqBufferIdx]),
+                 addr_size);
+          myReqBufferIdx += addr_size:int;
+          // Read the size from the request
+          memcpy(c_ptrTo(dataSize),
+                 c_ptrTo(rReqBufPtr[myReqBufferIdx]),
+                 size_size);
+          myReqBufferIdx += size_size:int;
+
+          const repl_serialize_bytes = addr_size + size_size + dataSize;
+          if repl_serialize_bytes > myReplBufferSize {
+            // halt if the size is too big for a single buffer --
+            // this should have been handled in 'copy'
+            halt("size of serialized reply exceeds buffer size");
+          }
+          if replyBufferIdx + repl_serialize_bytes > myReplBufferSize {
+            break;
+          }
+
+          // copy into the reply buffer
+
+          //writeln("Loading ", dstAddr, " from ", srcAddr);
+
+          // Write the dst address to the reply
+          memcpy(c_ptrTo(rReplBufPtr[replyBufferIdx]),
+                 c_ptrTo(dstAddr),
+                 addr_size);
+          replyBufferIdx += addr_size:int;
+          // Write the serialized size to the reply
+          memcpy(c_ptrTo(rReplBufPtr[replyBufferIdx]),
+                 c_ptrTo(dataSize),
+                 size_size);
+          replyBufferIdx += size_size:int;
+          // Write the serialized data to the reply
+          memcpy(c_ptrTo(rReplBufPtr[replyBufferIdx]),
+                 srcAddr,
+                 dataSize);
+          replyBufferIdx += dataSize:int;
+
+          // also update myReqBufferIdx
+          reqBufferIdx = myReqBufferIdx;
+        }
+        // PUT the metadata
+        bytesValsWritten = (replyBufferIdx, reqBufferIdx);
+      }
+
+      const replyLen = bytesValsWritten(0);
+      // Copy the values loaded remotely into the local buffer
+      myRReplBuf.GET(lReplBuffers[loc], replyLen);
+
+
+      // Assign the values loaded to the destination addresses
+      var replyIdx = 0;
+      ref replyBuf = lReplBuffers[loc];
+      while replyIdx < replyLen {
+        const addr_size = c_sizeof(c_ptr(void));
+        const size_size = c_sizeof(addr_size.type);
+        var dstAddr: c_ptr(void);
+        var dataSize: addr_size.type;
+
+        // Read the dst address from the reply
+        memcpy(c_ptrTo(dstAddr),
+               c_ptrTo(replyBuf[replyIdx]),
+               addr_size);
+        replyIdx += addr_size:int;
+        // Read the serialized size from the reply
+        memcpy(c_ptrTo(dataSize),
+               c_ptrTo(replyBuf[replyIdx]),
+               size_size);
+        replyIdx += size_size:int;
+
+        //writeln("Setting ", dstAddr);
+
+        // Read the data from the reply into the destination addr
+        memcpy(dstAddr,
+               c_ptrTo(replyBuf[replyIdx]),
+               dataSize);
+        replyIdx += dataSize:int;
+      }
+    }
+
+    bufferIdx = 0;
+  }
+}
 
 module PThreadSupport {
   use CTypes;
@@ -307,7 +631,8 @@ module PThreadSupport {
 
   export proc pthread_key_deleter(ptr: c_ptr(void)): void {
     // Problem: the pthread will be destroyed on program exit after
-    // the runtime doesn't exist anymore
+    // the runtime doesn't exist anymore & then the on statements
+    // can't clean up.
     /*var obj = ptr:unmanaged RootClass?;
     if obj != nil {
       delete obj;
@@ -315,6 +640,8 @@ module PThreadSupport {
   }
 
   proc keyCreate() : pthread_key_t throws {
+    //extern proc gettid(): c_int;
+    //writeln("in keyCreate on thread id ", gettid());
     var key: pthread_key_t;
     var rc: c_int = pthread_key_create(key, c_ptrTo(pthread_key_deleter));
     if rc != 0 {
@@ -325,6 +652,8 @@ module PThreadSupport {
   }
 
   proc setSpecific(key: pthread_key_t, obj: c_ptr(void)) : void throws {
+    //extern proc printf(fmt: c_ptrConst(c_char));
+    //printf("setSpecific\n");
     var rc: c_int = pthread_setspecific(key, obj);
     if rc != 0 {
       throw createSystemError(rc, "error in pthread_setspecific");
@@ -336,17 +665,24 @@ module PThreadSupport {
   }
 
   proc getPerPthreadClass(type t) where isClassType(t) {
+    extern proc gettid(): c_int;
+    extern proc pthread_self(): c_ptr(void);
+
     @functionStatic(sharingKind.computePerLocale)
     var key = try! keyCreate();
 
     var ptr : c_ptr(void) = getSpecific(key);
     if ptr == nil {
+      //writeln("in getPerPthreadClass getSpecific return nil on thread id ", gettid(), " pthread ", pthread_self());
+
       var obj = new unmanaged t();
 
       ptr = c_ptrTo(obj);
+      //writeln("in getPerPthreadClass calling setSpecific thread id ", gettid(), " pthread ", pthread_self());
       try! setSpecific(key, ptr);
       assert(ptr != nil);
     }
+    //writeln("in getPerPthreadClass returning ", ptr, " on thread id ", gettid());
     var cls = try! ptr:borrowed t?:borrowed t;
     return cls;
   }

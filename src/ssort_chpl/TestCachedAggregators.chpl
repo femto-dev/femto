@@ -46,9 +46,55 @@ proc testCachedDstAggregator() {
     agg.copy(B[elt], elt);
   }
   assert(B.equals(Fwd));
+
+  // test a simple flush scenario
+  {
+    A = Rev;
+    var agg = new CachedDstAggregator();
+    agg.copy(A[n-1], 42);
+    agg.flush();
+    assert(A[n-1] == 42);
+  }
+}
+proc testCachedSrcAggregator() {
+  writeln("testCachedSrcAggregator");
+
+  // store numbers in forward order in Fwd
+  var Fwd =  blockDist.createArray(0..<n, int);
+  Fwd = 0..<n;
+
+  // store numbers in reverse order in Rev
+  var Rev = blockDist.createArray(0..<n, int);
+  Rev = 0..<n by -1;
+
+  var A = Rev;
+  assert(A.equals(Rev));
+
+  var B = blockDist.createArray(0..<n, int);
+
+  // Set B to the elements of Rev reordered by value
+  B = 0;
+  // Set B to the elements of A reordered by value
+  forall (elt, i) in zip(B, B.domain)
+  with (var agg = new CachedSrcAggregator()) {
+    agg.copy(elt, A[n-1-i]);
+  }
+  assert(B.equals(Fwd));
+
+  // test a simple flush scenario
+  {
+    A = Rev;
+    A[n-1] = 42;
+    var agg = new CachedSrcAggregator();
+    var x = 0;
+    agg.copy(x, A[n-1]);
+    agg.flush();
+    assert(x == 42);
+  }
 }
 
 testCachedDstAggregator();
+testCachedSrcAggregator();
 writeln("Done");
 
 }
