@@ -27,6 +27,8 @@ import SuffixSort.{EXTRA_CHECKS};
 
 use Utility;
 
+//use StackTrace;
+
 import Reflection.canResolveMethod;
 import Sort;
 import Sort.{sort, defaultComparator, keyPartStatus, keyPartComparator};
@@ -39,6 +41,7 @@ import BitOps;
 import Time;
 import RangeChunk;
 import Collectives;
+import AllLocalesBarriers;
 
 // These settings control the sample sort and classification process
 
@@ -438,12 +441,14 @@ record splitters : writeSerializable {
     this.equalBuckets = rhs.equalBuckets;
     init this;
     this.setStorageFrom(rhs);
+    //writeln("splitters init= on ", here, " from ", rhs.locale, " trace: ", stackTraceAsString(b" "));
   }
   operator =(ref lhs: splitters(?), const ref rhs: splitters(?)) {
     lhs.logSplitters = rhs.logSplitters;
     lhs.myNumBuckets = rhs.myNumBuckets;
     lhs.equalBuckets = rhs.equalBuckets;
     lhs.setStorageFrom(rhs);
+    //writeln("splitters = on ", here, " from ", rhs.locale, " trace: ", stackTraceAsString(b" "));
   }
   operator ==(const ref lhs: splitters(?), const ref rhs: splitters(?)) {
     if lhs.logSplitters != rhs.logSplitters ||
@@ -1495,17 +1500,22 @@ proc parStablePartition(const InputDomain: domain(?),
     }
   }
 
-  // Step 1: Count
+  var GlobEnds: GlobCounts.type;
+
+  //const useAllLocalesBarrier = activeLocs.equals(Locales);
+  var smallerBarrier = new Collectives.barrier(activeLocs.size);
+
   forall (activeLocIdx, locRegion)
-  in divideByLocales(InputDomain, inputRegion, activeLocs)
-  with (in split) {
+  in divideByLocales(InputDomain, inputRegion, activeLocs) {
+    var lsplit = split;
     var perTaskCounts: [0..<nTasksPerLocale] [0..<nBuckets] int;
 
+    // Step 1: Count
     // count & save the result to the perTaskCounts
     coforall (chunk, taskIdInLoc)
     in zip(RangeChunk.chunks(locRegion, nTasksPerLocale), 0..) {
       ref mycounts = perTaskCounts[taskIdInLoc];
-      for (_,bkt) in split.classify(Input, chunk.low, chunk.high, comparator) {
+      for (_,bkt) in lsplit.classify(Input, chunk.low, chunk.high, comparator) {
         if filterBucket.type == nothing || filterBucket(bkt) {
           mycounts[bkt] += 1;
         }
@@ -1516,20 +1526,35 @@ proc parStablePartition(const InputDomain: domain(?),
     savePerTaskCountsToGlobal(perTaskCounts, GlobCounts,
                               nBuckets, nActiveLocales, activeLocIdx,
                               nTasksPerLocale);
-  }
 
-  // Step 2: Scan
+    // wait for all counts to be stored in GlobCounts
+    /*if useAllLocalesBarrier { error about too many callers
+      AllLocalesBarriers.allLocalesBarrier.barrier();
+    } else*/ {
+      smallerBarrier.barrier();
+    }
 
-  // note: could implement a custom scan that only uses activeLocales;
-  // current strategy is to assume it's either all locales (more or less)
-  // or a small number of them.
-  const GlobEnds = + scan GlobCounts;
+    // Step 2: Scan
 
-  if Output.type != nothing {
-    // Step 3: Distribute
-    forall (activeLocIdx, locRegion)
-    in divideByLocales(InputDomain, inputRegion, activeLocs)
-    with (in split, in OutputShift) {
+    if activeLocIdx == 0 {
+      // only locale 0 launches the scan, but this will involve all locales
+      // note: could implement a custom scan that only uses activeLocales;
+      // current strategy is to assume it's either all locales (more or less)
+      // or a small number of them.
+      GlobEnds = + scan GlobCounts;
+    }
+
+    // wait for the scan to be complete
+    /*if useAllLocalesBarrier {
+      AllLocalesBarriers.allLocalesBarrier.barrier();
+    } else*/ {
+      smallerBarrier.barrier();
+    }
+
+    if Output.type != nothing {
+      // Step 3: Distribute
+      const LOutputShift = OutputShift;
+
       var perTaskNext: [0..<nTasksPerLocale] [0..<nBuckets] int;
       // fill in perTaskNext from GlobEnds
       getTaskCountsFromGlobal(perTaskNext, GlobEnds,
@@ -1542,13 +1567,13 @@ proc parStablePartition(const InputDomain: domain(?),
         ref nextOffsets = perTaskNext[taskIdInLoc];
 
         // first adjust nextOffsets for OutputShift
-        if OutputShift.type != nothing {
+        if LOutputShift.type != nothing {
           foreach bucketIdx in 0..<nBuckets {
             var shift = 0;
-            if isArrayType(OutputShift.type) {
-              shift = OutputShift[bucketIdx];
-            } else if isIntType(OutputShift.type) {
-              shift = OutputShift;
+            if isArrayType(LOutputShift.type) {
+              shift = LOutputShift[bucketIdx];
+            } else if isIntType(LOutputShift.type) {
+              shift = LOutputShift;
             }
             nextOffsets[bucketIdx] += shift;
           }
@@ -1556,8 +1581,8 @@ proc parStablePartition(const InputDomain: domain(?),
 
         var agg = new DstAggregator(Input.eltType);
 
-        for (elt,bkt) in split.classify(Input, chunk.low, chunk.high,
-                                        comparator) {
+        for (elt,bkt) in lsplit.classify(Input, chunk.low, chunk.high,
+                                         comparator) {
           if filterBucket.type == nothing || filterBucket(bkt) {
             // Store it in the right bin
             ref next = nextOffsets[bkt];
