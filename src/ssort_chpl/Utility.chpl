@@ -2094,6 +2094,8 @@ proc reportStat(const ref x:substat(?), desc:string) {
   }
 }
 
+// help to yield occasionally. AFAIK this is not necessary for performance,
+// but I was worried about it.
 record yieldHelper {
   var itersSinceLastYield: int;
 }
