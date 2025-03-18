@@ -1461,6 +1461,43 @@ proc readAllFiles(const ref files: list(string),
   }
 }
 
+proc generateAllData(n: int, seed: int,
+                     locales: [ ] locale,
+                     out allData: [] uint(8),
+                     out allPaths: [] string,
+                     out concisePaths: [] string,
+                     out fileStarts: [] int,
+                     out totalSize: int,
+                     out sequenceDescriptions: [] string,
+                     out sequenceStarts: [] int) throws {
+  const total = n;
+  var thetext = makeBlockArray(0..<total+INPUT_PADDING, Locales, uint(8));
+  var paths = makeBlockArray(0..1, Locales, string);
+  paths[0] = "<random>";
+  var tPaths = makeBlockArray(0..1, Locales, string);
+  tPaths[0] = "<random>";
+  var starts = makeBlockArray(0..1, Locales, int);
+  starts[0] = 0;
+  starts[1] = total;
+  var theSequenceDescriptions = makeBlockArray(0..1, Locales, string);
+  theSequenceDescriptions[0] = "<random>";
+  var theSequenceStarts = makeBlockArray(0..1, Locales, int);
+  theSequenceStarts[0] = 0;
+  theSequenceStarts[1] = total;
+
+  // set the data to random data
+  fillRandom(thetext, seed=seed);
+
+  allData = thetext;
+  allPaths = paths;
+  concisePaths = tPaths;
+  fileStarts = starts;
+  totalSize = total;
+
+  sequenceDescriptions = theSequenceDescriptions;
+  sequenceStarts = theSequenceStarts;
+}
+
 /* Write a Block-distributed array to a file */
 proc writeBlockArray(const in path: string, const A: [], region: range) throws {
   if A.domain.rank != 1 {
