@@ -21,12 +21,9 @@ module TestUtility {
 
 use CachedAggregators;
 use BlockDist;
+use Random;
 
-config const n = 1_000_000;
-
-proc testCachedDstAggregator() {
-  writeln("testCachedDstAggregator");
-
+proc testCachedDstAggregator(n:int) {
   // store numbers in forward order in Fwd
   var Fwd =  blockDist.createArray(0..<n, int);
   Fwd = 0..<n;
@@ -56,9 +53,33 @@ proc testCachedDstAggregator() {
     assert(A[n-1] == 42);
   }
 }
-proc testCachedSrcAggregator() {
-  writeln("testCachedSrcAggregator");
 
+proc testCachedDstAggregatorRandom(n: int, seed: int) {
+  writeln("testCachedDstAggregatorRandom(n=", n, ", seed=", seed, ")");
+
+  var LocIdxs: [0..<n] int = 0..<n;
+  Random.shuffle(LocIdxs, seed=seed);
+
+  var Idxs = blockDist.createArray(0..<n, int);
+  Idxs = LocIdxs;
+
+  var Fwd = blockDist.createArray(0..<n, int);
+  Fwd = 0..<n;
+
+  var A = blockDist.createArray(0..<n, int);
+  A = Idxs;
+
+  var B = blockDist.createArray(0..<n, int);
+
+  forall (src, idx) in zip(A, Idxs)
+  with (var agg = new CachedDstAggregator(int)) {
+    agg.copy(B[idx], src);
+  }
+
+  assert(B.equals(Fwd));
+}
+
+proc testCachedSrcAggregator(n:int) {
   // store numbers in forward order in Fwd
   var Fwd =  blockDist.createArray(0..<n, int);
   Fwd = 0..<n;
@@ -92,9 +113,61 @@ proc testCachedSrcAggregator() {
     assert(x == 42);
   }
 }
+proc testCachedSrcAggregatorRandom(n: int, seed: int) {
+  writeln("testCachedSrcDstAggregatorRandom(n=", n, ", seed=", seed, ")");
 
-testCachedDstAggregator();
-testCachedSrcAggregator();
-writeln("Done");
+  var LocIdxs: [0..<n] int = 0..<n;
+  Random.shuffle(LocIdxs, seed=seed);
+
+  var Idxs = blockDist.createArray(0..<n, int);
+  Idxs = LocIdxs;
+
+  var Fwd = blockDist.createArray(0..<n, int);
+  Fwd = 0..<n;
+
+  var A = blockDist.createArray(0..<n, int);
+  // set A to the inverse permutation of Idxs
+  forall (idx,i) in zip(Idxs, Idxs.domain)
+  with (var agg = new CachedDstAggregator(int)) {
+    agg.copy(A[idx], i);
+  }
+
+  var B = blockDist.createArray(0..<n, int);
+  // set B to the combination of the two permutations
+  forall (dst, idx) in zip(B, Idxs)
+  with (var agg = new CachedSrcAggregator(int)) {
+    agg.copy(dst, A[idx]);
+  }
+
+  assert(B.equals(Fwd));
+}
+
+proc main() {
+  for n in [1, 2, 5, 10, 100, 1000, 10_000, 100_000, 1_000_000] {
+    writeln("testCachedDstAggregator(", n, ")");
+    testCachedDstAggregator(n);
+
+    writeln("testCachedSrcAggregator(", n, ")");
+    testCachedSrcAggregator(n);
+
+    for seed in [1, 13, 99] {
+      testCachedDstAggregatorRandom(n, seed);
+      testCachedSrcAggregatorRandom(n, seed);
+    }
+
+    // test also something oversubscribed
+    writeln("testCachedDstAggregator(", n, ") oversubscribed with 10 tasks");
+    coforall taskId in 1..10 {
+      testCachedDstAggregator(n);
+    }
+
+    writeln("testCachedSrcAggregator(", n, ") oversubscribed with 10 tasks");
+    coforall taskId in 1..10 {
+      testCachedSrcAggregator(n);
+    }
+  }
+  writeln("Done");
+}
+
 
 }

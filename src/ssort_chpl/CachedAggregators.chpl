@@ -26,6 +26,7 @@ use CTypes;
 use OS.POSIX;
 use Set;
 use BlockDist;
+use Math;
 
 private param TRACE_INIT_DEINIT = false;
 
@@ -198,6 +199,48 @@ proc deinit() {
   }
 }
 
+/* CachedDstAggregatorClass / CachedSrcAggregatorClass support
+   many tasks working with them within the same thread.
+   This helper type is a like a "lock" for many tasks within the same
+   thread. It should by no means be used for tasks running on different
+   threads.
+ */
+record perTaskLock {
+  // use the task bundle pointer so we know that we can use nil
+  // to represent an empty value.
+  var reservedByTask: c_ptr(void) = nil;
+  proc type getTaskId() {
+    extern proc chpl_task_getInfoChapel(): c_ptr(chpl_task_infoChapel_t);
+    return chpl_task_getInfoChapel() : c_ptr(void);
+  }
+  proc const ref isLockedByCurrentTask() : bool {
+    return perTaskLock.getTaskId() == reservedByTask;
+  }
+  proc ref lock() {
+    while this.reservedByTask != nil {
+      currentTask.yieldExecution();
+    }
+    reservedByTask = perTaskLock.getTaskId();
+  }
+  proc ref unlock() {
+    assert(isLockedByCurrentTask());
+    reservedByTask = nil;
+  }
+}
+
+/* This represents the combination of a current buffer offset
+   and a PerTaskLock */
+record idxAndLock {
+  var next: int = 0;     // where to start next operation in the buffer
+  var lock: perTaskLock; // lock when using
+}
+
+private proc allocateIdxAndLockArray(): c_ptr(idxAndLock) {
+  // round up allocation request to 64B & make it 64B aligned
+  const nBytesToAlloc = divCeil(numLocales*c_sizeof(idxAndLock), 64) * 64;
+  const nToAlloc = divCeil(nBytesToAlloc, c_sizeof(idxAndLock));
+  return allocate(idxAndLock, nToAlloc, clear=true, alignment=64);
+}
 
 /* Aggregator that can be shared, works with any type */
 class CachedDstAggregatorClass {
@@ -209,8 +252,7 @@ class CachedDstAggregatorClass {
   var opsUntilYield = yieldFrequency;
   var lBuffers: c_ptr(c_ptr(uint(8)));
   var rBuffers: [myLocaleSpace] remoteBuffer(uint(8));
-  var bufferIdxs: c_ptr(int);
-  var currentlyFlushing = false;
+  var idxAndLocks: c_ptr(idxAndLock);
 
   proc init() {
     init this;
@@ -222,10 +264,9 @@ class CachedDstAggregatorClass {
 
   proc postinit() {
     lBuffers = allocate(c_ptr(uint(8)), numLocales);
-    bufferIdxs = bufferIdxAlloc();
+    idxAndLocks = allocateIdxAndLockArray();
     for loc in myLocaleSpace {
       lBuffers[loc] = allocate(uint(8), bufferSize);
-      bufferIdxs[loc] = 0;
       rBuffers[loc] = new remoteBuffer(uint(8), bufferSize, loc);
     }
   }
@@ -236,7 +277,7 @@ class CachedDstAggregatorClass {
     for loc in myLocaleSpace {
       deallocate(lBuffers[loc]);
     }
-    deallocate(bufferIdxs);
+    deallocate(idxAndLocks);
     deallocate(lBuffers);
   }
 
@@ -246,7 +287,12 @@ class CachedDstAggregatorClass {
     // TODO: try double buffering
     for offsetLoc in myLocaleSpace + lastLocale {
       const loc = offsetLoc % numLocales;
-      flushBuffer(loc, bufferIdxs[loc], freeData=freeBuffers);
+
+      ref idxl = idxAndLocks[loc];
+      idxl.lock.lock();
+      defer { idxl.lock.unlock(); }
+
+      flushBuffer(loc, freeData=freeBuffers);
     }
   }
 
@@ -267,39 +313,47 @@ class CachedDstAggregatorClass {
       return;
     }
 
-    lastLocale = loc;
-    var dstAddr = getAddr(dst);
+    {
+      // "lock" the current buffer
+      ref idxl = idxAndLocks[loc];
+      idxl.lock.lock();
+      defer { idxl.lock.unlock(); }
 
-    // Get our current index into the buffer for dst's locale
-    ref bufferIdx = bufferIdxs[loc];
+      ref bufferIdx = idxl.next;
 
-    // Flush our buffer if this entry will exceed capacity
-    if bufferIdx + serialize_bytes > bufferSize {
-      // note: it can yield inside flushBuffer.
-      flushBuffer(loc, bufferIdx, freeData=false);
-      opsUntilYield = yieldFrequency;
+      lastLocale = loc;
+      var dstAddr = getAddr(dst);
+
+
+      // Flush our buffer if this entry will exceed capacity
+      if bufferIdx + serialize_bytes > bufferSize {
+        flushBuffer(loc, freeData=false);
+        opsUntilYield = yieldFrequency;
+      }
+
+      const buf = lBuffers[loc];
+
+      // Buffer the dst address
+      memcpy(c_ptrTo(buf[bufferIdx]),
+             c_ptrTo(dstAddr),
+             addr_size);
+      bufferIdx += addr_size:int;
+      // Buffer the size
+      memcpy(c_ptrTo(buf[bufferIdx]),
+             c_ptrToConst(data_size):c_ptr(data_size.type),
+             size_size);
+      bufferIdx += size_size:int;
+      // Buffer the data
+      memcpy(c_ptrTo(buf[bufferIdx]),
+             c_ptrToConst(src):c_ptr(src.type),
+             data_size);
+      bufferIdx += data_size:int;
     }
-
-    const buf = lBuffers[loc];
-
-    // Buffer the dst address
-    memcpy(c_ptrTo(buf[bufferIdx]),
-           c_ptrTo(dstAddr),
-           addr_size);
-    bufferIdx += addr_size:int;
-    // Buffer the size
-    memcpy(c_ptrTo(buf[bufferIdx]),
-           c_ptrToConst(data_size):c_ptr(data_size.type),
-           size_size);
-    bufferIdx += size_size:int;
-    // Buffer the data
-    memcpy(c_ptrTo(buf[bufferIdx]),
-           c_ptrToConst(src):c_ptr(src.type),
-           data_size);
-    bufferIdx += data_size:int;
 
     // If it's been a while since we've let other tasks run, yield so that
     // we're not blocking remote tasks from flushing their buffers.
+    // Do this without holding the "lock" since it doesn't really matter
+    // how tasks change opsUntilYield when switching between them.
     if opsUntilYield == 0 {
       currentTask.yieldExecution();
       opsUntilYield = yieldFrequency;
@@ -308,24 +362,13 @@ class CachedDstAggregatorClass {
     }
   }
 
-  proc flushBuffer(loc: int, ref bufferIdx, freeData) {
+  proc flushBuffer(loc: int, freeData) {
+    ref idxl = idxAndLocks[loc];
+    assert(idxl.lock.isLockedByCurrentTask()); // should be done by callers
+    ref bufferIdx = idxl.next;
+
     // return early if there's no data to flush
     if bufferIdx == 0 then return;
-
-    // wait for some other task if it's currently doing a flush
-    while currentlyFlushing {
-      currentTask.yieldExecution();
-    }
-
-    // return early again if there's no data to flush
-    if bufferIdx == 0 then return;
-
-    // now we're the one running and currentlyFlushing was false,
-    // so it's up to us to flush! But mark that we're flushing
-    // so that if we yield, another task won't also flush.
-    currentlyFlushing = true;
-    // clear currentlyFlushing on exit from this block
-    defer { currentlyFlushing = false; }
 
     const myBufferIdx = bufferIdx;
 
@@ -335,6 +378,7 @@ class CachedDstAggregatorClass {
 
     // Copy local buffer to remote buffer
     rBuffer.PUT(lBuffers[loc], myBufferIdx);
+    assert(idxl.lock.isLockedByCurrentTask()); // should not have switched
 
     // Process remote buffer
     on Locales[loc] {
@@ -364,6 +408,8 @@ class CachedDstAggregatorClass {
         rBuffer.localFree(remBufferPtr);
       }
     }
+    assert(idxl.lock.isLockedByCurrentTask()); // should not have switched
+
     if freeData {
       rBuffer.markFreed();
     }
@@ -384,15 +430,13 @@ class CachedSrcAggregatorClass {
   var lReplBuffers: [myLocaleSpace][0..#replBufferSize] uint(8);
   var rReqBuffers: [myLocaleSpace] remoteBuffer(uint(8));
   var rReplBuffers: [myLocaleSpace] remoteBuffer(uint(8));
-  var bufferIdxs: c_ptr(int);
-  var currentlyFlushing = false;
+  var idxAndLocks: c_ptr(idxAndLock);
 
   proc postinit() {
     lReqBuffers = allocate(c_ptr(uint(8)), numLocales);
-    bufferIdxs = bufferIdxAlloc();
+    idxAndLocks = allocateIdxAndLockArray();
     for loc in myLocaleSpace {
       lReqBuffers[loc] = allocate(uint(8), reqBufferSize);
-      bufferIdxs[loc] = 0;
       rReqBuffers[loc] = new remoteBuffer(uint(8), reqBufferSize, loc);
       rReplBuffers[loc] = new remoteBuffer(uint(8), replBufferSize, loc);
     }
@@ -403,7 +447,7 @@ class CachedSrcAggregatorClass {
     for loc in myLocaleSpace {
       deallocate(lReqBuffers[loc]);
     }
-    deallocate(bufferIdxs);
+    deallocate(idxAndLocks);
     deallocate(lReqBuffers);
   }
 
@@ -413,7 +457,12 @@ class CachedSrcAggregatorClass {
     // TODO: try double buffering
     for offsetLoc in myLocaleSpace + lastLocale {
       const loc = offsetLoc % numLocales;
-      flushBuffer(loc, bufferIdxs[loc], freeData=freeBuffers);
+
+      ref idxl = idxAndLocks[loc];
+      idxl.lock.lock();
+      defer { idxl.lock.unlock(); }
+
+      flushBuffer(loc, freeData=freeBuffers);
     }
   }
 
@@ -429,7 +478,7 @@ class CachedSrcAggregatorClass {
     const req_serialize_bytes = 2*addr_size + size_size;
     const repl_serialize_bytes = addr_size + size_size + data_size;
 
-    // Just do direct assignment if dst is local or src size is large
+    // Just do direct assignment if src is local or src size is large
     if loc == here.id ||
        req_serialize_bytes > (reqBufferSize >> 2) ||
        repl_serialize_bytes > (replBufferSize >> 2) {
@@ -437,40 +486,47 @@ class CachedSrcAggregatorClass {
       return;
     }
 
-    lastLocale = loc;
-    const dstAddr = getAddr(dst);
-    const srcAddr = getAddr(src);
+    {
+      // "lock" the current buffer
+      ref idxl = idxAndLocks[loc];
+      idxl.lock.lock();
+      defer { idxl.lock.unlock(); }
 
-    // Get our current index into the buffer for dst's locale
-    ref bufferIdx = bufferIdxs[loc];
+      ref bufferIdx = idxl.next;
 
-    // Flush our buffer if this entry will exceed capacity
-    if bufferIdx + req_serialize_bytes > reqBufferSize {
-      // note: it can yield inside flushBuffer.
-      flushBuffer(loc, bufferIdx, freeData=false);
-      opsUntilYield = yieldFrequency;
+      lastLocale = loc;
+      const dstAddr = getAddr(dst);
+      const srcAddr = getAddr(src);
+
+      // Flush our buffer if this entry will exceed capacity
+      if bufferIdx + req_serialize_bytes > reqBufferSize {
+        flushBuffer(loc, freeData=false);
+        opsUntilYield = yieldFrequency;
+      }
+
+      const buf = lReqBuffers[loc];
+
+      // Buffer the dst address
+      memcpy(c_ptrTo(buf[bufferIdx]),
+             c_ptrToConst(dstAddr):c_ptr(dstAddr.type),
+             addr_size);
+      bufferIdx += addr_size:int;
+      // Buffer the src address
+      memcpy(c_ptrTo(buf[bufferIdx]),
+             c_ptrToConst(srcAddr):c_ptr(srcAddr.type),
+             addr_size);
+      bufferIdx += addr_size:int;
+      // Buffer the size
+      memcpy(c_ptrTo(buf[bufferIdx]),
+             c_ptrToConst(data_size):c_ptr(data_size.type),
+             size_size);
+      bufferIdx += size_size:int;
     }
-
-    const buf = lReqBuffers[loc];
-
-    // Buffer the dst address
-    memcpy(c_ptrTo(buf[bufferIdx]),
-           c_ptrToConst(dstAddr):c_ptr(dstAddr.type),
-           addr_size);
-    bufferIdx += addr_size:int;
-    // Buffer the src address
-    memcpy(c_ptrTo(buf[bufferIdx]),
-           c_ptrToConst(srcAddr):c_ptr(srcAddr.type),
-           addr_size);
-    bufferIdx += addr_size:int;
-    // Buffer the size
-    memcpy(c_ptrTo(buf[bufferIdx]),
-           c_ptrToConst(data_size):c_ptr(data_size.type),
-           size_size);
-    bufferIdx += size_size:int;
 
     // If it's been a while since we've let other tasks run, yield so that
     // we're not blocking remote tasks from flushing their buffers.
+    // Do this without holding the "lock" since it doesn't really matter
+    // how tasks change opsUntilYield when switching between them.
     if opsUntilYield == 0 {
       currentTask.yieldExecution();
       opsUntilYield = yieldFrequency;
@@ -479,27 +535,16 @@ class CachedSrcAggregatorClass {
     }
   }
 
-  proc flushBuffer(loc: int, ref bufferIdx, freeData) {
-    // note: freeData is ignored in this routine at present
-    // remote buffers will be freed on deinit.
+  proc flushBuffer(loc: int, freeData) {
+    // note: freeData is ignored in this routine at present.
+    // Remote buffers will be freed on deinit.
+
+    ref idxl = idxAndLocks[loc];
+    assert(idxl.lock.isLockedByCurrentTask()); // should be done by callers
+    ref bufferIdx = idxl.next;
 
     // return early if there's no data to flush
     if bufferIdx == 0 then return;
-
-    // wait for some other task if it's currently doing a flush
-    while currentlyFlushing {
-      currentTask.yieldExecution();
-    }
-
-    // return early again if there's no data to flush
-    if bufferIdx == 0 then return;
-
-    // now we're the one running and currentlyFlushing was false,
-    // so it's up to us to flush! But mark that we're flushing
-    // so that if we yield, another task won't also flush.
-    currentlyFlushing = true;
-    // clear currentlyFlushing on exit from this block
-    defer { currentlyFlushing = false; }
 
     const myBufferIdx = bufferIdx;
 
@@ -512,6 +557,7 @@ class CachedSrcAggregatorClass {
 
     // Copy request (dst addr, src addr, size) to the remote buffer
     myRReqBuf.PUT(lReqBuffers[loc], myBufferIdx);
+    assert(idxl.lock.isLockedByCurrentTask()); // should not have switched
 
     var bytesValsWritten: 2*int; // reply buffer idx, request buffer idx
     var addrBufferIdx = 0;
@@ -586,11 +632,12 @@ class CachedSrcAggregatorClass {
         // PUT the metadata
         bytesValsWritten = (replyBufferIdx, reqBufferIdx);
       }
+      assert(idxl.lock.isLockedByCurrentTask()); // should not have switched
 
       const replyLen = bytesValsWritten(0);
       // Copy the values loaded remotely into the local buffer
       myRReplBuf.GET(lReplBuffers[loc], replyLen);
-
+      assert(idxl.lock.isLockedByCurrentTask()); // should not have switched
 
       // Assign the values loaded to the destination addresses
       var replyIdx = 0;
@@ -611,8 +658,6 @@ class CachedSrcAggregatorClass {
                c_ptrTo(replyBuf[replyIdx]),
                size_size);
         replyIdx += size_size:int;
-
-        //writeln("Setting ", dstAddr);
 
         // Read the data from the reply into the destination addr
         memcpy(dstAddr,
