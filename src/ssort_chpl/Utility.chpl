@@ -35,8 +35,7 @@ import ChplConfig.CHPL_COMM;
 import RangeChunk;
 import Version;
 import Time;
-import CopyAggregation;
-import CopyAggregation.DstAggregator;
+import CachedAggregators.{CachedSrcAggregator,CachedDstAggregator};
 import Communication;
 import OS.FileNotFoundError;
 
@@ -908,7 +907,7 @@ proc reverseComplement(const ref input: [] uint(8),
   const n = inputRegion.size;
   forall (_, _, chunk)
   in divideIntoTasks(input.domain, inputRegion, nTasksPerLocale) {
-    var agg = new CopyAggregation.DstAggregator(uint(8));
+    var agg = new CachedDstAggregator(uint(8));
     for inputIdx in chunk {
       const i = inputIdx - inputRegion.first;
       const outputIdx = n - 1 - i + outputRegion.first;
@@ -1147,7 +1146,7 @@ proc readFastaFileSequence(path: string,
   // read in the data for each task
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs)
-  with (var agg = new DstAggregator(uint(8))) {
+  with (var agg = new CachedDstAggregator(uint(8))) {
     const taskId = activeLocIdx*nTasksPerLocale + taskIdInLoc;
     const end = Ends[taskId];
     const count = Counts[taskId];
@@ -1273,7 +1272,7 @@ proc parReadAll(path: string,
   // read in parallel
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs) {
-    var agg = new DstAggregator(uint(8));
+    var agg = new CachedDstAggregator(uint(8));
     var r = IO.openReader(path, locking=false, region=chunk);
     for fileOffset in chunk {
       var byte: uint(8);
@@ -1520,7 +1519,7 @@ proc hashAllFiles(const allData: [] uint(8),
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(allData.domain, 0..<totalSize, nTasksPerLocale, activeLocs)
   with (const locFileStarts = localCopyOfBlockArr(fileStarts),
-        var agg = new DstAggregator(8*uint(32))) {
+        var agg = new CachedDstAggregator(8*uint(32))) {
     // compute the first file starting within the chunk
     var firstFile: int;
     var firstFileStart: int;
