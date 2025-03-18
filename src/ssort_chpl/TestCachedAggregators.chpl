@@ -36,6 +36,7 @@ proc testCachedDstAggregator(n:int) {
   assert(A.equals(Rev));
 
   var B = blockDist.createArray(0..<n, int);
+  var C = blockDist.createArray(0..<n, int);
 
   // Set B to the elements of Rev reordered by value
   B = 0;
@@ -43,6 +44,19 @@ proc testCachedDstAggregator(n:int) {
     agg.copy(B[elt], elt);
   }
   assert(B.equals(Fwd));
+
+  // Set B and C to the elements of Rev reordered by value
+  B = 0;
+  C = 0;
+  forall elt in A
+  with (var bAgg = new CachedDstAggregator(int),
+        var cAgg = new CachedDstAggregator(int)) {
+    bAgg.copy(B[elt], elt);
+    cAgg.copy(C[elt], elt);
+  }
+  assert(B.equals(Fwd));
+  assert(C.equals(Fwd));
+
 
   // test a simple flush scenario
   {
@@ -91,7 +105,12 @@ proc testCachedSrcAggregator(n:int) {
   var A = Rev;
   assert(A.equals(Rev));
 
+  var AA = Rev;
+  assert(AA.equals(Rev));
+
   var B = blockDist.createArray(0..<n, int);
+
+  var C = blockDist.createArray(0..<n, int);
 
   // Set B to the elements of Rev reordered by value
   B = 0;
@@ -101,6 +120,18 @@ proc testCachedSrcAggregator(n:int) {
     agg.copy(elt, A[n-1-i]);
   }
   assert(B.equals(Fwd));
+
+  // Set B and C to the elements of Rev reordered by value
+  B = 0;
+  C = 0;
+  forall (bElt, cElt, i) in zip(B, C, B.domain)
+  with (var bAgg = new CachedSrcAggregator(int),
+        var cAgg = new CachedSrcAggregator(int)) {
+    bAgg.copy(bElt, A[n-1-i]);
+    cAgg.copy(cElt, AA[n-1-i]);
+  }
+  assert(B.equals(Fwd));
+  assert(C.equals(Fwd));
 
   // test a simple flush scenario
   {
@@ -112,6 +143,7 @@ proc testCachedSrcAggregator(n:int) {
     agg.flush();
     assert(x == 42);
   }
+
 }
 proc testCachedSrcAggregatorRandom(n: int, seed: int) {
   writeln("testCachedSrcDstAggregatorRandom(n=", n, ", seed=", seed, ")");

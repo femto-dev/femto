@@ -219,12 +219,15 @@ record perTaskLock {
   proc ref lock() {
     while this.reservedByTask != nil {
       currentTask.yieldExecution();
+      chpl_atomic_thread_fence(memory_order_acquire);
     }
+    chpl_atomic_thread_fence(memory_order_acquire);
     reservedByTask = perTaskLock.getTaskId();
   }
   proc ref unlock() {
     assert(isLockedByCurrentTask());
     reservedByTask = nil;
+    chpl_atomic_thread_fence(memory_order_release);
   }
 }
 
