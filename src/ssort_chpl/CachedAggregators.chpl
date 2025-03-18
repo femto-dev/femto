@@ -57,11 +57,16 @@ record DstUnorderedAggregator {
     flush();
   }
   proc ref flush(freeBuffers=false) {
-    if isPOD(elemType) then unorderedCopyTaskFence();
+    if aggregate && isPOD(elemType) {
+      unorderedCopyTaskFence();
+    }
   }
   inline proc ref copy(ref dst: elemType, const in srcVal: elemType) {
-    if isPOD(elemType) then unorderedCopy(dst, srcVal);
-                       else dst = srcVal;
+    if aggregate && isPOD(elemType) {
+      unorderedCopy(dst, srcVal);
+    } else {
+      dst = srcVal;
+    }
   }
 }
 // it just has the same interface as SrcAggregator but doesn't aggregate
@@ -82,23 +87,31 @@ record SrcUnorderedAggregator {
     flush();
   }
   proc ref flush(freeBuffers=false) {
-    if isPOD(elemType) then unorderedCopyTaskFence();
+    if aggregate && isPOD(elemType) {
+      unorderedCopyTaskFence();
+    }
   }
   inline proc ref copy(ref dst: elemType, const ref src: elemType) {
     if boundsChecking {
       assert(dst.locale.id == here.id);
     }
-    if isPOD(elemType) then unorderedCopy(dst, src);
-                       else dst = src;
+    if aggregate && isPOD(elemType) {
+      unorderedCopy(dst, src);
+    } else {
+      dst = src;
+    }
   }
 }
 
 record CachedDstAggregator {
   type elemType;
-  var agg: borrowed CachedDstAggregatorClass;
+  var agg: borrowed CachedDstAggregatorClass?;
   proc init(type elemType) {
-    var cls = PThreadSupport.getPerPthreadClass(CachedDstAggregatorClass);
-    assert(cls != nil);
+    var cls: borrowed CachedDstAggregatorClass? = nil;
+    if aggregate {
+      cls = PThreadSupport.getPerPthreadClass(CachedDstAggregatorClass);
+      assert(cls != nil);
+    }
     this.elemType = elemType;
     this.agg = cls;
   }
@@ -108,19 +121,28 @@ record CachedDstAggregator {
     flush();
   }
   inline proc ref copy(ref dst: elemType, const ref src: elemType) {
-    this.agg.copy(dst, src);
+    if aggregate {
+      this.agg!.copy(dst, src);
+    } else {
+      dst = src;
+    }
   }
   inline proc ref flush() {
-    this.agg.flush(freeBuffers=false);
+    if aggregate {
+      this.agg!.flush(freeBuffers=false);
+    }
   }
 }
 
 record CachedSrcAggregator {
   type elemType;
-  var agg: borrowed CachedSrcAggregatorClass;
+  var agg: borrowed CachedSrcAggregatorClass?;
   proc init(type elemType) {
-    var cls = PThreadSupport.getPerPthreadClass(CachedSrcAggregatorClass);
-    assert(cls != nil);
+    var cls: borrowed CachedSrcAggregatorClass? = nil;
+    if aggregate {
+      cls = PThreadSupport.getPerPthreadClass(CachedSrcAggregatorClass);
+      assert(cls != nil);
+    }
     this.elemType = elemType;
     this.agg = cls;
   }
@@ -130,10 +152,16 @@ record CachedSrcAggregator {
     flush();
   }
   inline proc ref copy(ref dst: elemType, const ref src: elemType) {
-    this.agg.copy(dst, src);
+    if aggregate {
+      this.agg!.copy(dst, src);
+    } else {
+      dst = src;
+    }
   }
   inline proc ref flush() {
-    this.agg.flush(freeBuffers=false);
+    if aggregate {
+      this.agg!.flush(freeBuffers=false);
+    }
   }
 }
 
@@ -143,7 +171,7 @@ type PerPthreadAggsEltType = set(eltType=unmanaged RootClass,
                                  parSafe=true);
 private var PerPthreadAggs = blockDist.createArray(0..<numLocales,
                                                    PerPthreadAggsEltType);
-{
+if aggregate {
   const testTasksPerLoc = 4*here.maxTaskPar;
   const testN = numLocales*testTasksPerLoc;
   var TestArr1 = blockDist.createArray(0..<testN, int);
@@ -188,12 +216,14 @@ private var PerPthreadAggs = blockDist.createArray(0..<numLocales,
 }
 
 proc deinit() {
-  if TRACE_INIT_DEINIT then writeln("destroying aggregators");
-  coforall (loc, locId) in zip(Locales, 0..) {
-    on loc {
-      for elt in PerPthreadAggs[locId] {
-        if TRACE_INIT_DEINIT then writeln("destroying ", c_ptrTo(elt));
-        delete elt;
+  if aggregate {
+    if TRACE_INIT_DEINIT then writeln("destroying aggregators");
+    coforall (loc, locId) in zip(Locales, 0..) {
+      on loc {
+        for elt in PerPthreadAggs[locId] {
+          if TRACE_INIT_DEINIT then writeln("destroying ", c_ptrTo(elt));
+          delete elt;
+        }
       }
     }
   }
