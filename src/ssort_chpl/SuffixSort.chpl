@@ -61,6 +61,7 @@ private import Time;
 private import List;
 private import Help;
 private import CommDiagnostics;
+private import MemDiagnostics;
 
 proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
   if !(Input.domain.rank == 1 &&
