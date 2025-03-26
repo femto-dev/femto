@@ -35,6 +35,7 @@ import Reflection;
 import CTypes.{c_sizeof,c_int};
 import Time;
 import CachedAggregators.{CachedSrcAggregator,CachedDstAggregator};
+import CopyAggregation.SrcAggregator;
 //import MemDiagnostics;
 
 import SuffixSort.DEFAULT_PERIOD;
@@ -946,7 +947,7 @@ proc loadNextWords(const cfg:ssortConfig(?),
     // see https://github.com/chapel-lang/chapel/issues/26685
     var myReadAgg = if outerReadAgg.type != nothing
                     then none
-                    else new CachedSrcAggregator(wordType);
+                    else new SrcAggregator(wordType);
     ref readAgg = if outerReadAgg.type != nothing
                   then outerReadAgg
                   else myReadAgg;
@@ -1712,7 +1713,7 @@ proc sortAndNameSampleOffsets(const cfg:ssortConfig(?),
       var LocA: [0..<bufSz] offsetAndCachedType;
       var LocScratch: [0..<bufSz] offsetAndCachedType;
       var LocBucketBoundaries: [0..<bufSz] uint(8);
-      var readAgg = new CachedSrcAggregator(wordType);
+      var readAgg = new SrcAggregator(wordType);
       var bktAgg = new CachedDstAggregator(uint(8));
       mysubtimes.allocateTime.accumulate(allocateTime);
 
@@ -2147,10 +2148,10 @@ proc sortAllOffsetsInRegion(const cfg:ssortConfig(?),
                             ref LocSampleRanksA: [] offsetAndSampleRanks(?),
                             ref LocSampleRanksScratch: [] offsetAndSampleRanks(?),
                             ref LocBucketBoundaries: [] uint(8),
-                            ref readAgg: CachedSrcAggregator(cfg.loadWordType),
+                            ref readAgg: SrcAggregator(cfg.loadWordType),
                             ref bktAgg: CachedDstAggregator(uint(8)),
                             ref rankReadAgg:
-                              CachedSrcAggregator(cfg.unsignedOffsetType),
+                              SrcAggregator(cfg.unsignedOffsetType),
                             ref outputAgg: CachedDstAggregator(cfg.offsetType),
                             ref subtimes: sortAllOffsetsSubtimes
                             /*ref readAgg: SrcAggregator(cfg.loadWordType),
@@ -2469,9 +2470,9 @@ proc sortAllOffsets(const cfg:ssortConfig(?),
     var LocSampleRanksA: [0..<bufSz] offsetAndSampleRanksType;
     var LocSampleRanksScratch: [0..<bufSz] offsetAndSampleRanksType;
 
-    var readAgg = new CachedSrcAggregator(wordType);
+    var readAgg = new SrcAggregator(wordType);
     var bktAgg = new CachedDstAggregator(uint(8));
-    var rankReadAgg = new CachedSrcAggregator(rankType);
+    var rankReadAgg = new SrcAggregator(rankType);
     var outputAgg = new CachedDstAggregator(offsetType);
     mysubtimes.allocateTime.accumulate(allocateTime);
 
