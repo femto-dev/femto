@@ -19,6 +19,7 @@
 
 module TestStackTrace {
 
+config param EXTRA_CHECKS=false;
 
 use StackTrace;
 
