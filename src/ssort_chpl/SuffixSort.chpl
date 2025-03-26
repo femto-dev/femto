@@ -41,6 +41,8 @@ param INPUT_PADDING = 8;
 
 config const TRUNCATE_INPUT_TO: int = max(int);
 config const VERBOSE_COMMS = false;
+config const GENERATE_RANDOM = false;
+config const RANDOM_SEED = 1;
 
 /* TODO after https://github.com/chapel-lang/chapel/issues/25569 is fixed
 include public module DifferenceCovers;
@@ -52,12 +54,14 @@ include private module TestDifferenceCovers;
 public use DifferenceCovers;
 private use SuffixSortImpl;
 private use Utility;
+private use Random;
 
 private import IO;
 private import Time;
 private import List;
 private import Help;
 private import CommDiagnostics;
+private import MemDiagnostics;
 
 proc computeSuffixArray(Input: [], const n: Input.domain.idxType) {
   if !(Input.domain.rank == 1 &&
@@ -171,8 +175,13 @@ proc main(args: [] string) throws {
     gatherFiles(inputFilesList, arg);
   }
 
-  if inputFilesList.size == 0 {
+  if inputFilesList.size == 0 && !GENERATE_RANDOM {
     writeln("please specify input files and directories");
+    usage(args);
+    return 1;
+  }
+  if GENERATE_RANDOM && inputFilesList.size > 0 {
+    writeln("input files ignored with GENERATE_RANDOM set");
     usage(args);
     return 1;
   }
@@ -185,15 +194,34 @@ proc main(args: [] string) throws {
   const totalSize: int;
   const sequenceDescriptions; //: [] string;
   const sequenceStarts; //: [] int;
-  readAllFiles(inputFilesList,
-               Locales,
-               allData=allData,
-               allPaths=allPaths,
-               concisePaths=concisePaths,
-               fileStarts=fileStarts,
-               totalSize=totalSize,
-               sequenceDescriptions=sequenceDescriptions,
-               sequenceStarts=sequenceStarts);
+  if !GENERATE_RANDOM {
+    readAllFiles(inputFilesList,
+                 Locales,
+                 allData=allData,
+                 allPaths=allPaths,
+                 concisePaths=concisePaths,
+                 fileStarts=fileStarts,
+                 totalSize=totalSize,
+                 sequenceDescriptions=sequenceDescriptions,
+                 sequenceStarts=sequenceStarts);
+  } else {
+    var size = TRUNCATE_INPUT_TO;
+    if size == max(int) {
+      size = 1024*1024*1024*numLocales;
+    }
+    writeln("Generating ", size, " bytes of random input data");
+    writeln("(adjust with --TRUNCATE_INPUT_TO=n)");
+
+    generateAllData(size, RANDOM_SEED,
+                 Locales,
+                 allData=allData,
+                 allPaths=allPaths,
+                 concisePaths=concisePaths,
+                 fileStarts=fileStarts,
+                 totalSize=totalSize,
+                 sequenceDescriptions=sequenceDescriptions,
+                 sequenceStarts=sequenceStarts);
+  }
 
   //writeln("Files are: ", concisePaths);
   //writeln("FileStarts are: ", fileStarts);

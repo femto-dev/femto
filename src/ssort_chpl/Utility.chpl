@@ -35,8 +35,7 @@ import ChplConfig.CHPL_COMM;
 import RangeChunk;
 import Version;
 import Time;
-import CopyAggregation;
-import CopyAggregation.DstAggregator;
+import CachedAggregators.{CachedSrcAggregator,CachedDstAggregator};
 import Communication;
 import OS.FileNotFoundError;
 
@@ -908,7 +907,7 @@ proc reverseComplement(const ref input: [] uint(8),
   const n = inputRegion.size;
   forall (_, _, chunk)
   in divideIntoTasks(input.domain, inputRegion, nTasksPerLocale) {
-    var agg = new CopyAggregation.DstAggregator(uint(8));
+    var agg = new CachedDstAggregator(uint(8));
     for inputIdx in chunk {
       const i = inputIdx - inputRegion.first;
       const outputIdx = n - 1 - i + outputRegion.first;
@@ -1147,7 +1146,7 @@ proc readFastaFileSequence(path: string,
   // read in the data for each task
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs)
-  with (var agg = new DstAggregator(uint(8))) {
+  with (var agg = new CachedDstAggregator(uint(8))) {
     const taskId = activeLocIdx*nTasksPerLocale + taskIdInLoc;
     const end = Ends[taskId];
     const count = Counts[taskId];
@@ -1273,7 +1272,7 @@ proc parReadAll(path: string,
   // read in parallel
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(Dom, 0..<size, nTasksPerLocale, activeLocs) {
-    var agg = new DstAggregator(uint(8));
+    var agg = new CachedDstAggregator(uint(8));
     var r = IO.openReader(path, locking=false, region=chunk);
     for fileOffset in chunk {
       var byte: uint(8);
@@ -1462,6 +1461,43 @@ proc readAllFiles(const ref files: list(string),
   }
 }
 
+proc generateAllData(n: int, seed: int,
+                     locales: [ ] locale,
+                     out allData: [] uint(8),
+                     out allPaths: [] string,
+                     out concisePaths: [] string,
+                     out fileStarts: [] int,
+                     out totalSize: int,
+                     out sequenceDescriptions: [] string,
+                     out sequenceStarts: [] int) throws {
+  const total = n;
+  var thetext = makeBlockArray(0..<total+INPUT_PADDING, Locales, uint(8));
+  var paths = makeBlockArray(0..1, Locales, string);
+  paths[0] = "<random>";
+  var tPaths = makeBlockArray(0..1, Locales, string);
+  tPaths[0] = "<random>";
+  var starts = makeBlockArray(0..1, Locales, int);
+  starts[0] = 0;
+  starts[1] = total;
+  var theSequenceDescriptions = makeBlockArray(0..1, Locales, string);
+  theSequenceDescriptions[0] = "<random>";
+  var theSequenceStarts = makeBlockArray(0..1, Locales, int);
+  theSequenceStarts[0] = 0;
+  theSequenceStarts[1] = total;
+
+  // set the data to random data
+  fillRandom(thetext, seed=seed);
+
+  allData = thetext;
+  allPaths = paths;
+  concisePaths = tPaths;
+  fileStarts = starts;
+  totalSize = total;
+
+  sequenceDescriptions = theSequenceDescriptions;
+  sequenceStarts = theSequenceStarts;
+}
+
 /* Write a Block-distributed array to a file */
 proc writeBlockArray(const in path: string, const A: [], region: range) throws {
   if A.domain.rank != 1 {
@@ -1520,7 +1556,7 @@ proc hashAllFiles(const allData: [] uint(8),
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(allData.domain, 0..<totalSize, nTasksPerLocale, activeLocs)
   with (const locFileStarts = localCopyOfBlockArr(fileStarts),
-        var agg = new DstAggregator(8*uint(32))) {
+        var agg = new CachedDstAggregator(8*uint(32))) {
     // compute the first file starting within the chunk
     var firstFile: int;
     var firstFileStart: int;
@@ -2094,6 +2130,8 @@ proc reportStat(const ref x:substat(?), desc:string) {
   }
 }
 
+// help to yield occasionally. AFAIK this is not necessary for performance,
+// but I was worried about it.
 record yieldHelper {
   var itersSinceLastYield: int;
 }

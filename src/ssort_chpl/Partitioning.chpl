@@ -27,6 +27,8 @@ import SuffixSort.{EXTRA_CHECKS};
 
 use Utility;
 
+//use StackTrace;
+
 import Reflection.canResolveMethod;
 import Sort;
 import Sort.{sort, defaultComparator, keyPartStatus, keyPartComparator};
@@ -34,11 +36,13 @@ use Random; // 'use' vs 'import' to workaround an issue
 import Math.{log2, divCeil};
 import CTypes.c_array;
 import BlockDist.blockDist;
-import CopyAggregation.{SrcAggregator,DstAggregator};
+import CachedAggregators.{CachedSrcAggregator,CachedDstAggregator};
 import BitOps;
 import Time;
 import RangeChunk;
 import Collectives;
+import AllLocalesBarriers;
+import ChplConfig.CHPL_COMM;
 
 // These settings control the sample sort and classification process
 
@@ -438,12 +442,14 @@ record splitters : writeSerializable {
     this.equalBuckets = rhs.equalBuckets;
     init this;
     this.setStorageFrom(rhs);
+    //writeln("splitters init= on ", here, " from ", rhs.locale, " trace: ", stackTraceAsString(b" "));
   }
   operator =(ref lhs: splitters(?), const ref rhs: splitters(?)) {
     lhs.logSplitters = rhs.logSplitters;
     lhs.myNumBuckets = rhs.myNumBuckets;
     lhs.equalBuckets = rhs.equalBuckets;
     lhs.setStorageFrom(rhs);
+    //writeln("splitters = on ", here, " from ", rhs.locale, " trace: ", stackTraceAsString(b" "));
   }
   operator ==(const ref lhs: splitters(?), const ref rhs: splitters(?)) {
     if lhs.logSplitters != rhs.logSplitters ||
@@ -778,7 +784,7 @@ record radixSplittersSummary {
   }
 }
 
-class PartitionPerTaskState {
+/*class PartitionPerTaskState {
   type eltType;
 
   var numBuckets: int;
@@ -794,7 +800,7 @@ class PartitionPerTaskState {
     this.numBuckets = numBuckets;
     init this;
   }
-}
+}*/
 
 /*
    Stores the global state needed by a partition operation
@@ -1411,7 +1417,7 @@ proc savePerTaskCountsToGlobal(const ref perTaskCounts,
   // but do so in a way that somewhat matches the global counts ordering
   // (tasks within a bucket go together).
   forall bucketIdx in 0..<nBuckets
-  with (var agg = new DstAggregator(int)) {
+  with (var agg = new CachedDstAggregator(int)) {
     for taskIdInLoc in 0..<nTasksPerLocale {
       var countIdx =
         getGlobalCountIdx(bucketIdx, activeLocIdx, nActiveLocales,
@@ -1434,7 +1440,7 @@ proc getTaskCountsFromGlobal(ref perTaskNext,
   // but do so in a way that somewhat matches the global counts ordering
   // (tasks within a bucket go together).
   forall bucketIdx in 0..<nBuckets
-  with (var agg = new SrcAggregator(int)) {
+  with (var agg = new CachedSrcAggregator(int)) {
     for taskIdInLoc in 0..<nTasksPerLocale {
       var countIdx =
         getGlobalCountIdx(bucketIdx, activeLocIdx, nActiveLocales,
@@ -1495,17 +1501,22 @@ proc parStablePartition(const InputDomain: domain(?),
     }
   }
 
-  // Step 1: Count
+  var GlobEnds: GlobCounts.type;
+
+  //const useAllLocalesBarrier = activeLocs.equals(Locales);
+  var smallerBarrier = new Collectives.barrier(activeLocs.size);
+
   forall (activeLocIdx, locRegion)
-  in divideByLocales(InputDomain, inputRegion, activeLocs)
-  with (in split) {
+  in divideByLocales(InputDomain, inputRegion, activeLocs) {
+    var lsplit = split;
     var perTaskCounts: [0..<nTasksPerLocale] [0..<nBuckets] int;
 
+    // Step 1: Count
     // count & save the result to the perTaskCounts
     coforall (chunk, taskIdInLoc)
     in zip(RangeChunk.chunks(locRegion, nTasksPerLocale), 0..) {
       ref mycounts = perTaskCounts[taskIdInLoc];
-      for (_,bkt) in split.classify(Input, chunk.low, chunk.high, comparator) {
+      for (_,bkt) in lsplit.classify(Input, chunk.low, chunk.high, comparator) {
         if filterBucket.type == nothing || filterBucket(bkt) {
           mycounts[bkt] += 1;
         }
@@ -1516,20 +1527,35 @@ proc parStablePartition(const InputDomain: domain(?),
     savePerTaskCountsToGlobal(perTaskCounts, GlobCounts,
                               nBuckets, nActiveLocales, activeLocIdx,
                               nTasksPerLocale);
-  }
 
-  // Step 2: Scan
+    // wait for all counts to be stored in GlobCounts
+    /*if useAllLocalesBarrier { error about too many callers
+      AllLocalesBarriers.allLocalesBarrier.barrier();
+    } else*/ {
+      smallerBarrier.barrier();
+    }
 
-  // note: could implement a custom scan that only uses activeLocales;
-  // current strategy is to assume it's either all locales (more or less)
-  // or a small number of them.
-  const GlobEnds = + scan GlobCounts;
+    // Step 2: Scan
 
-  if Output.type != nothing {
-    // Step 3: Distribute
-    forall (activeLocIdx, locRegion)
-    in divideByLocales(InputDomain, inputRegion, activeLocs)
-    with (in split, in OutputShift) {
+    if activeLocIdx == 0 {
+      // only locale 0 launches the scan, but this will involve all locales
+      // note: could implement a custom scan that only uses activeLocales;
+      // current strategy is to assume it's either all locales (more or less)
+      // or a small number of them.
+      GlobEnds = + scan GlobCounts;
+    }
+
+    // wait for the scan to be complete
+    /*if useAllLocalesBarrier {
+      AllLocalesBarriers.allLocalesBarrier.barrier();
+    } else*/ {
+      smallerBarrier.barrier();
+    }
+
+    if Output.type != nothing {
+      // Step 3: Distribute
+      const LOutputShift = OutputShift;
+
       var perTaskNext: [0..<nTasksPerLocale] [0..<nBuckets] int;
       // fill in perTaskNext from GlobEnds
       getTaskCountsFromGlobal(perTaskNext, GlobEnds,
@@ -1542,22 +1568,22 @@ proc parStablePartition(const InputDomain: domain(?),
         ref nextOffsets = perTaskNext[taskIdInLoc];
 
         // first adjust nextOffsets for OutputShift
-        if OutputShift.type != nothing {
+        if LOutputShift.type != nothing {
           foreach bucketIdx in 0..<nBuckets {
             var shift = 0;
-            if isArrayType(OutputShift.type) {
-              shift = OutputShift[bucketIdx];
-            } else if isIntType(OutputShift.type) {
-              shift = OutputShift;
+            if isArrayType(LOutputShift.type) {
+              shift = LOutputShift[bucketIdx];
+            } else if isIntType(LOutputShift.type) {
+              shift = LOutputShift;
             }
             nextOffsets[bucketIdx] += shift;
           }
         }
 
-        var agg = new DstAggregator(Input.eltType);
+        var agg = new CachedDstAggregator(Input.eltType);
 
-        for (elt,bkt) in split.classify(Input, chunk.low, chunk.high,
-                                        comparator) {
+        for (elt,bkt) in lsplit.classify(Input, chunk.low, chunk.high,
+                                         comparator) {
           if filterBucket.type == nothing || filterBucket(bkt) {
             // Store it in the right bin
             ref next = nextOffsets[bkt];
@@ -1571,7 +1597,7 @@ proc parStablePartition(const InputDomain: domain(?),
 
   // Compute the total counts to return
   forall (end, bucketIdx) in zip(Ends, Ends.domain)
-  with (var agg = new SrcAggregator(int)) {
+  with (var agg = new CachedSrcAggregator(int)) {
     // read the last entry for each bin
     var countIdx =
       getGlobalCountIdx(bucketIdx, nActiveLocales-1, nActiveLocales,
@@ -1843,7 +1869,7 @@ proc createSampleSplitters(const ref ADom,
   //forall (taskId, chk) in divideIntoTasks(Dom, nTasksPerLocale)
   forall (activeLocIdx, taskIdInLoc, chunk)
   in divideIntoTasks(ADom, region, nTasksPerLocale, activeLocs)
-  with (var agg = new DstAggregator(A.eltType)) {
+  with (var agg = new CachedDstAggregator(A.eltType)) {
     const taskId = activeLocIdx*nTasksPerLocale + taskIdInLoc;
     const dstFullRange = perTask*taskId..#perTask;
     const dstRange = SortSamplesSpaceDomRange[dstFullRange];
@@ -2101,7 +2127,7 @@ proc markBoundaries(ref BucketBoundaries: [] uint(8),
   const smm = Split.summary();
 
   forall (bkt,bucketIdx) in zip(Bkts, Bkts.domain)
-  with (var agg = new DstAggregator(uint(8)), in smm) {
+  with (var agg = new CachedDstAggregator(uint(8)), in smm) {
     if bkt.count > 0 {
       var t: uint(8);
       if bkt.count == 1 {
@@ -2196,7 +2222,7 @@ proc partitioningSorter.sortStep(ref A: [],
       if !inputInA {
         bulkCopy(A, region, Scratch, region);
       }
-      var agg = new DstAggregator(uint(8));
+      var agg = new CachedDstAggregator(uint(8));
       baseCase(A, BucketBoundaries, region, comparator, agg);
     }
     return;
@@ -2269,7 +2295,7 @@ proc setBucketBoundary(ref BucketBoundaries: [] uint(8),
                        bktStart: int,
                        bktSize: int,
                        bktStartBit: int,
-                       ref agg: DstAggregator(uint(8)))
+                       ref agg: CachedDstAggregator(uint(8)))
 {
   // set the first byte
   agg.copy(BucketBoundaries[bktStart], boundaryType);
@@ -2299,7 +2325,11 @@ proc setBucketBoundary(ref BucketBoundaries: [] uint(8),
     }
   }
 
-  if EXTRA_CHECKS {
+  if EXTRA_CHECKS && CHPL_COMM=="none" {
+    // this check does not work correctly when working with
+    // multiple locales and shared aggregators,
+    // so it is disabled except for numLocales==1 when the aggregators
+    // should not be used.
     agg.flush();
     /*writeln("checking setBucketBoundary bktStart ", bktStart,
             " bktSize ", bktSize, " bktStartBit ", bktStartBit);
@@ -2383,7 +2413,7 @@ proc partitioningSorter.baseCase(ref A: [],
                                  ref BucketBoundaries: [] uint(8),
                                  region: range,
                                  comparator,
-                                 ref agg: DstAggregator(uint(8))) {
+                                 ref agg: CachedDstAggregator(uint(8))) {
   partitionSortBaseCase(A, region, comparator);
 
   if region.size == 1 || !markAllEquals {
@@ -2653,7 +2683,7 @@ proc partitioningSorter.psort(ref A: [],
   }*/
 
   if region.size <= baseCaseLimit && !useExistingBuckets {
-    var agg = new DstAggregator(uint(8));
+    var agg = new CachedDstAggregator(uint(8));
     baseCase(A, BucketBoundaries, region, comparator, agg);
     return;
   }
