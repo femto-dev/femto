@@ -23,6 +23,8 @@ use CachedAggregators;
 use BlockDist;
 use Random;
 
+config param EXTRA_CHECKS=false;
+
 proc testCachedDstAggregator(n:int) {
   // store numbers in forward order in Fwd
   var Fwd =  blockDist.createArray(0..<n, int);
