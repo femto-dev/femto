@@ -37,6 +37,7 @@ use Utility;
 
 import FileSystem;
 import IO;
+import IO.stderr;
 import List;
 import OS.EofError;
 import Path;
@@ -142,16 +143,16 @@ proc main(args: [] string) throws {
   }
 
   if inputFilesList.size == 0 {
-    writeln("please specify input files and directories");
+    stderr.writeln("please specify input files and directories");
     return 1;
   }
   if UNIQUE_DIR == "" {
-    writeln("please use --unique <dir> to specify a directory containing .unique files");
-    writeln("FindUnique can generate such a directory");
+    stderr.writeln("please use --unique <dir> to specify a directory containing .unique files");
+    stderr.writeln("FindUnique can generate such a directory");
     return 1;
   }
   if K == 0 && SHIFTS {
-    writeln("please set --k=<number> for use with --shifts");
+    stderr.writeln("please set --k=<number> for use with --shifts");
     return 1;
   }
 
@@ -178,7 +179,9 @@ proc main(args: [] string) throws {
     } else if FileSystem.isFile(p2) {
       p = p2;
     } else {
-      halt("Could not find unique file at ", p1);
+      stderr.writeln("warning: ignoring ", p,
+                     " -- could not find unique file at ", p1);
+      p = "";
     }
   }
 
@@ -186,10 +189,12 @@ proc main(args: [] string) throws {
     // check that the unique files paths are unique
     var s:Set.set(string);
     for (f,p) in zip(inputPaths, uniquePaths) {
-      if s.contains(p) {
-        halt("could not find non-ambiguous unique file for ", f);
+      if p != "" {
+        if s.contains(p) {
+          halt("could not find non-ambiguous unique file for ", f);
+        }
+        s.add(p);
       }
-      s.add(p);
     }
   }
 
@@ -200,6 +205,9 @@ proc main(args: [] string) throws {
   // would be interleaved
   for (inputPath, concisePath, uniquePath, fileIdx)
   in zip(inputPaths, concisePaths, uniquePaths, inputPaths.domain) {
+    // ignore files that have no corresponding .unique
+    if uniquePath == "" then continue;
+
     const isFasta = isFastaFile(inputPath);
 
     // Read just the one file being processed here
