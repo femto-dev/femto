@@ -26,19 +26,28 @@ config const unique:string; // dir containing .unique files from FindUnique
 config const k: int = 0; // K as in KMER (common prefix length)
 config const tsv: bool = false; // output uniquesketch tab-separated format
 config const shifts: bool = false; // output shifts
+config const entropyMaxKmer: int = 5; // for use in computing entropy
+config const entropyThreshold: real = 0.65; // discard kmers with entropy < this
+config const removeLowComplexity: bool = true; // enable entropy filtering
 
 // upper-case names for the config constants to better identify them in code
 const UNIQUE_DIR = unique;
 const K = k;
 const OUTPUT_TSV = tsv;
 const SHIFTS = shifts;
+const ENTROPY_MAX_KMER = entropyMaxKmer;
+const ENTROPY_THRESHOLD = entropyThreshold;
+const REMOVE_LOW_COMPLEXITY = removeLowComplexity;
 
 use Utility;
+import SuffixSort.{EXTRA_CHECKS};
 
 import FileSystem;
-import IO;
 import IO.stderr;
+import IO;
 import List;
+import Map.map;
+import Math.log2;
 import OS.EofError;
 import Path;
 import Set;
@@ -74,7 +83,98 @@ proc escapeString(in s: string) {
   return s;
 }
 
+// encode a nucleotide to an integer
+// A a -> 1
+// C c -> 2
+// G g -> 3
+// T t -> 4
+// everything else -> 0
+proc dnaBaseToUint(base: uint(8)): uint {
+  param A = "A".toByte(); param a = "a".toByte();
+  param T = "T".toByte(); param t = "t".toByte();
+  param G = "G".toByte(); param g = "g".toByte();
+  param C = "C".toByte(); param c = "c".toByte();
+
+
+  if base == A || base == a then return 1;
+  if base == T || base == t then return 2;
+  if base == G || base == g then return 3;
+  if base == T || base == t then return 4;
+
+  return 0;
+}
+
+// creates an integer to represent a dna sequence for allData[offset..#k]
+// by applying dnaBaseToInt to the values & keeping only 3 bits from each.
+proc dnaKmerToUint(offset: int, k: int, allData: [] uint(8)): uint {
+  if EXTRA_CHECKS {
+    assert(k*3 + 8 < 64);
+  }
+
+  var ret: uint = 0;
+  for j in 0..<k {
+    var b: uint = dnaBaseToUint(allData[offset + j]);
+    ret <<= 3;
+    ret |= b;
+  }
+
+  // also, append 8 bits of the kmer length
+  ret <<= 8;
+  ret |= (k:uint & 0xff);
+
+  return ret;
+}
+
+// estimates the Shannon entropy for a dna kmer
+// using the same strategy as in uniqsketch:
+//  compute the entropy contribution from 1-mers
+//  compute the entropy contribution from 2-mers
+//  ...
+//  compute the entropy contribution from 5-mers
+// returns a normalized entropy,  entropy / max_est_entropy.
+proc estimateShannonEntropyForDnaKmer(offset: int,
+                                      outputLen: int,
+                                      allData: [] uint(8)): real {
+  var totalEntropy: real = 0;
+
+  // compute the "max" entropy in a way that matches uniqsketch
+  // TODO: is how does this make sense? Why 12?
+  var maxEntropy:real = 12.0;
+  for i in 4..ENTROPY_MAX_KMER {
+    maxEntropy += log2(outputLen - i + 1);
+  }
+
+  // compute the entropy of the kmer by considering 1-mers, 2-mers, etc
+
+  // first, count the number of occurences of each of thes 1-mers, 2-mers, etc
+  var kmerCounts: map(uint, int);
+  for i in 0..<outputLen {
+    for k in 1..ENTROPY_MAX_KMER {
+      if i + k <= outputLen {
+        const u = dnaKmerToUint(offset + i, k, allData);
+        kmerCounts[u] += 1;
+      }
+    }
+  }
+
+  // now use the counts to compute the entropy estimate
+  for (u,count) in zip(kmerCounts.keys(), kmerCounts.values()) {
+    // extract 'k' from the low byte of 'u'
+    const k = (u & 0xff):int;
+    if EXTRA_CHECKS {
+      assert(count > 0 && k > 0);
+    }
+    // compute the probability estimate
+    const p = count:real / (outputLen-k+1);
+    // compute the entropy term and add it in
+    totalEntropy += -p*log2(p);
+  }
+
+  return totalEntropy / maxEntropy;
+}
+
 proc outputKmer(offset: int,
+                uniqueOffset: int,
                 uniqueLen: int,
                 outputLen: int,
                 startOffsetInSequence: int,
@@ -85,6 +185,7 @@ proc outputKmer(offset: int,
                 useFilename: string,
                 curDesc: string,
                 isFasta: bool) {
+
   if OUTPUT_TSV {
     // output tab-separated data:
     //  kmer
@@ -293,6 +394,28 @@ proc main(args: [] string) throws {
           }
         }
 
+        if !skip && isFasta && REMOVE_LOW_COMPLEXITY {
+          // ignore sequences with too little entropy
+          var lowComplexity = false;
+          if useK <= ENTROPY_MAX_KMER {
+            skip = true;
+          } else {
+            const en =
+              estimateShannonEntropyForDnaKmer(startOffset, useK, allData);
+            if en <= ENTROPY_THRESHOLD {
+              skip = true;
+            }
+          }
+
+          if skip {
+            try! stderr.write("# note: ignoring for low complexity: ");
+            for j in 0..<useK {
+              try! stderr.writef("%c", allData[startOffset + j]);
+            }
+            try! stderr.writeln();
+          }
+        }
+
         if !skip {
           // update the current sequence description
           var seqIdx = offsetToFileIdx(sequenceStarts, i);
@@ -324,6 +447,7 @@ proc main(args: [] string) throws {
 
               // output the kmer at this shift
               outputKmer(offset=curStartOffset,
+                         uniqueOffset=i,
                          uniqueLen=len,
                          outputLen=useK,
                          startOffsetInSequence=curStartOffset-curSequenceStart,
@@ -337,6 +461,7 @@ proc main(args: [] string) throws {
             }
           } else {
             outputKmer(offset=startOffset,
+                       uniqueOffset=i,
                        uniqueLen=len,
                        outputLen=useK,
                        startOffsetInSequence=startOffset-curSequenceStart,
