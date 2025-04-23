@@ -397,10 +397,11 @@ proc main(args: [] string) throws {
         if !skip && isFasta && REMOVE_LOW_COMPLEXITY {
           // ignore sequences with too little entropy
           var lowComplexity = false;
-          if len <= ENTROPY_MAX_KMER {
+          if useK <= ENTROPY_MAX_KMER {
             skip = true;
           } else {
-            const en = estimateShannonEntropyForDnaKmer(i, len, allData);
+            const en =
+              estimateShannonEntropyForDnaKmer(startOffset, useK, allData);
             if en <= ENTROPY_THRESHOLD {
               skip = true;
             }
@@ -408,8 +409,8 @@ proc main(args: [] string) throws {
 
           if skip {
             try! stderr.write("# note: ignoring for low complexity: ");
-            for j in 0..<len {
-              try! stderr.writef("%c", allData[i + j]);
+            for j in 0..<useK {
+              try! stderr.writef("%c", allData[startOffset + j]);
             }
             try! stderr.writeln();
           }
