@@ -28,6 +28,7 @@ config const tsv: bool = false; // output uniquesketch tab-separated format
 config const shifts: bool = false; // output shifts
 config const entropyMaxKmer: int = 5; // for use in computing entropy
 config const entropyThreshold: real = 0.65; // discard kmers with entropy < this
+config const removeLowComplexity: bool = true; // enable entropy filtering
 
 // upper-case names for the config constants to better identify them in code
 const UNIQUE_DIR = unique;
@@ -36,6 +37,7 @@ const OUTPUT_TSV = tsv;
 const SHIFTS = shifts;
 const ENTROPY_MAX_KMER = entropyMaxKmer;
 const ENTROPY_THRESHOLD = entropyThreshold;
+const REMOVE_LOW_COMPLEXITY = removeLowComplexity;
 
 use Utility;
 import SuffixSort.{EXTRA_CHECKS};
@@ -172,6 +174,7 @@ proc estimateShannonEntropyForDnaKmer(offset: int,
 }
 
 proc outputKmer(offset: int,
+                uniqueOffset: int,
                 uniqueLen: int,
                 outputLen: int,
                 startOffsetInSequence: int,
@@ -182,28 +185,6 @@ proc outputKmer(offset: int,
                 useFilename: string,
                 curDesc: string,
                 isFasta: bool) {
-
-  if isFasta && entropyThreshold < 1.0 {
-    // ignore sequences with too little entropy
-    var lowComplexity = false;
-    if outputLen <= ENTROPY_MAX_KMER {
-      lowComplexity = true;
-    } else {
-      const en = estimateShannonEntropyForDnaKmer(offset, outputLen, allData);
-      if en <= ENTROPY_THRESHOLD {
-        lowComplexity = true;
-      }
-    }
-
-    if lowComplexity {
-      /*try! stderr.write("# ignoring for low complexity: ");
-      for j in 0..<outputLen {
-        try! stderr.writef("%c", allData[offset + j]);
-      }
-      try! stderr.writeln();*/
-      return;
-    }
-  }
 
   if OUTPUT_TSV {
     // output tab-separated data:
@@ -413,6 +394,27 @@ proc main(args: [] string) throws {
           }
         }
 
+        if !skip && isFasta && REMOVE_LOW_COMPLEXITY {
+          // ignore sequences with too little entropy
+          var lowComplexity = false;
+          if len <= ENTROPY_MAX_KMER {
+            skip = true;
+          } else {
+            const en = estimateShannonEntropyForDnaKmer(i, len, allData);
+            if en <= ENTROPY_THRESHOLD {
+              skip = true;
+            }
+          }
+
+          if skip {
+            try! stderr.write("# note: ignoring for low complexity: ");
+            for j in 0..<len {
+              try! stderr.writef("%c", allData[i + j]);
+            }
+            try! stderr.writeln();
+          }
+        }
+
         if !skip {
           // update the current sequence description
           var seqIdx = offsetToFileIdx(sequenceStarts, i);
@@ -444,6 +446,7 @@ proc main(args: [] string) throws {
 
               // output the kmer at this shift
               outputKmer(offset=curStartOffset,
+                         uniqueOffset=i,
                          uniqueLen=len,
                          outputLen=useK,
                          startOffsetInSequence=curStartOffset-curSequenceStart,
@@ -457,6 +460,7 @@ proc main(args: [] string) throws {
             }
           } else {
             outputKmer(offset=startOffset,
+                       uniqueOffset=i,
                        uniqueLen=len,
                        outputLen=useK,
                        startOffsetInSequence=startOffset-curSequenceStart,
