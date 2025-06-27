@@ -14,7 +14,7 @@ do
   ./a.out -nl 1
   if [[ "$COMM" != "none" ]]
   then
-    echo running $name : ./a.out -nl 2
+    echo running $name : ./a.out -nl 3
     ./a.out -nl 3
   fi
   rm a.out
