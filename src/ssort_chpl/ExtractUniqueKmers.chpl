@@ -43,6 +43,7 @@ use Utility;
 import SuffixSort.{EXTRA_CHECKS};
 
 import FileSystem;
+import Help;
 import IO.stderr;
 import IO;
 import List;
@@ -238,7 +239,17 @@ proc main(args: [] string) throws {
 
   for arg in args[1..] {
     if arg.startsWith("-") {
-      halt("argument not handled ", arg);
+      if arg == "-h" || arg == "--help" {
+        // ok
+      } else {
+        stderr.writeln("argument not handled ", arg);
+      }
+
+      stderr.writeln("Usage:");
+      stderr.writeln("ExtractUniqueKmers --unique <dir> " +
+                     "input-files-and-directories [options]");
+      Help.printUsage();
+      return 1;
     }
     gatherFiles(inputFilesList, arg);
   }
